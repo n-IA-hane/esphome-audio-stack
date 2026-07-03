@@ -1,0 +1,108 @@
+# ESP Audio Stack + ESP-SR AFE.
+#
+# What this example proves:
+#   esp_audio_stack can feed the full ESP-SR AFE and expose clean voice audio
+#   after AEC, noise suppression, VAD and AGC.
+
+substitutions:
+  name: audio-stack-afe
+  friendly_name: Audio Stack AFE
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+# esp_afe implements the AudioProcessor interface, so the processor interface lives in esp_audio_stack
+# here by design.
+external_components:
+  - source: ../esphome/components
+    components:
+      - esp_audio_stack
+      - esp_afe
+
+i2c:
+  sda: GPIO47
+  scl: GPIO48
+  frequency: 400kHz
+
+# Full ESP-SR front end.
+#
+# type: fd:
+#   Full-duplex AFE pipeline, appropriate for two-way voice.
+#
+# mic_num: 1:
+#   Single microphone shape. Dual-mic boards should use mic_num: 2 plus
+#   se_enabled: true and the correct input_format.
+#
+# aec/ns/vad/agc:
+#   Static defaults for the didactic example. Product YAMLs can expose these as
+#   switches/selects if runtime control is wanted.
+esp_afe:
+  id: afe
+  type: fd
+  mode: high_perf
+  mic_num: 1
+  aec_enabled: true
+  ns_enabled: true
+  vad_enabled: true
+  agc_enabled: true
+
+# Audio owner with processor_id wired to esp_afe.
+esp_audio_stack:
+  id: audio_stack
+  sample_rate: 48000
+  output_sample_rate: 16000
+  bits_per_sample: 32
+  slot_bit_width: 32
+  processor_id: afe
+
+  # Type2-style software reference. Single-mic boards use this when the
+  # hardware has no stereo/TDM feedback channel. For the lighter path, use
+  # `aec_reference: previous_frame` and omit aec_reference_buffer_ms.
+  # TDM boards with a real feedback slot should use use_tdm_reference instead.
+  aec_reference: ring_buffer
+  aec_reference_buffer_ms: 120
+
+  i2s_mclk_pin: GPIO5
+  i2s_bclk_pin: GPIO6
+  i2s_lrclk_pin: GPIO7
+  i2s_din_pin: GPIO4
+  i2s_dout_pin: GPIO8
+
+  codec:
+    input:
+      type: es8311
+      address: 0x18
+    output:
+      type: es8311
+      address: 0x18
+
+microphone:
+  - platform: esp_audio_stack
+    id: clean_mic
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    esp_audio_stack_id: audio_stack
+    buffer_duration: 500ms

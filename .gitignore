@@ -1,0 +1,14 @@
+.esphome/
+.pioenvs/
+.piolibdeps/
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+.venv/
+venv/
+secrets.yaml
+examples/secrets.yaml
+*.local.yaml
+build/
+dist/
