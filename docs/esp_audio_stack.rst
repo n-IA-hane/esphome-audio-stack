@@ -5,10 +5,10 @@ ESP Audio Stack
     :description: Instructions for setting up the ESP Audio Stack, a full-duplex audio backend with echo cancellation support for ESPHome voice devices.
     :image: microphone.svg
 
-The ``esp_audio_stack`` component is a full-duplex audio backend for ESP32-based
-voice devices. It owns the low-level audio path: I2S buses, hardware codec
-control, DMA, sample-rate/bit-depth/channel conversion, playback buffering and
-the echo-cancellation reference. It exposes standard ESPHome
+The ``esp_audio_stack`` component is a full-duplex audio backend for ESP32-S3
+and ESP32-P4 voice devices with PSRAM. It owns the low-level audio path: I2S
+buses, hardware codec control, DMA, sample-rate/bit-depth/channel conversion,
+playback buffering and the echo-cancellation reference. It exposes standard ESPHome
 :doc:`microphone </components/microphone/index>` and
 :doc:`speaker </components/speaker/index>` platforms on top.
 
@@ -25,8 +25,9 @@ the post-processor stream: wake word, Voice Assistant and call components
 receive near-end speech after echo cancellation, not the remote caller or TTS
 coming out of the speaker.
 
-This component requires the ESP-IDF framework and the ESPHome ``psram`` component.
-It is not supported on Arduino.
+This component requires the ESP-IDF framework and the ESPHome ``psram``
+component. It is not supported on Arduino. Maintained release targets are
+ESP32-S3 and ESP32-P4.
 
 .. code-block:: yaml
 
@@ -109,8 +110,8 @@ I2S bus (single-bus mode):
   Defaults to ``philips``.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio, one of ``128``, ``256``, ``384``,
   ``512``. Defaults to ``256``.
-- **use_apll** (*Optional*, boolean): Use the APLL clock source. Only available on ESP32, ESP32-S2 and
-  ESP32-P4. Defaults to ``false``.
+- **use_apll** (*Optional*, boolean): Use the APLL clock source. Among the
+  supported targets, this is available on ESP32-P4. Defaults to ``false``.
 - **dma_desc_num** (*Optional*, int): DMA descriptor count, ``2`` to ``16``. Defaults to ``6``.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, ``64`` to ``4092``. When omitted, the
   component sizes descriptors at approximately 10 ms each.

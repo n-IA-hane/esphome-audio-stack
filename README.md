@@ -107,19 +107,18 @@ came from a shared codec bus, a TDM frame, or two separate MEMS/amp buses.
 | Wake word must keep working while TTS/media plays | `esp_aec` `sr_*` modes or `esp_afe` `type: sr` |
 | Hardware already outputs echo-cancelled PCM, for example XMOS | ESPHome native audio may be enough; this stack is optional |
 
-Supported SoCs, enforced by validation:
+Supported release targets, enforced by validation:
 
 | Variant | I2S ports | Dual-bus mode | TDM |
 |---|---:|---|---|
 | ESP32-S3 | 2 | yes | yes |
 | ESP32-P4 | 3 | yes | yes |
-| ESP32 | 2 | yes | no |
-| ESP32-C3 / C5 / C6 / C61 / H2 | 1 | no | yes |
-| ESP32-S2 | 1 | no | no |
 
-Realistic voice profiles with AEC/AFE at a 48 kHz bus rate target the S3 and P4
-with PSRAM. Single-port chips can still run plain full-duplex audio on one
-shared bus.
+`esp_audio_stack`, `esp_aec` and `esp_afe` require the ESPHome `psram:`
+component. The maintained and release-tested targets are ESP32-S3 and ESP32-P4.
+Smaller ESP32 variants may still run standalone `voip_stack` with native
+ESPHome microphone/speaker components, but they are not supported targets for
+this audio backend.
 
 ## 4. Core Concepts
 
@@ -675,7 +674,7 @@ front-loads many of them into YAML compilation. It rejects:
 - `speaker_channels: 2` on TDM or without `num_channels: 2`;
 - `pcm_short` / `pcm_long` outside TDM mode;
 - `rx_bus` without `tx_bus`, both on the same `i2s_num`, top-level bus pins
-  mixed with dual-bus mode, or dual-bus on a single-port SoC;
+  mixed with dual-bus mode, or dual-bus on a target without enough I2S ports;
 - I2S port numbers beyond the target SoC;
 - TDM options on SoCs without TDM support;
 - `task_core: 1` on single-core variants;
@@ -689,7 +688,7 @@ chip.
 
 ## 13. Performance And Memory Notes
 
-- ESP Audio Stack profiles require PSRAM on supported ESP32 targets.
+- ESP Audio Stack profiles require PSRAM; the supported targets are ESP32-S3 and ESP32-P4.
 - DMA descriptors and I2S buffers always live in internal RAM.
 - `esp_aec` is the lighter path.
 - `esp_afe` costs more RAM and flash and gives the full speech front end plus

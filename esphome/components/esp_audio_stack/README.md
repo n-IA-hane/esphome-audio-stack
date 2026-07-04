@@ -233,13 +233,11 @@ flowchart TD
 
 ## Requirements
 
-- **ESP32**, **ESP32-S3**, or **ESP32-P4**. The component has been exercised on
-  S3 and P4, including RISC-V dual-core P4 with 32 MB PSRAM; the shipped P4
-  product presets remain experimental while board-specific SDIO/LVGL/runtime
-  issues are investigated. Single-core SoCs (C3, C5, C6, H2, S2) are supported
-  but cannot pin `task_core` to Core 1.
+- **ESP32-S3** or **ESP32-P4** with PSRAM. These are the maintained and
+  release-tested targets for `esp_audio_stack`, `esp_aec` and `esp_afe`.
 - PSRAM is required by schema. Declare the ESPHome `psram:` component explicitly.
-- TDM requires `SOC_I2S_SUPPORTS_TDM` (S3, P4, C3, C5, C6, H2).
+- TDM requires `SOC_I2S_SUPPORTS_TDM`; in the supported target set that means
+  S3 and P4.
 - Audio codec with shared I2S bus (ES8311 recommended), or discrete I2S mic + amp on the same bus
 - ESP-IDF framework; Arduino is not supported.
 
