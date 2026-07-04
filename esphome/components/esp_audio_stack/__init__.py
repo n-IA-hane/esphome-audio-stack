@@ -11,7 +11,7 @@ If output_sample_rate is omitted, no rate conversion occurs (backward compatible
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation, pins
-from esphome.components import i2c
+from esphome.components import i2c, psram
 from esphome.const import CONF_ADDRESS, CONF_I2C_ID, CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
 from esphome.components.esp32 import (
     add_idf_component,
@@ -403,8 +403,11 @@ CONFIG_SCHEMA = cv.All(
         # but increases per-frame latency because every function return has
         # to traverse PSRAM. Only enable on boards that need the internal
         # headroom (e.g. waveshare-s3 running 2-mic Speech Enhancement plus
-        # concurrent TLS streams). Requires CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y.
-        cv.Optional(CONF_AUDIO_TASK_STACK_IN_PSRAM, default=False): cv.boolean,
+        # concurrent TLS streams). ESPHome's PSRAM helper requests the required
+        # task-stack sdkconfig when enabled.
+        cv.Optional(CONF_AUDIO_TASK_STACK_IN_PSRAM, default=False): cv.All(
+            cv.boolean, cv.requires_component(psram.DOMAIN)
+        ),
         # AEC reference mode for no-codec setups (ignored if stereo/TDM ref is configured):
         #   ring_buffer: Espressif ADF TYPE2-style software reference, default
         #   previous_frame: light mode using the previous TX frame, no TYPE2 ring
@@ -606,7 +609,7 @@ async def to_code(config):
     include_builtin_idf_component("esp_driver_i2s")
     add_idf_sdkconfig_option("CONFIG_I2S_ISR_IRAM_SAFE", True)
     if config[CONF_AUDIO_TASK_STACK_IN_PSRAM]:
-        add_idf_sdkconfig_option("CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY", True)
+        psram.request_external_task_stack()
 
     _add_config_setters(
         var,

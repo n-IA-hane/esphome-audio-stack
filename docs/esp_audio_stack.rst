@@ -171,8 +171,8 @@ Task, memory and diagnostics:
 - **buffers_in_psram** (*Optional*, boolean): Place non-DMA audio buffers in PSRAM (saves roughly
   15 KB of internal RAM). DMA buffers always use internal RAM. Defaults to ``false``.
 - **audio_task_stack_in_psram** (*Optional*, boolean): Place the audio task stack in PSRAM (saves
-  roughly 8 KB of internal RAM, increases per-frame latency). Requires
-  ``CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y``. Defaults to ``false``.
+  roughly 8 KB of internal RAM, increases per-frame latency). Uses ESPHome's PSRAM task-stack
+  helper and requires the ``psram`` component. Defaults to ``false``.
 - **aec_ref_ring_in_psram** (*Optional*, boolean): Place the AEC reference ring in PSRAM. Internal
   placement is approximately 13.6 microseconds per frame faster at a cost of 3 to 5 KB of internal
   RAM. Defaults to ``false``.

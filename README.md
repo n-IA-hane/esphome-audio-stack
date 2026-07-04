@@ -650,7 +650,7 @@ All values are verified against the component schema.
 | `task_core` | `0` | -1 to 1 | Core pinning. Core 1 is rejected on single-core SoCs. |
 | `task_stack_size` | `8192` | 4096 to 32768 | Audio task stack. |
 | `buffers_in_psram` | `false` | bool | Move non-DMA audio buffers to PSRAM. |
-| `audio_task_stack_in_psram` | `false` | bool | Move the audio task stack to PSRAM. Requires sdkconfig support. |
+| `audio_task_stack_in_psram` | `false` | bool | Move the audio task stack to PSRAM through ESPHome's PSRAM task-stack helper. Requires the `psram` component. |
 | `aec_ref_ring_in_psram` | `false` | bool | Put the Type2 reference ring in PSRAM. |
 | `telemetry` | `false` | bool | Per-stage cycle counting and diagnostics. Debug only. |
 | `telemetry_log_interval_frames` | `128` | 1 to 8192 | Telemetry log cadence. |
