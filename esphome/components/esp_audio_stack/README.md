@@ -238,9 +238,10 @@ flowchart TD
   product presets remain experimental while board-specific SDIO/LVGL/runtime
   issues are investigated. Single-core SoCs (C3, C5, C6, H2, S2) are supported
   but cannot pin `task_core` to Core 1.
-- AEC requires PSRAM (S3/P4). TDM requires `SOC_I2S_SUPPORTS_TDM` (S3, P4, C3, C5, C6, H2).
+- PSRAM is required by schema. Declare the ESPHome `psram:` component explicitly.
+- TDM requires `SOC_I2S_SUPPORTS_TDM` (S3, P4, C3, C5, C6, H2).
 - Audio codec with shared I2S bus (ES8311 recommended), or discrete I2S mic + amp on the same bus
-- ESP-IDF framework
+- ESP-IDF framework; Arduino is not supported.
 
 ## Installation
 
@@ -1074,7 +1075,7 @@ logger:
 ### Audio Crackling
 1. Reduce sample_rate (try 8000 or 16000)
 2. Check for WiFi interference (pin to Core 1)
-3. Verify PSRAM is available if using AEC
+3. Verify PSRAM is declared and available
 
 ### Echo During Calls
 1. Enable AEC: set `processor_id` on `esp_audio_stack`

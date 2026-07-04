@@ -177,7 +177,7 @@ external_components:
 Requirements:
 
 - ESP-IDF framework. Arduino is not supported.
-- PSRAM for realistic AEC/AFE voice hardware.
+- PSRAM. The component schema requires the ESPHome `psram:` component so memory-heavy audio paths fail at YAML validation time instead of at runtime.
 - An `i2c:` bus when a hardware codec is configured.
 
 Espressif dependencies are resolved automatically by the IDF Component Manager.
@@ -689,7 +689,7 @@ chip.
 
 ## 13. Performance And Memory Notes
 
-- AEC/AFE profiles need PSRAM on realistic S3/P4 voice devices.
+- ESP Audio Stack profiles require PSRAM on supported ESP32 targets.
 - DMA descriptors and I2S buffers always live in internal RAM.
 - `esp_aec` is the lighter path.
 - `esp_afe` costs more RAM and flash and gives the full speech front end plus

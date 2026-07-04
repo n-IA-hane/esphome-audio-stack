@@ -1,7 +1,8 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
-from esphome.const import CONF_ID, CONF_MODE, CONF_SAMPLE_RATE
+from esphome.components import psram
+from esphome.const import CONF_ID, CONF_MODE, CONF_SAMPLE_RATE, Framework
 from esphome.core import CORE
 from esphome.components.esp32 import add_idf_component
 
@@ -40,6 +41,8 @@ AEC_MODES = {
 }
 
 CONFIG_SCHEMA = cv.All(
+    cv.only_with_framework(Framework.ESP_IDF),
+    cv.requires_component(psram.DOMAIN),
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(EspAec),

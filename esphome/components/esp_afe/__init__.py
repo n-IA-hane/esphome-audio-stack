@@ -1,7 +1,8 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
-from esphome.const import CONF_ID, CONF_MODE, CONF_TYPE
+from esphome.components import psram
+from esphome.const import CONF_ID, CONF_MODE, CONF_TYPE, Framework
 from esphome.core import CORE
 from esphome.components.esp32 import add_idf_component
 
@@ -116,6 +117,8 @@ def _validate_task_layout(config):
 
 
 CONFIG_SCHEMA = cv.All(
+    cv.only_with_framework(Framework.ESP_IDF),
+    cv.requires_component(psram.DOMAIN),
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(EspAfe),

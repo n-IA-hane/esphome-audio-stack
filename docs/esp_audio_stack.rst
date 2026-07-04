@@ -25,7 +25,8 @@ the post-processor stream: wake word, Voice Assistant and call components
 receive near-end speech after echo cancellation, not the remote caller or TTS
 coming out of the speaker.
 
-This component requires the ESP-IDF framework and is not supported on Arduino.
+This component requires the ESP-IDF framework and the ESPHome ``psram`` component.
+It is not supported on Arduino.
 
 .. code-block:: yaml
 

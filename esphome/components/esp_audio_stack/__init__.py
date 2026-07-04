@@ -12,7 +12,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation, pins
 from esphome.components import i2c, psram
-from esphome.const import CONF_ADDRESS, CONF_I2C_ID, CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
+from esphome.const import CONF_ADDRESS, CONF_I2C_ID, CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE, Framework
 from esphome.components.esp32 import (
     add_idf_component,
     add_idf_sdkconfig_option,
@@ -321,6 +321,8 @@ def _validate_dual_bus_config(config):
 
 
 CONFIG_SCHEMA = cv.All(
+    cv.only_with_framework(Framework.ESP_IDF),
+    cv.requires_component(psram.DOMAIN),
     cv.Schema({
         cv.GenerateID(): cv.declare_id(ESPAudioStack),
         cv.Optional(CONF_I2S_LRCLK_PIN, default=-1): cv.Any(
@@ -405,9 +407,7 @@ CONFIG_SCHEMA = cv.All(
         # headroom (e.g. waveshare-s3 running 2-mic Speech Enhancement plus
         # concurrent TLS streams). ESPHome's PSRAM helper requests the required
         # task-stack sdkconfig when enabled.
-        cv.Optional(CONF_AUDIO_TASK_STACK_IN_PSRAM, default=False): cv.All(
-            cv.boolean, cv.requires_component(psram.DOMAIN)
-        ),
+        cv.Optional(CONF_AUDIO_TASK_STACK_IN_PSRAM, default=False): psram.validate_task_stack_in_psram,
         # AEC reference mode for no-codec setups (ignored if stereo/TDM ref is configured):
         #   ring_buffer: Espressif ADF TYPE2-style software reference, default
         #   previous_frame: light mode using the previous TX frame, no TYPE2 ring

@@ -18,6 +18,10 @@ esp32:
   framework:
     type: esp-idf
 
+psram:
+  mode: octal
+  speed: 80MHz
+
 logger:
   level: INFO
 
