@@ -18,20 +18,20 @@ Standalone Espressif AEC (Acoustic Echo Cancellation) wrapper for ESPHome.
 
 ## Overview
 
-Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProcessor` interface. Use it when the device only needs echo cancellation on the mic path and does not need the wider AFE pipeline that `esp_afe` provides (noise suppression, Speech Enhancement, VAD, AGC).
-
-Ready-to-flash full-experience YAMLs include both paths: `generic-s3-full-aec-*` uses standalone `esp_aec` for the lighter 4 MB-oriented profile, while `*-full-afe-*` uses the wider `esp_afe` pipeline.
+Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the
+`AudioProcessor` interface. Use it when the device only needs echo cancellation
+on the mic path and does not need the wider AFE pipeline that `esp_afe`
+provides (noise suppression, Speech Enhancement, VAD, AGC).
 
 ## When to use `esp_aec` vs `esp_afe`
 
 | Scenario | Pick |
 |----------|------|
-| VoIP only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
-| Generic full build for 4 MB-oriented devices where you accept standalone AEC instead of NS/AGC/VAD | `esp_aec` |
-| Full AFE presets, codec/TDM boards, or larger flash generic builds | `esp_afe` |
-| VoIP + VA + dual-mic with Speech Enhancement | `esp_afe` |
+| Single mic, echo cancellation only | `esp_aec` |
+| Memory-constrained full-duplex voice device where NS/AGC/VAD are not required | `esp_aec` |
+| Codec/TDM board that needs the full ESP-SR AFE pipeline | `esp_afe` |
+| Voice Assistant + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
-| Standalone native `voip_stack` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
 
 Both components implement `AudioProcessor` at the type level, but `esp_afe` is only safely usable behind `esp_audio_stack`. See the root [ESPHome Audio Stack README](../../../README.md) for the topology matrix.
 
@@ -44,8 +44,6 @@ external_components:
       url: https://github.com/n-IA-hane/esphome-audio-stack
       ref: main
     components: [esp_audio_stack, esp_aec]
-    # Add voip_stack only when this device is also an voip endpoint.
-    # components: [voip_stack, esp_audio_stack, esp_aec]
 
 esp_aec:
   id: aec_processor
@@ -65,8 +63,8 @@ esp_audio_stack:
 |--------|------|---------|-------------|
 | `id` | ID | required | Component identifier referenced by `esp_audio_stack.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
-| `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (voip-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
-| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for voip-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
+| `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes for a ~128 ms tail, or **8** with VOIP modes for a similar tail. Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
+| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for real-time call audio. |
 
 ## AEC modes
 
@@ -104,7 +102,7 @@ Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only adaptiv
 
 The `AEC Mode` select wires runtime modes to a Home Assistant select entity, with the device publishing back the live mode so a rejected switch never leaves HA showing the wrong value.
 
-**Engine standard**: stay inside one engine per device tier to avoid esp-sr's silent FFT calloc-fail bug on cross-engine transitions at `filter_length > 4`. Public YAMLs restrict the options accordingly.
+**Engine standard**: stay inside one engine family per device to avoid esp-sr's silent FFT calloc-fail bug on cross-engine transitions at `filter_length > 4`.
 
 VoIP-only (no MWW) - VOIP engine only:
 
@@ -126,7 +124,7 @@ select:
       - lambda: 'id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());'
 ```
 
-Full-experience with MWW and codec loopback where echo is audible - SR plus FD choices:
+Voice Assistant device with wake word and codec loopback where echo is audible - SR plus FD choices:
 
 ```yaml
 select:
@@ -185,7 +183,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 ## Known constraints
 
 - Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must rate-convert; `esp_audio_stack` does this with Espressif's `esp_ae_rate_cvt`.
-- Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
+- Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while real-time audio is streaming.
 - `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.
 

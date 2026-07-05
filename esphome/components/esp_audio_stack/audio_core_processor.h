@@ -1,4 +1,7 @@
 #pragma once
+#ifndef ESPHOME_AUDIO_CORE_PROCESSOR_H
+#define ESPHOME_AUDIO_CORE_PROCESSOR_H
+
 #include <cstdint>
 #include <cstddef>
 
@@ -60,7 +63,7 @@ struct ProcessorTelemetry {
 /// Abstract audio processor interface.
 ///
 /// Implementations: EspAec (standalone AEC), EspAfe (full AFE pipeline).
-/// Consumers: esp_audio_stack, voip_stack.
+/// Consumers: esp_audio_stack and other audio components.
 class AudioProcessor {
  public:
   virtual ~AudioProcessor() = default;
@@ -118,3 +121,5 @@ class AudioProcessor {
 
 }  // namespace audio_core
 }  // namespace esphome
+
+#endif  // ESPHOME_AUDIO_CORE_PROCESSOR_H

@@ -37,7 +37,7 @@ void ESPAudioStackMicrophone::setup() {
   ESP_LOGCONFIG(TAG, "  Callback Buffer: %u bytes", (unsigned) callback_buffer_bytes);
 
   // Standard microphone output is always post-processor. MWW, VA and
-  // intercom all consume the same cleaned stream.
+  // call components all consume the same cleaned stream.
   if (!this->parent_->add_mic_data_callback(ESPAudioStackMicrophone::mic_data_callback_, this)) {
     ESP_LOGE(TAG, "Failed to register parent mic callback");
     this->mark_failed();

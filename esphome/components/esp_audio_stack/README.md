@@ -36,7 +36,7 @@ optional AudioProcessor: esp_aec or esp_afe
         ↓
 ESPHome microphone + speaker surfaces
         ↓
-MWW, Voice Assistant, media_player, mixer, voip_stack, custom components
+Micro Wake Word, Voice Assistant, media_player, mixer, custom components
 ```
 
 ## Quick Map
@@ -83,19 +83,20 @@ MWW, Voice Assistant, media_player, mixer, voip_stack, custom components
 - **Compile-time pruning**: dual-bus, TDM, stereo reference, ring reference,
   stereo TX, telemetry and codec paths are compiled only when YAML needs them.
 
-## Clean Mic Surface For Wake Word, VA And VoIP
+## Clean Mic Surface For Wake Word, Voice Assistant And Calls
 
 This is the main reason to use `esp_audio_stack` on full voice devices. The
 public `microphone: platform: esp_audio_stack` entry is the post-processor
 surface, not a second raw microphone tap. Speaker PCM from HA media, TTS,
-timers, local files, Sendspin and VoIP playback is also captured as the
-AEC/AFE reference. `esp_aec` or `esp_afe` subtracts that reference before
-frames are delivered to ESPHome consumers.
+timers, local files and call playback is also captured as the AEC/AFE
+reference. `esp_aec` or `esp_afe` subtracts that reference before frames are
+delivered to ESPHome consumers.
 
 Result: the user can play music from the ESP speaker while `micro_wake_word`,
-`voice_assistant` and `voip_stack` all receive the same cleaned user-speech
-stream with the speaker audio removed. There is no separate wake-word
-microphone to wire and no need to route VA or MWW around the media player.
+`voice_assistant` and any call component all receive the same cleaned
+user-speech stream with the speaker audio removed. There is no separate
+wake-word microphone to wire and no need to route Voice Assistant or Micro Wake
+Word around the media player.
 
 If no processor is configured, the facade is still a coordinated full-duplex
 mic/speaker provider, but the microphone is not echo-cancelled. If a configured
@@ -115,9 +116,6 @@ micro_wake_word:
   microphone: clean_mic
 
 voice_assistant:
-  microphone: clean_mic
-
-voip_stack:
   microphone: clean_mic
 ```
 
@@ -215,16 +213,14 @@ flowchart TD
 | Task | Core | Priority | Role |
 |------|------|----------|------|
 | `audio_stack` (audio_task) | **Core 0** | **19** | I2S read/write + rate conversion + audio processor (esp_aec/esp_afe) |
-| `voip_tx` | Core 0 | 5 | Only when `voip_stack` is present: mic to network |
-| `voip_srv` | Core 1 | 5 | Only when `voip_stack` is present: TCP RX, call FSM |
-| `mixer` (ESPHome) | Any | 10 | Mix VA + VoIP audio to speaker |
-| `MWW inference` (ESPHome) | Unpinned | 3→**8** | Wake word TFLite inference (boost via on_boot lambda) |
+| `mixer` (ESPHome) | Any | 10 | Mix Voice Assistant, media and call audio to speaker |
+| `MWW inference` (ESPHome) | Unpinned | target-dependent | Wake word TFLite inference |
 | ESPHome main loop / LVGL | Core 1 | 1 | Switches, sensors, display, etc. |
 | WiFi driver (ESP-IDF) | Core 0 | 23 | System; can briefly preempt audio_task |
 
 **Core allocation rationale:**
 - **Core 0**: Real-time audio (I2S + AEC). WiFi (prio 23) briefly preempts for sub-ms bursts.
-- **Core 1**: MWW inference + mixer + LVGL + ESPHome main loop. MWW priority boosted to 8 (above resampler/loopTask, below mixer) for reliable barge-in during TTS.
+- **Core 1**: ESPHome main loop and other application tasks.
 
 **CPU budget** (sr_low_cost: 512 samples @ 16kHz = 32ms per frame):
 - Without AEC: ~300us processing (< 2% of a core)
@@ -265,36 +261,6 @@ external_components:
     # components: [esp_audio_stack, esp_afe]
 ```
 
-`voip_stack` is not required. Add it only when the device is also a VoIP
-endpoint:
-
-```yaml
-external_components:
-  - source:
-      type: git
-      url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
-    components: [voip_stack, esp_audio_stack, esp_aec]
-```
-
-If the device also exposes HA media/TTS playback, maintained full-experience
-profiles use ESPHome's source-based `speaker_source` media player:
-
-```yaml
-external_components:
-  - source:
-      type: git
-      url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
-    components: [voip_stack, esp_audio_stack, esp_aec]
-```
-
-`speaker_source` keeps one media player as the media/announcement owner and
-feeds the same mixer/output graph that `esp_audio_stack` already arbitrates for
-VoIP, Voice Assistant and local files. The project-local
-[`speaker`](../speaker/README.md) fork is only for custom YAMLs that
-still use `platform: speaker`.
-
 ### Component Boundaries
 
 `esp_audio_stack` owns the shared I2S bus, codec/data backend, rate conversion,
@@ -302,16 +268,13 @@ AEC reference extraction, microphone output and speaker input. It loads
 Espressif `esp_codec_dev` and `esp_audio_effects` internally because those are
 part of the bus backend.
 
-The component does not load or require `voip_stack`. When `voip_stack` is
-also present, it is just another consumer of the microphone and speaker
-surfaces. Compile-time validation prevents both components from owning the same
-audio processor or DC-offset stage, but that validation is conditional and does
-not create a dependency.
+The component does not load or require any call, media-player or assistant
+component. Those are normal ESPHome consumers of the microphone and speaker
+surfaces.
 
 `esp_aec` and `esp_afe` are optional `AudioProcessor` providers:
 
-- `esp_aec` can be called by `esp_audio_stack` or by standalone `voip_stack`
-  on separate mic/speaker hardware.
+- `esp_aec` provides a lightweight one-mic echo canceller.
 - `esp_afe` should be called by `esp_audio_stack`, because the AFE manager
   expects steady 16 kHz frames and stable mic/reference timing.
 
@@ -436,7 +399,7 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 | `mic_channel` | string | `left` | Same as above; listed here because it maps directly to the IDF STD slot layout. |
 | `tx_channel` | string | `left` | Which stereo channel the speaker writes to: `left` or `right`. |
 | `i2s_mode` | string | `primary` | I2S role: `primary` (ESP drives the clocks, default) or `secondary` (codec drives the clocks). |
-| `use_apll` | bool | false | Use the APLL clock source for cleaner audio at non-multiple-of-8 kHz rates. Costs APLL availability for other peripherals. |
+| `use_apll` | bool | false | Use the APLL clock source on ESP32-P4 for cleaner audio at non-multiple-of-8 kHz rates. Costs APLL availability for other peripherals. |
 | `i2s_num` | int | 0 | Which I2S peripheral port to use (0-2 depending on SoC). Lets you reserve a port when other components also use I2S. |
 | `mclk_multiple` | int | 256 | MCLK to LRCLK ratio (128, 256, 384, or 512). Most codecs accept 256. |
 | `i2s_comm_fmt` | string | `philips` | I2S frame format: `philips` (default), `msb`, `pcm_short`, `pcm_long`. Codec datasheets specify which one. |
@@ -571,8 +534,8 @@ esp_audio_stack:
 Codec-backed builds use `esp_codec_dev_read()` / `esp_codec_dev_write()`
 directly. The stack registers the ESP-IDF I2S TX completion callback and
 reports played frames to ESPHome only after DMA has consumed them. This mirrors
-ESPHome's native I2S speaker model and keeps Sendspin / `speaker_source`
-feedback tied to real playback timing rather than to an intermediate buffer.
+ESPHome's native I2S speaker model and keeps playback feedback tied to real
+DMA timing rather than to an intermediate buffer.
 
 #### Notes
 
@@ -619,7 +582,7 @@ With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playb
 | `voip_low_cost` | `dios_ssp_aec` (Speex-based) | **~58%** | Yes (always) | **No** (2/10) |
 | `voip_high_perf` | `dios_ssp_aec` | ~64% | Yes (always) | No |
 
-SR modes use `esp_aec3` (pure linear adaptive filter, no non-linear processing). VOIP modes use `dios_ssp_aec` (linear + two-stage RES). Use `sr_low_cost` for VA + MWW + VoIP. Do not use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
+SR modes use `esp_aec3` (pure linear adaptive filter, no non-linear processing). VOIP modes use `dios_ssp_aec` (linear + two-stage RES). Use `sr_low_cost` when wake-word preservation matters. Do not use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
 
 ### ES8311 Digital Feedback AEC (Recommended)
 
@@ -842,86 +805,6 @@ esp_audio_stack:
 | Need true full-duplex on single bus | Yes | Limited |
 | VA + MWW + VoIP on same device | Yes (single bus) | Yes (dual bus with mixer speaker) |
 
-## GPIO Mode Switching (VA + VoIP)
-
-When combining Voice Assistant and VoIP calls on the same device, a single GPIO button can handle all actions using page-aware logic:
-
-```yaml
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO0
-      inverted: true
-    id: main_button
-    on_click:
-      - min_length: 0ms
-        max_length: 500ms
-        then:
-          # Single click: action depends on current page
-          - if:
-              condition:
-                # Timer ringing → stop timer (highest priority, any page)
-                lambda: 'return id(voice_assist_phase) == 20;'
-              then:
-                - voice_assistant.stop:
-          - if:
-              condition:
-                lvgl.page.is_showing: call_idle_page
-              then:
-                - voip_stack.call_toggle:
-                    id: phone
-          - if:
-              condition:
-                lvgl.page.is_showing: call_ringing_in_page
-              then:
-                - voip_stack.answer_call:
-                    id: phone
-          - if:
-              condition:
-                or:
-                  - lvgl.page.is_showing: call_ringing_out_page
-                  - lvgl.page.is_showing: call_in_call_page
-              then:
-                - voip_stack.call_toggle:
-                    id: phone
-          # VA pages: start/stop voice assistant (default)
-      - min_length: 500ms
-        max_length: 1000ms
-        then:
-          # Double click: next contact (call idle) or decline (call ringing)
-          - if:
-              condition:
-                lvgl.page.is_showing: call_idle_page
-              then:
-                - voip_stack.next_contact:
-                    id: phone
-          - if:
-              condition:
-                lvgl.page.is_showing: call_ringing_in_page
-              then:
-                - voip_stack.decline_call:
-                    id: phone
-    on_multi_click:
-      - timing:
-          - ON for at least 1s
-        then:
-          # Long press: switch between VA and VoIP modes
-```
-
-### Button Behavior Summary
-
-| Current Page | Single Click | Double Click | Long Press |
-|---|---|---|---|
-| VA idle | Start voice assistant | n/a | Switch to VoIP |
-| VA active | Stop voice assistant | n/a | n/a |
-| call idle | Call selected contact | Next contact | Switch to VA |
-| call ringing in | Answer call | Decline call | Switch to VA |
-| call ringing out | Hangup | n/a | Switch to VA |
-| call in call | Hangup | n/a | Switch to VA |
-| Timer ringing | Stop timer (any page) | n/a | n/a |
-
-> **Note**: Wake word detection is ALWAYS active regardless of the current mode. Mode switching only affects the display and button behavior.
-
 ## Technical Notes
 
 - **Sample Format**: 16-bit signed PCM, mono TX / stereo RX (ES8311 feedback mode)
@@ -951,12 +834,6 @@ binary_sensor:
   `on_start`/`on_idle` for speaker power if wake word or VA can keep the mic
   path active.
 - **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/VoIP/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, including zero as a `memset()` fast path. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. **Clipping warning**: positive gain can still saturate the PCM stream. On loud speech with gain > +6 dB, peak samples can clip and produce harmonic distortion that degrades STT and VoIP audio. If you need gain > +6 dB to bring a weak MEMS mic up to working levels, pair this component with `esp_afe` and `agc_enabled: true`; with standalone `esp_aec` there is no automatic ceiling.
-- **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` rejects stale copied
-  YAMLs that try to put audio processing or DC-offset correction on
-  `voip_stack`. If both components are present, `esp_audio_stack` owns
-  software AEC/AFE and DC-offset correction; `voip_stack` consumes the stack's
-  microphone/speaker facade.
-
 ### Audio task lifecycle
 
 The audio task is an internal FreeRTOS task with three properties worth knowing about in the current design:
@@ -1092,8 +969,7 @@ logger:
 1. **Use `sr_low_cost` AEC mode** (not VOIP). See [AEC Mode Comparison](#aec-mode-comparison).
 2. **MWW on `mic_aec`** (post-AEC), not on an unprocessed microphone path.
 3. **Enable `buffers_in_psram: true`** for SR mode's 512-sample frames on ESP32-S3.
-4. **Boost MWW priority to 8** via on_boot lambda (ESPHome defaults to 3, below mixer at 10).
-5. Do NOT use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
+4. Do NOT use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
 
 ### Switches/Display Slow With AEC On
 With `audio_stack` on **Core 0**, AEC no longer competes with LVGL/display on Core 1. This issue is resolved by correct core assignment. If you still see display slowness, check that no other high-priority task is pinned to Core 1.

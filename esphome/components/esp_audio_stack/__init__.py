@@ -1,7 +1,7 @@
-"""ESP Audio Stack Component - Full duplex I2S for simultaneous mic+speaker
+"""ESP Audio Stack Component - full-duplex I2S for simultaneous mic and speaker.
 
 Exposes standard ESPHome microphone and speaker platforms for compatibility with
-Voice Assistant and voip_stack components.
+Voice Assistant, wake word, media playback and custom audio consumers.
 
 Multi-rate support: set output_sample_rate to convert mic audio internally.
   sample_rate: I2S bus rate (e.g. 48000 for high-quality DAC output)
@@ -20,20 +20,12 @@ from esphome.components.esp32 import (
     include_builtin_idf_component,
 )
 from esphome.components.esp32.const import (
-    VARIANT_ESP32,
-    VARIANT_ESP32C3,
-    VARIANT_ESP32C5,
-    VARIANT_ESP32C6,
-    VARIANT_ESP32C61,
-    VARIANT_ESP32H2,
     VARIANT_ESP32P4,
-    VARIANT_ESP32S2,
     VARIANT_ESP32S3,
 )
 
 CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = ["esp32"]
-AUTO_LOAD = ["number", "sensor", "switch"]
 
 CONF_I2S_LRCLK_PIN = "i2s_lrclk_pin"
 CONF_I2S_BCLK_PIN = "i2s_bclk_pin"
@@ -110,8 +102,8 @@ CODEC_KIND = {
 }
 RATE_CVT_PERF_TYPES = ("speed", "memory")
 
-# Keep realtime audio builds reproducible. These are the component-manager
-# versions resolved by the maintained Waveshare S3 AFE build on ESP-IDF 5.5.4.
+# Keep realtime audio builds reproducible. These component-manager versions
+# are validated with the maintained ESP32-S3 and ESP32-P4 builds.
 ESP_AUDIO_EFFECTS_REF = "1.3.0~1"
 ESP_CODEC_DEV_REF = "1.5.10"
 
@@ -204,23 +196,15 @@ IsIdleCondition = esp_audio_stack_ns.class_("IsIdleCondition", automation.Condit
 # Both esp_aec::EspAec and esp_afe::EspAfe inherit from this adapter.
 AudioProcessor = cg.esphome_ns.namespace("audio_core").class_("AudioProcessor")
 
-# I2S port count per SoC variant (from SOC_I2S_NUM in soc_caps.h)
+# Maintained targets. All require PSRAM and ESP-IDF.
 I2S_PORTS = {
-    VARIANT_ESP32: 2,
-    VARIANT_ESP32C3: 1,
-    VARIANT_ESP32C5: 1,
-    VARIANT_ESP32C6: 1,
-    VARIANT_ESP32C61: 1,
-    VARIANT_ESP32H2: 1,
     VARIANT_ESP32P4: 3,
-    VARIANT_ESP32S2: 1,
     VARIANT_ESP32S3: 2,
 }
 
-# SoC variants with TDM support (from SOC_I2S_SUPPORTS_TDM in soc_caps.h)
+# Supported targets with TDM support (from SOC_I2S_SUPPORTS_TDM in soc_caps.h)
 TDM_VARIANTS = {
-    VARIANT_ESP32C3, VARIANT_ESP32C5, VARIANT_ESP32C6, VARIANT_ESP32C61,
-    VARIANT_ESP32H2, VARIANT_ESP32S3, VARIANT_ESP32P4,
+    VARIANT_ESP32S3, VARIANT_ESP32P4,
 }
 
 
@@ -463,7 +447,9 @@ def _final_validate(config):
     """Validate i2s_num against SoC port count and TDM against SoC capability."""
     variant = get_esp32_variant()
     if variant not in I2S_PORTS:
-        raise cv.Invalid(f"Unsupported ESP32 variant: {variant}")
+        raise cv.Invalid(
+            f"esp_audio_stack requires ESP32-S3 or ESP32-P4 with PSRAM, got {variant}"
+        )
 
     max_ports = I2S_PORTS[variant]
     if CONF_RX_BUS in config:
@@ -490,22 +476,11 @@ def _final_validate(config):
             f"TDM options require TDM support, but {variant} does not have SOC_I2S_SUPPORTS_TDM"
         )
 
-    # Single-core SoCs cannot pin to Core 1
-    SINGLE_CORE_VARIANTS = {
-        VARIANT_ESP32C3, VARIANT_ESP32C5, VARIANT_ESP32C6, VARIANT_ESP32C61,
-        VARIANT_ESP32H2, VARIANT_ESP32S2,
-    }
-    task_core = config.get(CONF_TASK_CORE, 0)
-    if task_core > 0 and variant in SINGLE_CORE_VARIANTS:
-        raise cv.Invalid(
-            f"task_core={task_core} not available on {variant} (single-core SoC)"
-        )
-    # APLL is only available on ESP32, ESP32-S2, and ESP32-P4
-    APLL_VARIANTS = {VARIANT_ESP32, VARIANT_ESP32S2, VARIANT_ESP32P4}
-    if config.get(CONF_USE_APLL, False) and variant not in APLL_VARIANTS:
+    # APLL is available on ESP32-P4 in the maintained target set.
+    if config.get(CONF_USE_APLL, False) and variant != VARIANT_ESP32P4:
         raise cv.Invalid(
             f"use_apll is not supported on {variant}. "
-            f"APLL clock source is only available on ESP32, ESP32-S2, and ESP32-P4."
+            "APLL clock source is only available on ESP32-P4 in the maintained target set."
         )
 
     from esphome.core import CORE
@@ -520,20 +495,6 @@ def _final_validate(config):
             "Use esp_afe (full AFE pipeline with AEC+NS+AGC+Speech Enhancement) "
             "or esp_aec (standalone echo cancellation), not both."
         )
-
-    # Cross-component validation for stale copied YAMLs. Software processing
-    # belongs on esp_audio_stack; voip_stack consumes the stack facade.
-
-    intercom_configs = full_config.get("voip_stack", [])
-    if intercom_configs:
-        has_audio_stack_processor = CONF_PROCESSOR_ID in config and config.get(CONF_PROCESSOR_ID) is not None
-        for ic in (intercom_configs if isinstance(intercom_configs, list) else [intercom_configs]):
-            if isinstance(ic, dict) and ic.get("processor_id") is not None and has_audio_stack_processor:
-                raise cv.Invalid(
-                    "Both esp_audio_stack and voip_stack have processor_id configured. "
-                    "This causes a race condition on the audio processor. "
-                    "Use processor_id on only ONE component (esp_audio_stack recommended)."
-                )
 
     return config
 

@@ -8,7 +8,7 @@ from esphome.components.esp32 import add_idf_component
 
 CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = ["esp32"]
-AUTO_LOAD = ["esp_audio_stack", "switch", "binary_sensor", "sensor"]
+AUTO_LOAD = ["esp_audio_stack"]
 
 _SUPPORTED_VARIANTS = ("ESP32S3", "ESP32P4")
 
@@ -227,7 +227,7 @@ async def to_code(config):
     cg.add_define("USE_AUDIO_PROCESSOR")
 
     # esp-sr 2.4.x requires esp-dsp >=1.8.0. Declare the lower bound here so
-    # artwork/runtime-image users do not inherit an older transitive esp-dsp pin.
+    # downstream audio consumers do not inherit an older transitive esp-dsp pin.
     add_idf_component(name="espressif/esp-dsp", ref="^1.8.0")
 
     if config[CONF_MIC_NUM] <= 1:

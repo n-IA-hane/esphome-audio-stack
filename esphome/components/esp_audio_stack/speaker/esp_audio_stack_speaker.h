@@ -48,7 +48,7 @@ class ESPAudioStackSpeaker : public speaker::Speaker,
   bool finishing_{false};  // Non-blocking drain: finish() sets flag, loop() handles drain+stop
   optional<uint32_t> timeout_;
   uint32_t last_write_ms_{0};
-  // Reference counting for multiple listeners (media_player, voice_assistant, intercom, etc.)
+  // Reference counting for multiple listeners (media_player, voice_assistant, call components, etc.)
   SemaphoreHandle_t active_listeners_semaphore_{nullptr};
   // Idempotency guard: prevents multiple xSemaphoreTake per stream session.
   // Without this, play() calling start() before loop() sets STATE_RUNNING causes

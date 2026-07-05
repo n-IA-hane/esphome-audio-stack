@@ -58,7 +58,7 @@ i2c:
 #   se_enabled: true and the correct input_format.
 #
 # aec/ns/vad/agc:
-#   Static defaults for the didactic example. Product YAMLs can expose these as
+#   Static defaults for the didactic example. Device YAMLs can expose these as
 #   switches/selects if runtime control is wanted.
 esp_afe:
   id: afe

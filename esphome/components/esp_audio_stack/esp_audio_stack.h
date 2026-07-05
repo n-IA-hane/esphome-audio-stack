@@ -56,7 +56,7 @@ static constexpr UBaseType_t MAX_LISTENERS = 16;
 
 // Callback type for mic data: receives the public post-processor PCM stream
 // (pointer + length, zero-copy). Raw/pre-processor taps are diagnostic-only and
-// must not feed MWW, VA or intercom TX.
+// must not feed MWW, VA or call TX.
 // IMPORTANT: Callbacks are invoked from the audio task (high priority, Core 0).
 // They MUST NOT block, allocate memory, do network I/O, or hold locks.
 // Target completion: <1ms to avoid I2S DMA underruns.
@@ -156,7 +156,7 @@ class MultiChannelAudioEffectsRateConverter {
 
   // Convert N channels from strided int16 TDM input, producing:
   //   - mic_interleaved: [mic1, mic2, mic1, mic2, ...] (num_mic_ch interleaved, for AFE)
-  //   - mic_mono: mic1 contiguous (for callbacks/MWW/intercom)
+  //   - mic_mono: mic1 contiguous (for callbacks/MWW/call components)
   //   - ref_out: ref contiguous (for AEC, may be nullptr if no ref channel)
   // channel_offsets: slot indices in TDM frame [mic1_slot, mic2_slot, ref_slot]
   // num_mic_ch: 1 or 2 (how many of the channels are mic, rest is ref)
@@ -362,7 +362,7 @@ class ESPAudioStack : public Component {
     return true;
   }
 
-  // Consumer registry: each consumer (a microphone wrapper, intercom TX path,
+  // Consumer registry: each consumer (a microphone wrapper, call TX path,
   // etc.) registers an opaque token. The audio task gates mic callbacks on
   // has_mic_consumers_. Registration survives an internal stop()+start()
   // sequence (e.g. frame_spec change), so consumers stay connected across
@@ -412,7 +412,7 @@ class ESPAudioStack : public Component {
   // Getters for platform wrappers
   // get_sample_rate() returns the I2S bus rate (used by speaker for audio_stream_info)
   uint32_t get_sample_rate() const { return this->sample_rate_; }
-  // get_output_sample_rate() returns the converted rate for mic consumers (MWW/AEC/VA/intercom)
+  // get_output_sample_rate() returns the converted rate for mic consumers (MWW/AEC/VA/call components)
   uint32_t get_output_sample_rate() const {
     return this->output_sample_rate_ > 0 ? this->output_sample_rate_ : this->sample_rate_;
   }
@@ -749,7 +749,7 @@ class ESPAudioStack : public Component {
   DcBlockerState dc_secondary_;
 
   // Mic data callbacks
-  MicCallbackSlot mic_callbacks_[MAX_LISTENERS]{};  // Post-processor stream for MWW, VA, intercom
+  MicCallbackSlot mic_callbacks_[MAX_LISTENERS]{};  // Post-processor stream for MWW, VA, call components
   size_t mic_callback_count_{0};
 
   // Speaker output callbacks (for mixer pending_playback_frames tracking)

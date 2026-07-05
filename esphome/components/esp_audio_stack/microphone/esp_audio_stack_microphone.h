@@ -34,7 +34,7 @@ class ESPAudioStackMicrophone : public microphone::Microphone,
 
   std::vector<uint8_t> audio_buffer_;
 
-  // Reference counting for multiple listeners (voice_assistant, wake_word, intercom, etc.)
+  // Reference counting for multiple listeners (voice_assistant, wake_word, call components, etc.)
   SemaphoreHandle_t active_listeners_semaphore_{nullptr};
 };
 

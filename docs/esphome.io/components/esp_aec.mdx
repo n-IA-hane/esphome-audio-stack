@@ -1,0 +1,49 @@
+---
+title: ESP AEC
+description: ESP-SR acoustic echo cancellation processor for ESP Audio Stack.
+---
+
+import APIRef from '@components/APIRef.astro';
+
+The `esp_aec` component wraps Espressif ESP-SR acoustic echo cancellation and
+implements the audio-processor interface used by `esp_audio_stack`.
+
+Use it when the device needs software echo cancellation but not the full AFE
+pipeline.
+
+```yaml
+esp_aec:
+  id: aec_processor
+  mode: sr_low_cost
+
+esp_audio_stack:
+  id: audio_stack
+  processor_id: aec_processor
+  sample_rate: 48000
+  output_sample_rate: 16000
+```
+
+## Configuration variables
+
+- **id** (*Optional*, ID): Manually specify the processor ID.
+- **mode** (*Optional*, string): AEC engine and profile. One of `sr_low_cost`, `sr_high_perf`, `fd_low_cost`, `fd_high_perf`, `voip_low_cost` and `voip_high_perf`. Defaults to `sr_low_cost`.
+
+## Actions
+
+### `esp_aec.set_mode`
+
+Switches the AEC mode at runtime.
+
+```yaml
+on_...:
+  - esp_aec.set_mode:
+      id: aec_processor
+      mode: fd_high_perf
+```
+
+## See Also
+
+- [ESP Audio Stack](/components/esp_audio_stack/)
+- [ESP AFE](/components/esp_afe/)
+
+<APIRef text="esp_aec.h" path="esp_aec/esp_aec.h" />

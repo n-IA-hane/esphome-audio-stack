@@ -1304,7 +1304,7 @@ void ESPAudioStack::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
     // Mono mode: get AEC reference (direct from TX or ring buffer).
     // Reference is post-volume PCM, no additional scaling (Espressif TYPE2 pattern).
     // When playback is idle, fill_mono_aec_reference_() zero-fills the ref and
-    // we still call the processor. That keeps MWW/VA/intercom on the processed
+    // we still call the processor. That keeps MWW/VA/call components on the processed
     // surface instead of silently switching to raw mic audio.
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
     if (!ctx.use_stereo_aec_ref) {
@@ -1664,7 +1664,7 @@ void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
   // Clock-only TX keeps full-duplex RX/I2S clocks alive while no speaker
   // audio is playing. It contains no public speaker frames, but the I2S ISR
   // still emits TX completion events, so queue zero-frame records to keep the
-  // completion stream in lockstep without notifying speaker_source/Sendspin.
+  // completion stream in lockstep without notifying speaker consumers.
   this->write_tx_dma_blocks_(ctx, ctx.tx_clock_buffer, tx_bytes, 0);
 }
 

@@ -93,7 +93,7 @@ microphone:
     id: raw_mic
     esp_audio_stack_id: audio_stack
 
-# Public speaker. Media/TTS/VoIP layers can feed this directly or through
+# Public speaker. Media, TTS and call layers can feed this directly or through
 # ESPHome mixer/resampler components.
 speaker:
   - platform: esp_audio_stack

@@ -25,7 +25,7 @@ static inline int16_t scale_sample(int16_t sample, float gain) {
 // Q15 scale for standalone float gain paths. ESPHome-facing attenuation/volume
 // uses esp-audio-libs Q31 in esp_audio_stack; user-facing positive mic gain
 // uses esp_ae_alc. This helper remains for board-level input boost and
-// intercom standalone paths that need amplification.
+// standalone audio paths that need amplification.
 static inline void scale_block_i16_q15(const int16_t *in, int16_t *out, size_t len, int16_t q15) {
   if (q15 <= 0) {
     std::memset(out, 0, len * sizeof(int16_t));

@@ -1346,7 +1346,7 @@ void ESPAudioStack::start() {
   // Complete any deferred close from the previous session before reopening.
   // Reusing codec/I2S handles that the audio task has already parked during a
   // stop/start call cycle can leave TX in a half-closed state on the next
-  // playback or intercom call.
+  // playback or an active call.
   if (this->teardown_pending_.load(std::memory_order_relaxed)) {
     if (this->wait_audio_task_idle_(250)) {
       this->deinit_i2s_();

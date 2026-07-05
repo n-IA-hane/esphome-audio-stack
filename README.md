@@ -116,9 +116,7 @@ Supported release targets, enforced by validation:
 
 `esp_audio_stack`, `esp_aec` and `esp_afe` require the ESPHome `psram:`
 component. The maintained and release-tested targets are ESP32-S3 and ESP32-P4.
-Smaller ESP32 variants may still run standalone `voip_stack` with native
-ESPHome microphone/speaker components, but they are not supported targets for
-this audio backend.
+Smaller ESP32 variants are not supported targets for this audio backend.
 
 ## 4. Core Concepts
 
@@ -607,7 +605,7 @@ All values are verified against the component schema.
 | `i2s_mode` | `primary` | primary, secondary | Clock master or slave. |
 | `i2s_comm_fmt` | `philips` | philips, msb, pcm_short, pcm_long | Frame format. PCM short/long are TDM-only. |
 | `mclk_multiple` | `256` | 128, 256, 384, 512 | MCLK to sample-rate ratio. |
-| `use_apll` | `false` | bool | APLL clock source, only on supported variants. |
+| `use_apll` | `false` | bool | APLL clock source. In the maintained target set, only ESP32-P4 supports it. |
 | `rx_bus` / `tx_bus` | none | object | Dual-bus mode with separate I2S controllers. |
 | `dma_desc_num` | `6` | 2 to 16 | DMA descriptor count. |
 | `dma_frame_num` | auto | 64 to 4092 | Frames per descriptor. |
@@ -681,7 +679,6 @@ front-loads many of them into YAML compilation. It rejects:
 - `use_apll` on variants without APLL;
 - `esp_aec` and `esp_afe` in the same firmware;
 - `esp_afe` feed and fetch tasks pinned to the same core;
-- `processor_id` configured on both `esp_audio_stack` and `voip_stack`.
 
 If your YAML compiles, the topology is at least physically coherent for your
 chip.

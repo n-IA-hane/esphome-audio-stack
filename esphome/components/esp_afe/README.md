@@ -1,13 +1,8 @@
 # ESP AFE - Full Audio Front-End Pipeline
 
-> ⚠ **Important: `esp_afe` requires `esp_audio_stack` in front of it.** It is
-> **not** a drop-in processor for standalone native `voip_stack` setups
-> (dual-bus MEMS + amp without the stack). The AFE pipeline expects fixed
-> 512-sample 16 kHz frames at a steady cadence, which only `esp_audio_stack`
-> produces. Standalone `voip_stack` should bind directly to native ESPHome
-> microphone/speaker components. See
-> the root [ESPHome Audio Stack README](../../../README.md)
-> for the full topology matrix.
+> ⚠ **Important: `esp_afe` requires `esp_audio_stack` in front of it.** The AFE
+> pipeline expects fixed 512-sample 16 kHz frames at a steady cadence. Use it as
+> the processor behind `esp_audio_stack`, not as an arbitrary standalone filter.
 
 ESPHome component wrapping Espressif's **ESP-SR AFE** (Audio Front End)
 through the official `esp_gmf_afe` element in a GMF pipeline/task. Provides a
@@ -33,10 +28,12 @@ Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 > **Note**: When Speech Enhancement is active, esp-sr prioritizes BSS over NS.
 > `afe_config_check()` may clear `ns_init` on dual-mic builds. AGC can be
 > configured at boot, but the stock GMF manager does not expose it as a live
-> feature, so AGC changes require AFE reinit. The public dual-mic packages keep
-> AGC disabled and do not expose an AGC switch.
+> feature, so AGC changes require AFE reinit.
 
-Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full signal processing pipeline. Both components implement the `AudioProcessor` interface, but they are **only** drop-in replacements behind `esp_audio_stack`. With standalone `voip_stack` (no audio stack driver), use `esp_aec`: the AFE feed/fetch task model needs the steady producer that `esp_audio_stack` provides and that the standalone VoIP path does not.
+Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full
+signal processing pipeline. Both components implement the `AudioProcessor`
+interface, but the AFE feed/fetch task model needs the steady producer that
+`esp_audio_stack` provides.
 
 ### When to use esp_afe vs esp_aec
 
@@ -60,8 +57,7 @@ Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full 
 
 - **ESP32-S3** or **ESP32-P4** with PSRAM
 - ESP-IDF framework
-- `esp_audio_stack` in front of the processor. `voip_stack` can use the
-  processed mic only when it sits behind the audio stack driver.
+- `esp_audio_stack` in front of the processor.
 
 ## Installation
 
@@ -166,7 +162,7 @@ esp_afe:
 
 > **Buffer placement guidance**: defaults are tuned for the fastest Core 0
 > audio path. Total internal cost when all three flags are `false` is about
-> 19 KB. Current maintained dual-mic full-experience profiles keep
+> 19 KB. Dual-mic voice profiles usually keep
 > `feed_buf_in_psram`, `feed_ring_in_psram` and `fetch_ring_in_psram` false
 > when the board has enough contiguous internal/DMA heap. This avoids PSRAM
 > traffic on the hot AFE bridge path and improved P4 VoIP/TTS latency during
@@ -198,7 +194,7 @@ esp_afe:
 >   se_enabled: true
 > ```
 >
-> For public dual-mic full-experience profiles, set `agc_enabled: false` and
+> For dual-mic voice profiles, set `agc_enabled: false` and
 > use `packages/esp_afe/dual_mic_entities.yaml`, which intentionally omits the
 > AGC switch. Everything else (AEC, memory, task settings) uses sensible
 > defaults and does not need to be repeated unless the target needs board
@@ -250,7 +246,8 @@ switch:
 | `vad` | `mdi:account-voice` | Voice activity detection toggle. VAD is structurally initialized and enabled/disabled live through the GMF AFE manager |
 | `agc` | `mdi:tune-vertical` | Auto gain control toggle (requires AFE reinit). Use only on single-mic or custom diagnostic builds whose checked runtime config keeps `agc_init: true`; public dual-mic packages omit it |
 
-Use `RESTORE_DEFAULT_OFF` for VAD restore on full-experience VoIP targets:
+Use `RESTORE_DEFAULT_OFF` for VAD restore on devices where wake word or another
+microphone consumer owns the capture path:
 VAD is off on first boot, but the user's HA switch state is preserved after
 that. If `Voice Detected` should keep working in standby, set
 `continuous_vad: true` so the background mic path is intentional.
@@ -387,7 +384,7 @@ manager exposes only part of the lower ESP-SR runtime control surface:
 | AEC | Live GMF manager call | None | Immediate on/off via `ESP_AFE_FEATURE_AEC` |
 | SE | Boot-time graph choice | N/A | Structural on dual-mic builds; single-mic users should use a single-mic config or `esp_aec` |
 | NS | AFE reinit | hundreds of ms plus possible audio-task restart | ESP-SR exposes low-level vtable entries, but `esp_gmf_afe_manager` does not expose an NS feature enum. Not exposed on dual-mic SE/BSS builds because `afe_config_check()` prioritizes BSS over NS |
-| AGC | AFE reinit | hundreds of ms plus possible audio-task restart | Same manager limitation as NS. Not exposed by public dual-mic packages because toggling rebuilds the AFE graph and can disturb full-experience audio under load |
+| AGC | AFE reinit | hundreds of ms plus possible audio-task restart | Same manager limitation as NS. Avoid toggling while real-time audio is active. |
 | VAD | Live GMF manager call | None | `vad_init` stays structural; runtime on/off gates `ESP_AFE_FEATURE_VAD` without rebuilding the AFE instance |
 
 **Why reinit for NS/AGC?** ESP-SR's low-level AFE vtable includes
@@ -412,18 +409,18 @@ The reinit is safe: the previous AFE is destroyed first (ESP-SR's FFT resources 
               |                 |
               +--------+--------+
                        |
-            +----------+-----------+
-            |                      |
-    esp_audio_stack         voip_stack
-    (processor_id)         (processor_id)
+            |
+    esp_audio_stack
+    (processor_id)
 ```
 
-Both `EspAec` and `EspAfe` implement `AudioProcessor`. The consumer components (`esp_audio_stack` and `voip_stack`) call `process(mic, ref, out)` without knowing which implementation is behind it. The supported pairings are:
+Both `EspAec` and `EspAfe` implement `AudioProcessor`. `esp_audio_stack` calls
+`process(mic, ref, out)` without knowing which implementation is behind it. The
+supported pairings are:
 
 | Consumer | esp_aec | esp_afe |
 |----------|---------|---------|
 | `esp_audio_stack` | yes | yes |
-| `voip_stack` standalone (no `esp_audio_stack`) | yes | **no** (the GMF AFE manager/pipeline needs the steady frames `esp_audio_stack` produces) |
 
 ### Internal Pipeline
 
@@ -453,7 +450,7 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
       ref: main
-    components: [voip_stack, esp_audio_stack, esp_afe]
+    components: [esp_audio_stack, esp_afe]
 
 esp_afe:
   id: afe_processor
@@ -462,7 +459,7 @@ esp_afe:
   mic_num: 2                  # 2 for dual-mic Speech Enhancement (default: 1)
   se_enabled: true            # Speech Enhancement (requires mic_num: 2, default: false)
   vad_enabled: true           # Voice activity detection (default: false)
-  agc_enabled: false          # public dual-mic profiles keep AGC out of HA/runtime controls
+  agc_enabled: false          # avoid AGC graph rebuilds during real-time audio
 
 esp_audio_stack:
   id: audio_stack

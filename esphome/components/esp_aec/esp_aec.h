@@ -24,10 +24,10 @@ using audio_core::ProcessorTelemetry;
 ///
 /// Implements AudioProcessor with only the echo canceller enabled
 /// (WebRTC or neural, depending on mode). Lower memory footprint than
-/// EspAfe. Intended for devices that only need echo cancellation for an
-/// intercom TX path without the full AFE pipeline.
+/// EspAfe. Intended for devices that only need echo cancellation without the
+/// full AFE pipeline.
 ///
-/// Consumers (esp_audio_stack, voip_stack) see AEC as just another
+/// Consumers see AEC as just another
 /// AudioProcessor; picking EspAec vs EspAfe is a YAML choice.
 class EspAec : public Component, public AudioProcessor {
  public:
