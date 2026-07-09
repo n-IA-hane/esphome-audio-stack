@@ -20,8 +20,7 @@ namespace audio_core {
 ///  - `psram_stack=true`: allocate `stack_bytes` worth of StackType_t storage
 ///    from PSRAM, then call xTaskCreateStaticPinnedToCore.
 ///    On allocation failure, returns false without touching the task system.
-///    On success, *stack_out holds the allocated stack pointer (caller must
-///    pass it back to cleanup_pinned_task() when stopping).
+///    On success, *stack_out holds the allocated stack pointer.
 ///
 ///  - `psram_stack=false`: classic xTaskCreatePinnedToCore with FreeRTOS
 ///    managing the stack on the internal heap. *stack_out stays nullptr.
@@ -66,58 +65,6 @@ inline bool start_pinned_task(TaskFunction_t fn, const char *name, uint32_t stac
     return false;
   }
   return true;
-}
-
-/// Force-delete a task and free its PSRAM stack. Use ONLY from setup
-/// failure paths where the task was just spawned and has not yet entered
-/// any blocking upstream API call. Calling vTaskDelete on a task that
-/// is mid-recv / mid-esp-sr fetch / mid-i2s_channel_read leaves
-/// internal locks corrupted; for the steady-state stop path use the
-/// run-flag + done-semaphore pattern and then call cleanup_pinned_task.
-inline void force_delete_pinned_task(TaskHandle_t *handle, StackType_t **stack, uint32_t stack_bytes) {
-  if (handle != nullptr && *handle != nullptr) {
-    if (eTaskGetState(*handle) != eDeleted) {
-      vTaskDelete(*handle);
-    }
-    *handle = nullptr;
-  }
-  if (stack != nullptr && *stack != nullptr) {
-    const uint32_t stack_words = (stack_bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
-    RAMAllocator<StackType_t> alloc(RAMAllocator<StackType_t>::ALLOC_EXTERNAL);
-    alloc.deallocate(*stack, stack_words);
-    *stack = nullptr;
-  }
-}
-
-/// Free the PSRAM stack of a task that has already self-deleted.
-///
-/// Contract: the caller MUST have already driven the task to exit
-/// (running flag + done semaphore / event group), and only then invoke
-/// this helper. The helper does NOT call vTaskDelete: forcing it on a
-/// task still inside an upstream library call (esp-sr fetch,
-/// lwIP recv, ...) leaves internal locks corrupted and can race with
-/// the destruction of resources the task is using (use-after-free).
-///
-/// On `eDeleted` the static stack is freed and `*handle`/`*stack` are
-/// nulled. Otherwise the helper logs an error and leaks the stack so we
-/// fail safe instead of free-while-in-use.
-inline void cleanup_pinned_task(TaskHandle_t *handle, StackType_t **stack, uint32_t stack_bytes) {
-  if (handle != nullptr && *handle != nullptr) {
-    if (eTaskGetState(*handle) != eDeleted) {
-      ESP_LOGE("task_utils",
-               "cleanup_pinned_task: task still alive; caller did not wait "
-               "on its done signal - leaking stack to avoid UAF");
-      *handle = nullptr;
-      return;
-    }
-    *handle = nullptr;
-  }
-  if (stack != nullptr && *stack != nullptr) {
-    const uint32_t stack_words = (stack_bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
-    RAMAllocator<StackType_t> alloc(RAMAllocator<StackType_t>::ALLOC_EXTERNAL);
-    alloc.deallocate(*stack, stack_words);
-    *stack = nullptr;
-  }
 }
 
 }  // namespace audio_core

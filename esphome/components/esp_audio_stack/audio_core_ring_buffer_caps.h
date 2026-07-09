@@ -30,14 +30,12 @@ namespace audio_core {
 ///   - INTERNAL: always internal RAM. Use for anything in the audio hot path.
 ///   - PREFER_PSRAM: try PSRAM first, fall back to internal. Use for large
 ///     non-realtime buffers (protocol, staging) when internal is tight.
-///   - PSRAM_ONLY: PSRAM only, fail if not available. Rarely appropriate.
 ///
 /// At creation time the helper logs name, size, policy, and actual placement
 /// (verified via esp_ptr_internal). This makes memory policy auditable at boot.
 enum class RingBufferPolicy {
   INTERNAL,
   PREFER_PSRAM,
-  PSRAM_ONLY,
 };
 
 /// ESPHome ring_buffer::RingBuffer with caller-controlled storage capabilities.
@@ -103,7 +101,6 @@ inline const char *policy_str(RingBufferPolicy p) {
   switch (p) {
     case RingBufferPolicy::INTERNAL: return "internal";
     case RingBufferPolicy::PREFER_PSRAM: return "prefer_psram";
-    case RingBufferPolicy::PSRAM_ONLY: return "psram_only";
   }
   return "?";
 }
@@ -216,9 +213,6 @@ inline RingBufferPtr create_ring_buffer_with_type(size_t len, RingBufferPolicy p
       ok = rb->install(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, type);
       if (!ok)
         ok = rb->install(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, type);
-      break;
-    case RingBufferPolicy::PSRAM_ONLY:
-      ok = rb->install(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, type);
       break;
   }
 
