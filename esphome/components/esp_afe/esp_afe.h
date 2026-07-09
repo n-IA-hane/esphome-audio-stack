@@ -78,14 +78,9 @@ class EspAfe : public Component, public AudioProcessor {
 
   // AudioProcessor interface
   bool is_initialized() const override {
-    // Runtime buffers are prepared while tasks are stopped. Single-mic uses
-    // ESP-SR direct feed/fetch, dual-mic uses the GMF feed input ring.
-    if (this->feed_buf_ == nullptr) {
-      return false;
-    }
 #ifdef USE_ESP_AFE_DIRECT_PATH
     if (this->direct_data_ != nullptr && this->direct_feed_signal_ != nullptr) {
-      return true;
+      return this->feed_buf_ != nullptr;
     }
 #endif
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -338,6 +333,8 @@ class EspAfe : public Component, public AudioProcessor {
 #ifdef USE_ESP_AFE_GMF_PATH
   void flush_pipeline_before_stop_();
   void drain_feed_input_ring_();
+  void *acquire_gmf_feed_slot_(size_t feed_bytes, TickType_t ticks_to_wait);
+  bool commit_gmf_feed_slot_(void *slot);
 #endif
   void update_fetch_ring_free_pct_();
 
@@ -379,7 +376,7 @@ class EspAfe : public Component, public AudioProcessor {
   int fetch_task_priority_{5};
   int fetch_task_stack_size_{3072};
   char input_format_override_[5]{};
-  bool feed_buf_in_psram_{false};   // ~3 KB scratch (default internal, ~41 us/frame faster on Core 0)
+  bool feed_buf_in_psram_{false};   // Direct/split-frame scratch placement; 1:1 GMF feeds use ring slots.
   bool feed_ring_in_psram_{false};  // ~12 KB staging ring (default internal, ~20 us/frame faster on Core 0)
   bool fetch_ring_in_psram_{false}; // ~4 KB output ring (default internal, ~6.8 us/frame faster on Core 0)
 

@@ -156,20 +156,21 @@ esp_afe:
 | `fetch_task_core` | int | `1` | Official `esp_gmf_afe_manager` fetch task core; also used for the single-element GMF pipeline task so the output side stays on the same core. |
 | `fetch_task_priority` | int | `5` | Official `esp_gmf_afe_manager` fetch task priority; also used for the GMF pipeline task. |
 | `fetch_task_stack_size` | int | `3072` | Official `esp_gmf_afe_manager` fetch task stack size in bytes; also used for the GMF pipeline task stack. |
-| `feed_buf_in_psram` | bool | `false` | Place the ~3 KB sample-interleave scratch buffer in PSRAM. Default internal saves ~41 us/frame on Core 0 (the buffer is written and re-read every audio frame). Set `true` on memory-constrained builds to free internal RAM at the cost of Core 0 PSRAM traffic. |
+| `feed_buf_in_psram` | bool | `false` | Place the direct-path or split-frame feed scratch buffer in PSRAM. GMF profiles whose process frame equals the feed frame write directly into the feed ring and do not allocate this buffer. |
 | `feed_ring_in_psram` | bool | `false` | Place the ~12 KB feed staging ring (I2S task to GMF feed task) in PSRAM. Default internal saves ~20 us/frame on Core 0 writes. Set `true` if internal RAM headroom is tight. |
 | `fetch_ring_in_psram` | bool | `false` | Place the ~4 KB fetch output ring (GMF fetch task to I2S task) in PSRAM. Default internal saves ~6.8 us/frame on Core 0 reads. Set `true` if internal RAM headroom is tight. |
 
 > **Buffer placement guidance**: defaults are tuned for the fastest Core 0
-> audio path. Total internal cost when all three flags are `false` is about
-> 19 KB. Dual-mic voice profiles usually keep
+> audio path. Total internal cost when all bridge buffers are allocated and the
+> three flags are `false` is up to about 19 KB. Dual-mic voice profiles usually keep
 > `feed_buf_in_psram`, `feed_ring_in_psram` and `fetch_ring_in_psram` false
 > when the board has enough contiguous internal/DMA heap. This avoids PSRAM
 > traffic on the hot AFE bridge path and improved P4 VoIP/TTS latency during
 > validation. Each flag remains independent for board-specific tuning: enabling
-> them can recover up to about 19 KB internal RAM, at the cost of Core 0 PSRAM
-> reads/writes. Cumulative Core 0 cost when all are `true` is about
-> 68 us/frame on Octal PSRAM 80 MHz, lower bound.
+> them can recover up to about 19 KB internal RAM when every bridge buffer is
+> present, at the cost of Core 0 PSRAM reads/writes. GMF profiles with matching
+> process/feed frame sizes omit the feed buffer, reducing both memory and PSRAM
+> traffic for that path.
 
 > **Defaults are designed so that a minimal config already enables AEC + NS + AGC.** You only need to declare options that differ from the defaults. In particular:
 > - `aec_enabled`, `ns_enabled`, `agc_enabled` are **true** by default. Only set them if you want to **disable** a feature.
@@ -433,11 +434,13 @@ feed() ----> AFE internal tasks ----> fetch()
 ```
 
 Espressif's `esp_gmf_afe` element runs in a GMF pipeline/task. The wrapper keeps
-`process()` as the ESPHome-facing contract by staging complete feed frames into
-a NOSPLIT bridge ring and reading processed output from an ESPHome BYTEBUF ring
-without blocking. The GMF pipeline stays prepared and is stopped when no
-microphone consumer is active; prepared rings and scratch buffers remain
-allocated while idle.
+`process()` as the ESPHome-facing contract by publishing complete feed frames
+into a NOSPLIT bridge ring and reading processed output from an ESPHome BYTEBUF
+ring without blocking. When the process frame already matches the GMF feed
+frame, `process()` writes directly into the acquired ring slot; split-frame
+topologies keep the staging scratch. The GMF pipeline stays prepared and is
+stopped when no microphone consumer is active; prepared rings and scratch
+buffers remain allocated while idle.
 Fetch-output writes disable partial writes, so a full output span is either
 queued intact or dropped; this keeps fixed-size consumer reads sample-aligned
 after overflow.
@@ -522,7 +525,7 @@ select:
 | AEC filter | ~20-30 KB | ~60 KB | Depends on filter_length and mode |
 | NS (WebRTC) | ~10-15 KB | ~10 KB | Allocated even when SE replaces it at runtime |
 | AGC (WebRTC) | ~2-3 KB | ~3 KB | |
-| Feed buffer | selectable | selectable | 512-1024 * 2-3 channels * 2 bytes; controlled by `feed_buf_in_psram` |
+| Feed buffer | selectable | selectable | Direct-path or split-frame scratch; omitted for GMF profiles where process frame equals feed frame. Controlled by `feed_buf_in_psram` when allocated |
 | AFE internal ring | esp-sr owned | esp-sr owned | `ringbuf_size * frame_size` inside the closed-source esp-sr instance |
 | Feed bridge ring | selectable | selectable | `kBridgeRingFrames` complete NOSPLIT feed frames; controlled by `feed_ring_in_psram` |
 | Fetch output ring | selectable | selectable | `kBridgeRingFrames` mono output frames; controlled by `fetch_ring_in_psram` |

@@ -171,7 +171,7 @@ CONFIG_SCHEMA = cv.All(
             ),
             # Buffer placement knobs. Default false = internal RAM (fastest on
             # Core 0); set true to free internal at the cost of PSRAM traffic.
-            #   feed_buf_in_psram   : ~3 KB scratch built then re-read every frame (~41 us/frame)
+            #   feed_buf_in_psram   : direct/split-frame scratch only; 1:1 GMF feeds write into the ring slot
             #   feed_ring_in_psram  : ~12 KB staging ring written every frame (~20 us/frame)
             #   fetch_ring_in_psram : ~4 KB output ring read every frame (~6.8 us/frame)
             cv.Optional(CONF_FEED_BUF_IN_PSRAM, default=False): cv.boolean,

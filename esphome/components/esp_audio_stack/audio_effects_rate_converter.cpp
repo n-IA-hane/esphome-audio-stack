@@ -356,7 +356,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
   bool prepare(size_t in_count, size_t out_count, uint8_t num_channels,
                uint8_t source_channels, bool source_32bit) {
     const uint8_t nch = std::min<uint8_t>(num_channels, MAX_RATE_CVT_CHANNELS);
-    if (!this->ensure_deintlv_buffers_(source_channels, in_count))
+    const uint8_t deintlv_channels = source_32bit ? source_channels : nch;
+    if (!this->ensure_deintlv_buffers_(deintlv_channels, in_count))
       return false;
     if (source_32bit && !this->ensure_bit_conversion_(source_channels, in_count))
       return false;
@@ -388,7 +389,7 @@ class MultiChannelAudioEffectsRateConverterImpl {
 
     int16_t *selected[MAX_RATE_CVT_CHANNELS]{};
     for (uint8_t c = 0; c < this->channels_; c++) {
-      selected[c] = this->deintlv_ch_[offsets[c]];
+      selected[c] = source_32bit ? this->deintlv_ch_[offsets[c]] : this->deintlv_ch_[c];
     }
 
     if (this->ratio_ <= 1) {
@@ -419,16 +420,17 @@ class MultiChannelAudioEffectsRateConverterImpl {
         return false;
       }
     }
-    if (!this->ensure_deintlv_buffers_(static_cast<uint8_t>(stride), in_count))
-      return false;
-
     const void *deintlv_input = in;
     if (source_32bit) {
+      if (!this->ensure_deintlv_buffers_(static_cast<uint8_t>(stride), in_count))
+        return false;
       if (!this->ensure_bit_conversion_(static_cast<uint8_t>(stride), in_count))
         return false;
       if (!this->bit_cvt_.process(in, static_cast<uint32_t>(in_count), this->bit_scratch_, "multi32"))
         return false;
       deintlv_input = this->bit_scratch_;
+    } else {
+      return this->extract_selected_channels_(static_cast<const int16_t *>(deintlv_input), in_count, stride, offsets);
     }
 
     esp_ae_sample_t out_args[MAX_DEINTLV_CH]{};
@@ -443,6 +445,19 @@ class MultiChannelAudioEffectsRateConverterImpl {
     ESP_LOGE(TAG, "esp_ae_deintlv_process failed: err=%d samples=%u ch=%u",
              static_cast<int>(err), static_cast<unsigned>(in_count), static_cast<unsigned>(stride));
     return false;
+  }
+
+  bool extract_selected_channels_(const int16_t *in, size_t in_count, size_t stride, const uint8_t *offsets) {
+    if (!this->ensure_deintlv_buffers_(this->channels_, in_count))
+      return false;
+    for (uint8_t c = 0; c < this->channels_; c++) {
+      int16_t *out = this->deintlv_ch_[c];
+      const size_t offset = offsets[c];
+      for (size_t i = 0; i < in_count; i++) {
+        out[i] = in[i * stride + offset];
+      }
+    }
+    return true;
   }
 
   bool ensure_bit_conversion_(uint8_t source_channels, size_t in_count) {

@@ -534,25 +534,28 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   // Use official API for feed channel count instead of config struct (more robust
   // if esp-sr changes internal channel mapping in future versions).
   int total_channels = static_cast<int>(total_channels_u8);
-  size_t feed_bytes = static_cast<size_t>(feed_chunksize) * total_channels * sizeof(int16_t);
-
-  const uint32_t feed_buf_caps = this->feed_buf_in_psram_
-      ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-      : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  int16_t *feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, feed_buf_caps));
-  if (feed_buf == nullptr && this->feed_buf_in_psram_) {
-    ESP_LOGW(TAG, "feed_buf (%u bytes) fell back to internal RAM (PSRAM full/unavailable)",
-             static_cast<unsigned>(feed_bytes));
-    feed_buf = static_cast<int16_t *>(
-        heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  }
-  if (feed_buf == nullptr) {
-    ESP_LOGE(TAG, "Failed to allocate feed buffer (%u bytes)", static_cast<unsigned>(feed_bytes));
-    esp_gmf_task_deinit(task);
-    esp_gmf_pipeline_destroy(pipeline);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
+  const bool needs_feed_staging = process_chunksize != feed_chunksize;
+  int16_t *feed_buf = nullptr;
+  if (needs_feed_staging) {
+    const size_t feed_bytes = static_cast<size_t>(feed_chunksize) * total_channels * sizeof(int16_t);
+    const uint32_t feed_buf_caps = this->feed_buf_in_psram_
+        ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+        : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, feed_buf_caps));
+    if (feed_buf == nullptr && this->feed_buf_in_psram_) {
+      ESP_LOGW(TAG, "staged feed_buf (%u bytes) fell back to internal RAM (PSRAM full/unavailable)",
+               static_cast<unsigned>(feed_bytes));
+      feed_buf = static_cast<int16_t *>(
+          heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    }
+    if (feed_buf == nullptr) {
+      ESP_LOGE(TAG, "Failed to allocate staged feed buffer (%u bytes)", static_cast<unsigned>(feed_bytes));
+      esp_gmf_task_deinit(task);
+      esp_gmf_pipeline_destroy(pipeline);
+      esp_gmf_afe_manager_destroy(manager);
+      afe_config_free(cfg);
+      return false;
+    }
   }
 
   instance->manager = manager;
@@ -1493,7 +1496,15 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   qs = this->process_chunksize_ > 0 ? this->process_chunksize_ : this->fetch_chunksize_;
   os = this->fetch_chunksize_;
   int fs = this->feed_chunksize_;
-  if (qs <= 0 || os <= 0 || fs <= 0 || this->feed_buf_ == nullptr) {
+  bool direct_path = false;
+#ifdef USE_ESP_AFE_DIRECT_PATH
+  direct_path = this->direct_iface_ != nullptr && this->direct_data_ != nullptr;
+#endif
+  bool gmf_path = false;
+#ifdef USE_ESP_AFE_GMF_PATH
+  gmf_path = this->feed_input_ring_ != nullptr;
+#endif
+  if (qs <= 0 || os <= 0 || fs <= 0 || (!gmf_path && this->feed_buf_ == nullptr)) {
     silence_frame(out, os);
     this->clear_process_busy_();
     finish_process_timing();
@@ -1537,12 +1548,31 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   }
 
   const int tc = this->total_channels_;
-  int16_t *dst = this->feed_buf_ + offset * tc;
-  stage_afe_input_frame(dst, in_mic, in_ref, qs, transport_mic_channels,
-                        afe_mic_channels, tc);
-  offset += qs;
+  const size_t feed_bytes = static_cast<size_t>(fs) * this->total_channels_ * sizeof(int16_t);
+  const bool gmf_direct_frame = gmf_path && !direct_path && offset == 0 && qs == fs;
+  void *gmf_slot = nullptr;
+  bool staged = true;
+  if (gmf_direct_frame) {
+    gmf_slot = this->acquire_gmf_feed_slot_(feed_bytes, 0);
+    if (gmf_slot == nullptr) {
+      diag_add(this->input_ring_drop_);
+      staged = false;
+    } else {
+      stage_afe_input_frame(static_cast<int16_t *>(gmf_slot), in_mic, in_ref, qs, transport_mic_channels,
+                            afe_mic_channels, tc);
+      offset = fs;
+    }
+  } else if (this->feed_buf_ != nullptr) {
+    int16_t *dst = this->feed_buf_ + offset * tc;
+    stage_afe_input_frame(dst, in_mic, in_ref, qs, transport_mic_channels,
+                          afe_mic_channels, tc);
+    offset += qs;
+  } else {
+    diag_add(this->input_ring_drop_);
+    staged = false;
+  }
 
-  if (offset == fs) {
+  if (staged && offset == fs) {
     if (this->warmup_remaining_ > 0) {
       this->warmup_remaining_--;
     }
@@ -1562,11 +1592,17 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
 #endif
 #ifdef USE_ESP_AFE_GMF_PATH
     {
-      // Enqueue the full frame into the NOSPLIT ring. GMF's feed task pulls it
-      // through the GMF pipeline input port. Non-blocking send: if the ring is full we drop
-      // the frame instead of stalling the realtime I2S task.
-      size_t feed_bytes = static_cast<size_t>(fs) * this->total_channels_ * sizeof(int16_t);
-      if (this->feed_input_ring_ != nullptr) {
+      // Enqueue the full frame into the NOSPLIT ring. WS3-style GMF input uses
+      // a direct ring slot, so the I2S task avoids staging and xRingbufferSend
+      // copying. Fallback keeps partial-frame topologies on the old staging path.
+      if (gmf_slot != nullptr) {
+        if (!this->commit_gmf_feed_slot_(gmf_slot)) {
+          diag_add(this->input_ring_drop_);
+        } else {
+          uint32_t queued = diag_increment_and_get(this->feed_queue_frames_);
+          update_peak_atomic(this->feed_queue_peak_, queued);
+        }
+      } else if (this->feed_input_ring_ != nullptr && this->feed_buf_ != nullptr) {
         if (!xRingbufferSend(this->feed_input_ring_, this->feed_buf_, feed_bytes, 0)) {
           diag_add(this->input_ring_drop_);
         } else {
@@ -2173,23 +2209,44 @@ void EspAfe::stop_pipeline_() {
 #ifdef USE_ESP_AFE_GMF_PATH
 void EspAfe::flush_pipeline_before_stop_() {
   if (this->afe_manager_ == nullptr || this->feed_input_ring_ == nullptr ||
-      this->feed_buf_ == nullptr || this->feed_chunksize_ <= 0 || this->total_channels_ <= 0 ||
+      this->feed_chunksize_ <= 0 || this->total_channels_ <= 0 ||
       this->afe_stopped_.load(std::memory_order_acquire)) {
     return;
   }
 
   const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) *
                             this->total_channels_ * sizeof(int16_t);
-  memset(this->feed_buf_, 0, feed_bytes);
   TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
   ulTaskNotifyTake(pdTRUE, 0);
   this->pipeline_flush_waiter_.store(waiter, std::memory_order_release);
-  if (xRingbufferSend(this->feed_input_ring_, this->feed_buf_, feed_bytes, pdMS_TO_TICKS(10))) {
+  void *slot = this->acquire_gmf_feed_slot_(feed_bytes, pdMS_TO_TICKS(10));
+  if (slot != nullptr) {
+    memset(slot, 0, feed_bytes);
+  }
+  if (slot != nullptr && this->commit_gmf_feed_slot_(slot)) {
     uint32_t queued = diag_increment_and_get(this->feed_queue_frames_);
     update_peak_atomic(this->feed_queue_peak_, queued);
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
   }
   this->pipeline_flush_waiter_.store(nullptr, std::memory_order_release);
+}
+
+void *EspAfe::acquire_gmf_feed_slot_(size_t feed_bytes, TickType_t ticks_to_wait) {
+  if (this->feed_input_ring_ == nullptr || feed_bytes == 0) {
+    return nullptr;
+  }
+  void *slot = nullptr;
+  if (xRingbufferSendAcquire(this->feed_input_ring_, &slot, feed_bytes, ticks_to_wait) != pdTRUE) {
+    return nullptr;
+  }
+  return slot;
+}
+
+bool EspAfe::commit_gmf_feed_slot_(void *slot) {
+  if (this->feed_input_ring_ == nullptr || slot == nullptr) {
+    return false;
+  }
+  return xRingbufferSendComplete(this->feed_input_ring_, slot) == pdTRUE;
 }
 
 bool EspAfe::prepare_feed_input_ring_() {

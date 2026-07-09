@@ -27,3 +27,24 @@ def test_single_mic_aec_toggle_rebuilds_instead_of_live_disabling() -> None:
     install_end = cpp.index("\nEspAfe::AfeInstance EspAfe::detach_instance_", install_start)
     install = cpp[install_start:install_end]
     assert "direct_iface_->disable_aec" not in install
+
+
+def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
+    cpp = read("esp_afe.cpp")
+    header = read("esp_afe.h")
+
+    assert "xRingbufferSendAcquire" in cpp
+    assert "xRingbufferSendComplete" in cpp
+    assert "acquire_gmf_feed_slot_" in header
+    assert "commit_gmf_feed_slot_" in header
+
+    gmf_start = cpp.index("const bool needs_feed_staging = process_chunksize != feed_chunksize;")
+    gmf_end = cpp.index("instance->feed_buf = feed_buf;", gmf_start)
+    gmf_build = cpp[gmf_start:gmf_end]
+    assert "const bool needs_feed_staging = process_chunksize != feed_chunksize;" in gmf_build
+    assert "if (needs_feed_staging)" in gmf_build
+    assert "Failed to allocate staged feed buffer" in gmf_build
+
+    process = cpp[cpp.index("bool EspAfe::process(") :]
+    assert "const bool gmf_direct_frame = gmf_path && !direct_path && offset == 0 && qs == fs;" in process
+    assert "stage_afe_input_frame(static_cast<int16_t *>(gmf_slot)" in process
