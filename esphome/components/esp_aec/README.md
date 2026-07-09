@@ -68,7 +68,7 @@ esp_audio_stack:
 
 ## AEC modes
 
-esp-sr 2.4.4 ships SR, VOIP and FD AEC modes:
+esp-sr 2.4.6 ships SR, VOIP and FD AEC modes:
 
 | Mode | Engine | CPU on Core 0 (S3 @ 240 MHz, 16 kHz mono) | RES | MWW on post-AEC | Recommended |
 |------|--------|--------------------------------------|-----|-----------------|-------------|
@@ -165,7 +165,7 @@ For comparison, `esp_afe` in MR LOW_COST mode costs ~72 KB internal + ~733 KB PS
 ## Dependencies
 
 - ESP32 only, restricted to S3 and P4 variants (enforced in `_validate_esp32_variant`).
-- Pulls `espressif/esp-sr` 2.4.4 via ESPHome's IDF component manager and wraps
+- Pulls `espressif/esp-sr` 2.4.6 via ESPHome's IDF component manager and wraps
   the low-level `afe_aec` helper. This keeps standalone AEC aligned with the
   same esp-sr generation used by the GMF-backed `esp_afe` path.
 - Implements [`AudioProcessor`](../esp_audio_stack/README.md), so it can be referenced by any component that accepts that interface.

@@ -5,12 +5,14 @@ from esphome.components import psram
 from esphome.const import CONF_ID, CONF_MODE, CONF_TYPE, Framework
 from esphome.core import CORE
 from esphome.components.esp32 import add_idf_component
+from pathlib import Path
 
 CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = ["esp32"]
 AUTO_LOAD = ["esp_audio_stack"]
 
 _SUPPORTED_VARIANTS = ("ESP32S3", "ESP32P4")
+GMF_AI_AUDIO_PATH = Path(__file__).parent / "idf_components" / "gmf_ai_audio"
 
 
 def _validate_esp32_variant(config):
@@ -232,13 +234,18 @@ async def to_code(config):
 
     if config[CONF_MIC_NUM] <= 1:
         cg.add_define("USE_ESP_AFE_DIRECT_PATH")
-        add_idf_component(name="espressif/esp-sr", ref="^2.4.4")
+        add_idf_component(name="espressif/esp-sr", ref="^2.4.6")
     if config[CONF_MIC_NUM] >= 2:
         cg.add_define("USE_ESP_AFE_GMF_PATH")
-        # gmf_ai_audio provides Espressif's canonical AFE manager
-        # (feed/fetch/suspend/runtime feature toggles). Pin the registry version
-        # so GMF callback/port behavior cannot change under a rebuild.
-        add_idf_component(name="espressif/gmf_ai_audio", ref="0.8.3")
+        # Local fork of Espressif GMF AI Audio 1.0.0~1. Upstream pins esp-sr
+        # 2.4.4 even though the ESP-SR headers and public symbols used by GMF
+        # are compatible with 2.4.6 on S3 and P4. Keep the fork minimal: only
+        # the manifest dependency is bumped so dual-mic AFE can pick up
+        # Espressif's 2.4.5/2.4.6 SR fixes without changing GMF source logic.
+        add_idf_component(
+            name="espressif/gmf_ai_audio",
+            path=str(GMF_AI_AUDIO_PATH),
+        )
 
 
 @automation.register_action(

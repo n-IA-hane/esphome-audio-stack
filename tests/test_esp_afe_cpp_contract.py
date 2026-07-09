@@ -8,10 +8,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AFE = ROOT / "esphome" / "components" / "esp_afe"
+AEC = ROOT / "esphome" / "components" / "esp_aec"
+GMF = AFE / "idf_components" / "gmf_ai_audio"
 
 
 def read(name: str) -> str:
     return (AFE / name).read_text(encoding="utf-8")
+
+
+def read_aec(name: str) -> str:
+    return (AEC / name).read_text(encoding="utf-8")
 
 
 def test_single_mic_aec_toggle_rebuilds_instead_of_live_disabling() -> None:
@@ -48,3 +54,18 @@ def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
     process = cpp[cpp.index("bool EspAfe::process(") :]
     assert "const bool gmf_direct_frame = gmf_path && !direct_path && offset == 0 && qs == fs;" in process
     assert "stage_afe_input_frame(static_cast<int16_t *>(gmf_slot)" in process
+
+
+def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:
+    init = read("__init__.py")
+    aec_init = read_aec("__init__.py")
+    gmf_manifest = (GMF / "idf_component.yml").read_text(encoding="utf-8")
+
+    assert 'add_idf_component(name="espressif/esp-sr", ref="^2.4.6")' in init
+    assert 'name="espressif/gmf_ai_audio"' in init
+    assert "path=str(GMF_AI_AUDIO_PATH)" in init
+    assert 'ref="0.8.3"' not in init
+    assert "version: ^2.4.6" in gmf_manifest
+    assert "version: 2.4.4" not in gmf_manifest
+    assert 'add_idf_component(name="espressif/esp-sr", ref="^2.4.6")' in aec_init
+    assert 'ref="^2.4.4"' not in aec_init
