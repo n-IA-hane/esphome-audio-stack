@@ -11,7 +11,6 @@
 #ifdef USE_ESP_AFE_GMF_PATH
 #include <esp_gmf_obj.h>
 #endif
-#include <esp_memory_utils.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -49,11 +48,6 @@ static constexpr AfeModePreset AFE_MODE_PRESETS[] = {
 #else
 #define ESP_AFE_TIMING_TELEMETRY 0
 #endif
-
-// Validate function pointer using ESP-IDF's memory map knowledge.
-static inline bool is_valid_func(const void *ptr) {
-  return ptr != nullptr && esp_ptr_executable(ptr);
-}
 
 static const char *aec_nlp_level_name(int level) {
   switch (level) {
