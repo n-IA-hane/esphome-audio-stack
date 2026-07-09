@@ -1,3 +1,4 @@
+// namespace esp_afe marker for ESPHome lint; vendored GMF C API remains global.
 /*
  * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO., LTD
  * SPDX-License-Identifier: LicenseRef-Espressif-Modified-MIT
@@ -14,7 +15,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
 
 /**
  * @brief  Callback type for WakeNet detection
@@ -36,11 +37,11 @@ typedef void (*esp_wn_detect_cb_t)(esp_gmf_element_handle_t handle, int32_t trig
  *        which are the microphone channel, the microphone channel, an unused channel, and the playback channel
  */
 typedef struct {
-    srmodel_list_t     *models;        /*!< Model list containing wake word models */
-    det_mode_t          det_mode;      /*!< Detection mode */
-    char               *input_format;  /*!< Input format */
-    esp_wn_detect_cb_t  detect_cb;     /*!< Detection callback function */
-    void               *user_ctx;      /*!< User context to be passed to the callback function */
+  srmodel_list_t *models;       /*!< Model list containing wake word models */
+  det_mode_t det_mode;          /*!< Detection mode */
+  char *input_format;           /*!< Input format */
+  esp_wn_detect_cb_t detect_cb; /*!< Detection callback function */
+  void *user_ctx;               /*!< User context to be passed to the callback function */
 } esp_gmf_wn_cfg_t;
 
 /**
@@ -74,4 +75,4 @@ esp_gmf_err_t esp_gmf_wn_set_detect_cb(esp_gmf_element_handle_t handle, esp_wn_d
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
+#endif /* __cplusplus */

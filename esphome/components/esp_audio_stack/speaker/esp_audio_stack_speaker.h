@@ -12,12 +12,9 @@
 
 #include <atomic>
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
-class ESPAudioStackSpeaker : public speaker::Speaker,
-                               public Component,
-                               public Parented<ESPAudioStack> {
+class ESPAudioStackSpeaker : public speaker::Speaker, public Component, public Parented<ESPAudioStack> {
  public:
   void setup() override;
   void loop() override;
@@ -42,7 +39,7 @@ class ESPAudioStackSpeaker : public speaker::Speaker,
   void set_timeout(uint32_t timeout) { this->timeout_ = timeout; }
 
  protected:
-  static void speaker_output_callback_(void *ctx, uint32_t frames, int64_t timestamp);
+  static void speaker_output_callback(void *ctx, uint32_t frames, int64_t timestamp);
 
   bool pause_state_{false};
   bool finishing_{false};  // Non-blocking drain: finish() sets flag, loop() handles drain+stop
@@ -57,7 +54,6 @@ class ESPAudioStackSpeaker : public speaker::Speaker,
   std::atomic<bool> listener_registered_{false};
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

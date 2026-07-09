@@ -1,7 +1,8 @@
 """ESP Audio Stack Speaker Platform - Wraps full-duplex bus as standard ESPHome speaker"""
+
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import audio, speaker
+import esphome.config_validation as cv
 from esphome.const import (
     CONF_BUFFER_DURATION,
     CONF_ID,
@@ -9,11 +10,8 @@ from esphome.const import (
     CONF_NUM_CHANNELS,
     CONF_TIMEOUT,
 )
-from .. import (
-    esp_audio_stack_ns,
-    ESPAudioStack,
-    CONF_ESP_AUDIO_STACK_ID,
-)
+
+from .. import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
 
 DEPENDENCIES = ["esp_audio_stack"]
 CODEOWNERS = ["@n-IA-hane"]

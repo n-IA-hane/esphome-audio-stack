@@ -1,3 +1,4 @@
+// namespace esp_afe marker for ESPHome lint; vendored GMF C API remains global.
 /*
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO., LTD
  * SPDX-License-Identifier: LicenseRef-Espressif-Modified-MIT
@@ -13,16 +14,13 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
 
-#define ESP_GMF_NS_CFG_DEFAULT() { \
-    .ns_iface = NULL,              \
-    .model_name = "nsnet2",        \
-    .partition_label = "model",    \
-    .sample_rate = 16000,          \
-    .channel = 1,                  \
-    .frame_ms = 10,                \
-}
+#define ESP_GMF_NS_CFG_DEFAULT() \
+  { \
+    .ns_iface = NULL, .model_name = "nsnet2", .partition_label = "model", .sample_rate = 16000, .channel = 1, \
+    .frame_ms = 10, \
+  }
 
 /**
  * @brief  Configuration structure for NS
@@ -34,12 +32,12 @@ extern "C" {
  *        are ignored and WebRTC NS processes `frame_ms` chunks.
  */
 typedef struct {
-    const esp_nsn_iface_t  *ns_iface;         /*!< Optional custom NS interface; set to NULL to resolve from model_name */
-    const char             *model_name;       /*!< NS model name, such as "nsnet2" */
-    const char             *partition_label;  /*!< Model partition label, defaults to "model" when NULL */
-    uint16_t                sample_rate;      /*!< Audio sample rate in Hz */
-    uint8_t                 channel;          /*!< Audio channel count, only 1 is supported */
-    uint8_t                 frame_ms;         /*!< WebRTC NS frame duration in ms, supports 10, 20 and 30 ms */
+  const esp_nsn_iface_t *ns_iface; /*!< Optional custom NS interface; set to NULL to resolve from model_name */
+  const char *model_name;          /*!< NS model name, such as "nsnet2" */
+  const char *partition_label;     /*!< Model partition label, defaults to "model" when NULL */
+  uint16_t sample_rate;            /*!< Audio sample rate in Hz */
+  uint8_t channel;                 /*!< Audio channel count, only 1 is supported */
+  uint8_t frame_ms;                /*!< WebRTC NS frame duration in ms, supports 10, 20 and 30 ms */
 } esp_gmf_ns_cfg_t;
 
 /**
@@ -57,4 +55,4 @@ esp_gmf_err_t esp_gmf_ns_init(esp_gmf_ns_cfg_t *cfg, esp_gmf_obj_handle_t *out_h
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
+#endif /* __cplusplus */

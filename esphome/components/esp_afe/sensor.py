@@ -1,9 +1,9 @@
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import sensor
+import esphome.config_validation as cv
 from esphome.const import ENTITY_CATEGORY_DIAGNOSTIC
 
-from . import esp_afe_ns, EspAfe, CONF_ESP_AFE_ID
+from . import CONF_ESP_AFE_ID, EspAfe, esp_afe_ns
 
 DEPENDENCIES = ["esp_afe"]
 
@@ -26,15 +26,13 @@ AfeOutputRmsSensor = esp_afe_ns.class_(
 
 
 def _sensor_schema(sensor_class, icon):
-    return (
-        sensor.sensor_schema(
-            sensor_class,
-            unit_of_measurement="dBFS",
-            accuracy_decimals=1,
-            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            icon=icon,
-        ).extend(cv.polling_component_schema("250ms"))
-    )
+    return sensor.sensor_schema(
+        sensor_class,
+        unit_of_measurement="dBFS",
+        accuracy_decimals=1,
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        icon=icon,
+    ).extend(cv.polling_component_schema("250ms"))
 
 
 CONFIG_SCHEMA = cv.Schema(

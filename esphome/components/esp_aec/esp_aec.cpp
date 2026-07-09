@@ -20,30 +20,36 @@ static const char *const TAG = "esp_aec";
 // largest free block; threshold scales linearly with filter_length
 // (40 KB validated for filter_length=4 on S3 codec devices).
 static constexpr size_t HIGH_PERF_MIN_DMA_BLOCK_PER_4_TAPS = 40 * 1024;
-static constexpr uint32_t DMA_INTERNAL_CAPS =
-    MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT;
+static constexpr uint32_t DMA_INTERNAL_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT;
 
 static size_t high_perf_min_dma_block_(int filter_length) {
   int multiplier = (filter_length + 3) / 4;
-  if (multiplier < 1) multiplier = 1;
+  if (multiplier < 1)
+    multiplier = 1;
   return HIGH_PERF_MIN_DMA_BLOCK_PER_4_TAPS * static_cast<size_t>(multiplier);
 }
 
 static bool is_high_perf_mode_(aec_mode_t m) {
   const int v = static_cast<int>(m);
-  return v == AEC_MODE_SR_HIGH_PERF || v == 4 /* VOIP_HIGH_PERF */ ||
-         v == 6 /* FD_HIGH_PERF (esp-sr 2.4+) */;
+  return v == AEC_MODE_SR_HIGH_PERF || v == 4 /* VOIP_HIGH_PERF */ || v == 6 /* FD_HIGH_PERF (esp-sr 2.4+) */;
 }
 
 const char *EspAec::get_mode_name(aec_mode_t mode) {
   switch (static_cast<int>(mode)) {
-    case AEC_MODE_SR_LOW_COST: return "sr_low_cost";
-    case AEC_MODE_SR_HIGH_PERF: return "sr_high_perf";
-    case 3: return "voip_low_cost";
-    case 4: return "voip_high_perf";
-    case 5: return "fd_low_cost";    // AEC_MODE_FD_LOW_COST  (esp-sr 2.4+)
-    case 6: return "fd_high_perf";   // AEC_MODE_FD_HIGH_PERF (esp-sr 2.4+)
-    default: return "sr_low_cost";
+    case AEC_MODE_SR_LOW_COST:
+      return "sr_low_cost";
+    case AEC_MODE_SR_HIGH_PERF:
+      return "sr_high_perf";
+    case 3:
+      return "voip_low_cost";
+    case 4:
+      return "voip_high_perf";
+    case 5:
+      return "fd_low_cost";  // AEC_MODE_FD_LOW_COST  (esp-sr 2.4+)
+    case 6:
+      return "fd_high_perf";  // AEC_MODE_FD_HIGH_PERF (esp-sr 2.4+)
+    default:
+      return "sr_low_cost";
   }
 }
 
@@ -65,17 +71,15 @@ void EspAec::setup() {
                "DMA-capable internal RAM (largest free block: %u). Refusing "
                "to call aec_create which would silently produce a half-init "
                "handle. Use a low_cost mode or reduce internal DMA pressure.",
-               get_mode_name(this->mode_), this->filter_length_,
-               (unsigned) threshold, (unsigned) largest);
+               get_mode_name(this->mode_), this->filter_length_, (unsigned) threshold, (unsigned) largest);
       vSemaphoreDelete(this->handle_mutex_);
       this->handle_mutex_ = nullptr;
       this->mark_failed();
       return;
     }
   }
-  this->handle_ = afe_aec_create("MR", this->filter_length_,
-                                 afe_type_from_mode_(this->mode_),
-                                 afe_cost_from_mode_(this->mode_));
+  this->handle_ =
+      afe_aec_create("MR", this->filter_length_, afe_type_from_mode_(this->mode_), afe_cost_from_mode_(this->mode_));
   if (this->handle_ == nullptr) {
     ESP_LOGE(TAG, "Failed to create AEC instance");
     vSemaphoreDelete(this->handle_mutex_);
@@ -85,8 +89,8 @@ void EspAec::setup() {
   }
   this->cached_frame_size_ = afe_aec_get_chunksize(this->handle_);
   const size_t input_bytes = static_cast<size_t>(this->cached_frame_size_) * 2 * sizeof(int16_t);
-  this->input_frame_ = static_cast<int16_t *>(
-      heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  this->input_frame_ =
+      static_cast<int16_t *>(heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   if (this->input_frame_ == nullptr) {
     ESP_LOGE(TAG, "Failed to allocate AEC MR input frame");
     afe_aec_destroy(this->handle_);
@@ -102,7 +106,7 @@ void EspAec::setup() {
 EspAec::~EspAec() {
   if (this->handle_mutex_ != nullptr) {
     {
-      audio_core::ScopedLock lock(this->handle_mutex_);
+      esp_audio_stack::ScopedLock lock(this->handle_mutex_);
       if (this->handle_ != nullptr) {
         afe_aec_destroy(this->handle_);
         this->handle_ = nullptr;
@@ -143,8 +147,7 @@ FrameSpec EspAec::frame_spec() const {
   return spec;
 }
 
-bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
-                     uint8_t mic_channels_in) {
+bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) {
   // Single-mic only; mic_channels_in is interface boilerplate. The 10 ms cap
   // serialises against reinit_(); on miss we emit silence, never raw mic audio.
   const size_t frame_bytes = static_cast<size_t>(this->cached_frame_size_) * sizeof(int16_t);
@@ -159,7 +162,7 @@ bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     memset(out, 0, frame_bytes);
     return false;
   }
-  audio_core::ScopedLock lock(this->handle_mutex_, 0);
+  esp_audio_stack::ScopedLock lock(this->handle_mutex_, 0);
   if (!lock || this->handle_ == nullptr || this->input_frame_ == nullptr) {
     memset(out, 0, frame_bytes);
     return false;
@@ -177,7 +180,8 @@ bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
 }
 
 FeatureControl EspAec::feature_control(AudioFeature feature) const {
-  if (feature == AudioFeature::AEC) return FeatureControl::RESTART_REQUIRED;
+  if (feature == AudioFeature::AEC)
+    return FeatureControl::RESTART_REQUIRED;
   return FeatureControl::NOT_SUPPORTED;
 }
 
@@ -211,8 +215,8 @@ bool EspAec::reinit_(aec_mode_t new_mode) {
     return true;
   }
 
-  ESP_LOGI(TAG, "Reinitializing AEC: mode %d -> %d (%s -> %s)",
-           (int) this->mode_, (int) new_mode, get_mode_name(this->mode_), get_mode_name(new_mode));
+  ESP_LOGI(TAG, "Reinitializing AEC: mode %d -> %d (%s -> %s)", (int) this->mode_, (int) new_mode,
+           get_mode_name(this->mode_), get_mode_name(new_mode));
   if (this->handle_mutex_ == nullptr) {
     ESP_LOGE(TAG, "reinit_: handle_mutex_ not initialized");
     return false;
@@ -229,33 +233,29 @@ bool EspAec::reinit_(aec_mode_t new_mode) {
                "DMA-capable internal RAM (largest free block: %u). Rejecting "
                "mode change to avoid silent fft calloc fail in aec_create. "
                "Keeping mode=%s. Reduce internal DMA pressure to use this mode.",
-               get_mode_name(new_mode), this->filter_length_,
-               (unsigned) threshold,
-               (unsigned) largest_internal,
+               get_mode_name(new_mode), this->filter_length_, (unsigned) threshold, (unsigned) largest_internal,
                get_mode_name(this->mode_));
       return false;
     }
   }
 
-  audio_core::ScopedLock lock(this->handle_mutex_);
+  esp_audio_stack::ScopedLock lock(this->handle_mutex_);
   afe_aec_handle_t *old_handle = this->handle_;
   int16_t *old_input_frame = this->input_frame_;
   aec_mode_t old_mode = this->mode_;
   // Build the next handle first; roll back if create fails.
-  afe_aec_handle_t *new_handle = afe_aec_create("MR", this->filter_length_,
-                                                afe_type_from_mode_(new_mode),
-                                                afe_cost_from_mode_(new_mode));
+  afe_aec_handle_t *new_handle =
+      afe_aec_create("MR", this->filter_length_, afe_type_from_mode_(new_mode), afe_cost_from_mode_(new_mode));
   if (new_handle == nullptr) {
     ESP_LOGE(TAG, "Failed to create new AEC instance, keeping previous mode=%s", get_mode_name(old_mode));
     return false;
   }
   int new_frame_size = afe_aec_get_chunksize(new_handle);
   const size_t input_bytes = static_cast<size_t>(new_frame_size) * 2 * sizeof(int16_t);
-  int16_t *new_input_frame = static_cast<int16_t *>(
-      heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  int16_t *new_input_frame =
+      static_cast<int16_t *>(heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   if (new_input_frame == nullptr) {
-    ESP_LOGE(TAG, "Failed to allocate new AEC MR input frame, keeping previous mode=%s",
-             get_mode_name(old_mode));
+    ESP_LOGE(TAG, "Failed to allocate new AEC MR input frame, keeping previous mode=%s", get_mode_name(old_mode));
     afe_aec_destroy(new_handle);
     return false;
   }
@@ -273,8 +273,7 @@ bool EspAec::reinit_(aec_mode_t new_mode) {
     this->last_frame_size_ = this->cached_frame_size_;
     this->frame_spec_revision_.fetch_add(1, std::memory_order_release);
   }
-  ESP_LOGI(TAG, "AEC reinitialized: mode=%d, frame=%d (%dms)",
-           (int) this->mode_, this->cached_frame_size_,
+  ESP_LOGI(TAG, "AEC reinitialized: mode=%d, frame=%d (%dms)", (int) this->mode_, this->cached_frame_size_,
            this->cached_frame_size_ * 1000 / this->sample_rate_);
   return true;
 }

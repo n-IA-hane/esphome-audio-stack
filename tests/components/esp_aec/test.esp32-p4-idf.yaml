@@ -1,15 +1,19 @@
 esphome:
-  name: test-esp-aec
+  name: test-esp-aec-p4
 
 esp32:
-  board: esp32-s3-devkitc-1
-  variant: esp32s3
+  board: esp32-p4_r3-evboard
+  variant: esp32p4
+  flash_size: 32MB
+  cpu_frequency: 360MHz
   framework:
     type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
 
 psram:
-  mode: octal
-  speed: 80MHz
+  mode: hex
+  speed: 200MHz
 
 i2c:
   sda: GPIO47

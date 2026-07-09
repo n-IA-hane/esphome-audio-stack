@@ -1,16 +1,16 @@
 #pragma once
 
-#ifdef USE_ESP32
+#if defined(USE_ESP32) && defined(USE_NUMBER)
 
 #include "esphome/components/number/number.h"
 #include "esphome/components/speaker/speaker.h"
 #include "esphome/core/component.h"
 #include "esphome/core/preferences.h"
 #include "esp_audio_stack.h"
+#include "audio_core_log_utils.h"
 #include <cmath>
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
 class MicGainNumber : public number::Number, public Component {
  public:
@@ -31,15 +31,18 @@ class MicGainNumber : public number::Number, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("audio_stack.mic_gain", "Mic Gain Number (post-processor dB, range %.1f..%.1f)",
-                  this->min_db_, this->max_db_);
+    log_config("audio_stack.mic_gain", "Mic Gain Number (post-processor dB, range %.1f..%.1f)", this->min_db_,
+               this->max_db_);
   }
 
  protected:
   float clamp_db_(float value) const {
-    if (!std::isfinite(value)) return 0.0f;
-    if (value < this->min_db_) return this->min_db_;
-    if (value > this->max_db_) return this->max_db_;
+    if (!std::isfinite(value))
+      return 0.0f;
+    if (value < this->min_db_)
+      return this->min_db_;
+    if (value > this->max_db_)
+      return this->max_db_;
     return value;
   }
 
@@ -74,7 +77,7 @@ class MasterVolumeNumber : public number::Number, public Component {
     float value;
     this->pref_ = global_preferences->make_preference<float>(this->get_object_id_hash());
     if (this->pref_.load(&value)) {
-      value = clamp_percent_(value);
+      value = clamp_percent(value);
       this->apply_(value);
       this->publish_state(value);
     } else if (this->parent_ != nullptr) {
@@ -85,15 +88,18 @@ class MasterVolumeNumber : public number::Number, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("audio_stack.master_volume", "Master Volume Number%s",
-                  this->speaker_ != nullptr ? " (speaker-backed)" : "");
+    log_config("audio_stack.master_volume", "Master Volume Number%s",
+               this->speaker_ != nullptr ? " (speaker-backed)" : "");
   }
 
  protected:
-  static float clamp_percent_(float value) {
-    if (!std::isfinite(value)) return 0.0f;
-    if (value < 0.0f) return 0.0f;
-    if (value > 100.0f) return 100.0f;
+  static float clamp_percent(float value) {
+    if (!std::isfinite(value))
+      return 0.0f;
+    if (value < 0.0f)
+      return 0.0f;
+    if (value > 100.0f)
+      return 100.0f;
     return value;
   }
 
@@ -108,7 +114,7 @@ class MasterVolumeNumber : public number::Number, public Component {
 
   void control(float value) override {
     if (this->speaker_ != nullptr || this->parent_ != nullptr) {
-      value = clamp_percent_(value);
+      value = clamp_percent(value);
       this->apply_(value);
       this->publish_state(value);
       this->pref_.save(&value);
@@ -120,7 +126,6 @@ class MasterVolumeNumber : public number::Number, public Component {
   ESPPreferenceObject pref_;
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
-#endif  // USE_ESP32
+#endif  // USE_ESP32 && USE_NUMBER

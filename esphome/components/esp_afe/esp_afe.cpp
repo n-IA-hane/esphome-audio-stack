@@ -35,21 +35,18 @@ struct AfeModePreset {
 };
 
 static constexpr AfeModePreset AFE_MODE_PRESETS[] = {
-    {"sr_low_cost", AFE_TYPE_SR, AFE_MODE_LOW_COST},
-    {"sr_high_perf", AFE_TYPE_SR, AFE_MODE_HIGH_PERF},
-    {"voip_low_cost", AFE_TYPE_VC, AFE_MODE_LOW_COST},
-    {"voip_high_perf", AFE_TYPE_VC, AFE_MODE_HIGH_PERF},
-    {"fd_low_cost", 3 /* AFE_TYPE_FD */, AFE_MODE_LOW_COST},
-    {"fd_high_perf", 3 /* AFE_TYPE_FD */, AFE_MODE_HIGH_PERF},
+    {"sr_low_cost", AFE_TYPE_SR, AFE_MODE_LOW_COST},         {"sr_high_perf", AFE_TYPE_SR, AFE_MODE_HIGH_PERF},
+    {"voip_low_cost", AFE_TYPE_VC, AFE_MODE_LOW_COST},       {"voip_high_perf", AFE_TYPE_VC, AFE_MODE_HIGH_PERF},
+    {"fd_low_cost", 3 /* AFE_TYPE_FD */, AFE_MODE_LOW_COST}, {"fd_high_perf", 3 /* AFE_TYPE_FD */, AFE_MODE_HIGH_PERF},
 };
 
 #if defined(USE_ESP_AUDIO_STACK_TELEMETRY) && ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
-#define ESP_AFE_TIMING_TELEMETRY 1
+static constexpr bool ESP_AFE_TIMING_TELEMETRY = true;
 #else
-#define ESP_AFE_TIMING_TELEMETRY 0
+static constexpr bool ESP_AFE_TIMING_TELEMETRY = false;
 #endif
 
-static const char *aec_nlp_level_name(int level) {
+[[maybe_unused]] static const char *aec_nlp_level_name(int level) {
   switch (level) {
     case 0:
       return "NORMAL";
@@ -72,58 +69,54 @@ void EspAfe::set_input_format_override(const char *fmt) {
 }
 
 #if defined(USE_ESP_AUDIO_STACK_TELEMETRY) && ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
-#define ESP_AFE_DIAGNOSTIC_COUNTERS 1
+static constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS = true;
 #else
-#define ESP_AFE_DIAGNOSTIC_COUNTERS 0
+static constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS = false;
 #endif
 
 static inline void diag_add(std::atomic<uint32_t> &counter, uint32_t value = 1) {
-#if ESP_AFE_DIAGNOSTIC_COUNTERS
-  counter.fetch_add(value, std::memory_order_relaxed);
-#else
-  (void) counter;
-  (void) value;
-#endif
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    counter.fetch_add(value, std::memory_order_relaxed);
+  } else {
+    (void) counter;
+    (void) value;
+  }
 }
 
 static inline uint32_t diag_increment_and_get(std::atomic<uint32_t> &counter) {
-#if ESP_AFE_DIAGNOSTIC_COUNTERS
-  return counter.fetch_add(1, std::memory_order_relaxed) + 1;
-#else
-  (void) counter;
-  return 0;
-#endif
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+  } else {
+    (void) counter;
+    return 0;
+  }
 }
 
 static inline void update_peak_atomic(std::atomic<uint32_t> &peak, uint32_t value) {
-#if ESP_AFE_DIAGNOSTIC_COUNTERS
-  uint32_t current = peak.load(std::memory_order_relaxed);
-  while (value > current &&
-         !peak.compare_exchange_weak(current, value, std::memory_order_relaxed,
-                                     std::memory_order_relaxed)) {
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    uint32_t current = peak.load(std::memory_order_relaxed);
+    while (value > current &&
+           !peak.compare_exchange_weak(current, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+  } else {
+    (void) peak;
+    (void) value;
   }
-#else
-  (void) peak;
-  (void) value;
-#endif
 }
 
 static inline void decrement_if_nonzero(std::atomic<uint32_t> &counter) {
-#if ESP_AFE_DIAGNOSTIC_COUNTERS
-  uint32_t current = counter.load(std::memory_order_relaxed);
-  while (current > 0 &&
-         !counter.compare_exchange_weak(current, current - 1, std::memory_order_relaxed,
-                                        std::memory_order_relaxed)) {
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    uint32_t current = counter.load(std::memory_order_relaxed);
+    while (current > 0 &&
+           !counter.compare_exchange_weak(current, current - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+  } else {
+    (void) counter;
   }
-#else
-  (void) counter;
-#endif
 }
 
 void EspAfe::log_memory_snapshot_(const char *label) const {
-  ESP_LOGI(TAG,
-           "Memory[%s]: internal_free=%u largest_internal=%u dma_free=%u largest_dma=%u psram_free=%u",
-           label,
+  ESP_LOGI(TAG, "Memory[%s]: internal_free=%u largest_internal=%u dma_free=%u largest_dma=%u psram_free=%u", label,
            (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned) heap_caps_get_free_size(MALLOC_CAP_DMA),
@@ -137,14 +130,10 @@ static inline void silence_frame(int16_t *out, int output_samples) {
   }
 }
 
-static inline int16_t afe_ref_sample(const int16_t *in_ref, int i) {
-  return in_ref != nullptr ? in_ref[i] : 0;
-}
+static inline int16_t afe_ref_sample(const int16_t *in_ref, int i) { return in_ref != nullptr ? in_ref[i] : 0; }
 
-static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic,
-                                         const int16_t *in_ref, int samples,
-                                         int transport_mic_channels,
-                                         int afe_mic_channels, int total_channels) {
+static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic, const int16_t *in_ref, int samples,
+                                         int transport_mic_channels, int afe_mic_channels, int total_channels) {
   if (dst == nullptr || in_mic == nullptr || samples <= 0 || total_channels <= 0) {
     return;
   }
@@ -218,9 +207,7 @@ static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic,
     if (afe_mic_channels >= 2 && total_channels >= 2) {
       dst[1] = transport_mic_channels >= 2 ? in_mic[i * mic_stride + 1] : 0;
     }
-    const int ref_index = (afe_mic_channels >= 2)
-                              ? (total_channels >= 4 ? 3 : 2)
-                              : (total_channels >= 3 ? 2 : 1);
+    const int ref_index = (afe_mic_channels >= 2) ? (total_channels >= 4 ? 3 : 2) : (total_channels >= 3 ? 2 : 1);
     if (ref_index < total_channels) {
       dst[ref_index] = afe_ref_sample(in_ref, i);
     }
@@ -279,18 +266,17 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     std::strncpy(fmt, this->input_format_override_, sizeof(fmt) - 1);
     fmt[sizeof(fmt) - 1] = '\0';
   } else {
-    for (int i = 0; i < afe_mic_channels && i < 2; i++) fmt[i] = 'M';
+    for (int i = 0; i < afe_mic_channels && i < 2; i++)
+      fmt[i] = 'M';
     fmt[afe_mic_channels] = 'R';
     fmt[afe_mic_channels + 1] = '\0';
   }
 
-  afe_config_t *cfg = afe_config_init(fmt, nullptr,
-                                      static_cast<afe_type_t>(this->afe_type_),
-                                      static_cast<afe_mode_t>(this->afe_mode_));
+  afe_config_t *cfg =
+      afe_config_init(fmt, nullptr, static_cast<afe_type_t>(this->afe_type_), static_cast<afe_mode_t>(this->afe_mode_));
 
   if (cfg == nullptr) {
-    ESP_LOGE(TAG, "afe_config_init failed for input_format=%s type=%d mode=%d",
-             fmt, this->afe_type_, this->afe_mode_);
+    ESP_LOGE(TAG, "afe_config_init failed for input_format=%s type=%d mode=%d", fmt, this->afe_type_, this->afe_mode_);
     return false;
   }
 
@@ -342,8 +328,7 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   // headroom; this matches the previously validated ESP-SR direct topology.
   cfg->afe_perferred_core = this->task_core_;
   cfg->afe_perferred_priority = this->task_priority_;
-  cfg->afe_ringbuf_size = (afe_mic_channels <= 1 && this->ringbuf_size_ < 16)
-      ? 16 : this->ringbuf_size_;
+  cfg->afe_ringbuf_size = (afe_mic_channels <= 1 && this->ringbuf_size_ < 16) ? 16 : this->ringbuf_size_;
   cfg->memory_alloc_mode = static_cast<afe_memory_alloc_mode_t>(this->memory_alloc_mode_);
   cfg->afe_linear_gain = this->afe_linear_gain_;
   cfg->debug_init = false;
@@ -374,28 +359,24 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     int fetch_chunksize = handle->get_fetch_chunksize(direct_data);
     int total_channels = handle->get_feed_channel_num(direct_data);
     if (feed_chunksize <= 0 || fetch_chunksize <= 0 || total_channels <= 0) {
-      ESP_LOGE(TAG, "Invalid single-mic AFE frame shape feed=%d fetch=%d channels=%d",
-               feed_chunksize, fetch_chunksize, total_channels);
+      ESP_LOGE(TAG, "Invalid single-mic AFE frame shape feed=%d fetch=%d channels=%d", feed_chunksize, fetch_chunksize,
+               total_channels);
       handle->destroy(direct_data);
       afe_config_free(cfg);
       return false;
     }
 
-    const size_t feed_bytes = static_cast<size_t>(feed_chunksize) *
-                              static_cast<size_t>(total_channels) * sizeof(int16_t);
-    const uint32_t feed_buf_caps = this->feed_buf_in_psram_
-        ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-        : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t feed_bytes =
+        static_cast<size_t>(feed_chunksize) * static_cast<size_t>(total_channels) * sizeof(int16_t);
+    const uint32_t feed_buf_caps =
+        this->feed_buf_in_psram_ ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     int16_t *feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, feed_buf_caps));
     if (feed_buf == nullptr && this->feed_buf_in_psram_) {
-      ESP_LOGW(TAG, "single-mic feed_buf (%u bytes) fell back to internal RAM",
-               static_cast<unsigned>(feed_bytes));
-      feed_buf = static_cast<int16_t *>(
-          heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+      ESP_LOGW(TAG, "single-mic feed_buf (%u bytes) fell back to internal RAM", static_cast<unsigned>(feed_bytes));
+      feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (feed_buf == nullptr) {
-      ESP_LOGE(TAG, "Failed to allocate single-mic feed buffer (%u bytes)",
-               static_cast<unsigned>(feed_bytes));
+      ESP_LOGE(TAG, "Failed to allocate single-mic feed buffer (%u bytes)", static_cast<unsigned>(feed_bytes));
       handle->destroy(direct_data);
       afe_config_free(cfg);
       return false;
@@ -510,8 +491,8 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   size_t feed_chunk_size = 0;
   uint8_t total_channels_u8 = 0;
   if (esp_gmf_afe_manager_get_chunk_size(manager, &feed_chunk_size) != ESP_GMF_ERR_OK ||
-      esp_gmf_afe_manager_get_input_ch_num(manager, &total_channels_u8) != ESP_GMF_ERR_OK ||
-      feed_chunk_size == 0 || total_channels_u8 == 0) {
+      esp_gmf_afe_manager_get_input_ch_num(manager, &total_channels_u8) != ESP_GMF_ERR_OK || feed_chunk_size == 0 ||
+      total_channels_u8 == 0) {
     ESP_LOGE(TAG, "Failed to query GMF AFE manager frame shape");
     esp_gmf_task_deinit(task);
     esp_gmf_pipeline_destroy(pipeline);
@@ -538,15 +519,13 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   int16_t *feed_buf = nullptr;
   if (needs_feed_staging) {
     const size_t feed_bytes = static_cast<size_t>(feed_chunksize) * total_channels * sizeof(int16_t);
-    const uint32_t feed_buf_caps = this->feed_buf_in_psram_
-        ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-        : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const uint32_t feed_buf_caps =
+        this->feed_buf_in_psram_ ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, feed_buf_caps));
     if (feed_buf == nullptr && this->feed_buf_in_psram_) {
       ESP_LOGW(TAG, "staged feed_buf (%u bytes) fell back to internal RAM (PSRAM full/unavailable)",
                static_cast<unsigned>(feed_bytes));
-      feed_buf = static_cast<int16_t *>(
-          heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+      feed_buf = static_cast<int16_t *>(heap_caps_aligned_alloc(16, feed_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (feed_buf == nullptr) {
       ESP_LOGE(TAG, "Failed to allocate staged feed buffer (%u bytes)", static_cast<unsigned>(feed_bytes));
@@ -705,8 +684,8 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 #ifdef USE_ESP_AFE_DIRECT_PATH
   if (this->direct_iface_ != nullptr && this->direct_data_ != nullptr) {
     if (this->direct_feed_signal_ == nullptr) {
-      this->direct_feed_signal_ = xSemaphoreCreateCountingStatic(
-          kDirectFeedSignalMaxCount, 0, &this->direct_feed_signal_storage_);
+      this->direct_feed_signal_ =
+          xSemaphoreCreateCountingStatic(kDirectFeedSignalMaxCount, 0, &this->direct_feed_signal_storage_);
       if (this->direct_feed_signal_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create single-mic AFE feed signal");
         return cleanup_failed_install();
@@ -734,14 +713,13 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 #ifdef USE_ESP_AFE_GMF_PATH
   const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
   const size_t output_bytes = static_cast<size_t>(this->fetch_chunksize_) * sizeof(int16_t);
-  esp_gmf_port_handle_t in_port = static_cast<esp_gmf_port_handle_t>(NEW_ESP_GMF_PORT_IN_BYTE(
-      reinterpret_cast<void *>(&EspAfe::gmf_input_acquire_cb_),
-      reinterpret_cast<void *>(&EspAfe::gmf_input_release_cb_), nullptr, this,
-      static_cast<int>(feed_bytes), ESP_GMF_MAX_DELAY));
+  esp_gmf_port_handle_t in_port = static_cast<esp_gmf_port_handle_t>(
+      NEW_ESP_GMF_PORT_IN_BYTE(reinterpret_cast<void *>(&EspAfe::gmf_input_acquire_cb_),
+                               reinterpret_cast<void *>(&EspAfe::gmf_input_release_cb_), nullptr, this,
+                               static_cast<int>(feed_bytes), ESP_GMF_MAX_DELAY));
   esp_gmf_port_handle_t out_port = static_cast<esp_gmf_port_handle_t>(NEW_ESP_GMF_PORT_OUT_BYTE(
       reinterpret_cast<void *>(&EspAfe::gmf_output_acquire_cb_),
-      reinterpret_cast<void *>(&EspAfe::gmf_output_release_cb_), nullptr, this,
-      static_cast<int>(output_bytes), 0));
+      reinterpret_cast<void *>(&EspAfe::gmf_output_release_cb_), nullptr, this, static_cast<int>(output_bytes), 0));
   if (in_port == nullptr || out_port == nullptr) {
     ESP_LOGE(TAG, "Failed to register GMF AFE ports");
     if (in_port != nullptr) {
@@ -880,7 +858,7 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
     }
   }
 
-  audio_core::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
+  esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
   if (!lock) {
     ESP_LOGW(TAG, "Timed out waiting to rebuild AFE instance");
     return false;
@@ -894,8 +872,7 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
     TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
     ulTaskNotifyTake(pdTRUE, 0);
     this->process_drain_waiter_.store(waiter, std::memory_order_release);
-    if (this->process_busy_.load(std::memory_order_seq_cst) &&
-        ulTaskNotifyTake(pdTRUE, DRAIN_WAIT_TIMEOUT) == 0) {
+    if (this->process_busy_.load(std::memory_order_seq_cst) && ulTaskNotifyTake(pdTRUE, DRAIN_WAIT_TIMEOUT) == 0) {
       ESP_LOGW(TAG, "Drain timeout waiting for process() to quiesce, proceeding");
     }
     this->process_drain_waiter_.store(nullptr, std::memory_order_release);
@@ -928,8 +905,7 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   // via frame_spec(). On the very first call (setup() before any successful
   // install) last_spec_* are zero; build the instance normally so downstream
   // learns the frame shape, then subsequent toggles can tear down cleanly.
-  if (this->all_features_disabled_() && this->last_spec_process_size_ > 0 &&
-      this->last_spec_fetch_size_ > 0) {
+  if (this->all_features_disabled_() && this->last_spec_process_size_ > 0 && this->last_spec_fetch_size_ > 0) {
     bool was_running = !this->afe_stopped_.load(std::memory_order_acquire);
     this->afe_stopped_.store(true, std::memory_order_release);
     release_drain();
@@ -951,8 +927,8 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
 
   if (require_same_frame_sizes && old_process > 0 && old_fetch > 0 &&
       (next.process_chunksize != old_process || next.fetch_chunksize != old_fetch)) {
-    ESP_LOGW(TAG, "Reinit changed external frame sizes (%d/%d -> %d/%d), rejecting",
-             old_process, old_fetch, next.process_chunksize, next.fetch_chunksize);
+    ESP_LOGW(TAG, "Reinit changed external frame sizes (%d/%d -> %d/%d), rejecting", old_process, old_fetch,
+             next.process_chunksize, next.fetch_chunksize);
     this->destroy_instance_(&next);
     release_drain();
     return false;
@@ -965,9 +941,9 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   // esp_audio_stack try to restart its audio task concurrently with our
   // fetch task recreation and race inside FreeRTOS.
   int new_mic_ch = this->afe_mic_channels_();
-  bool spec_changed = (new_mic_ch != this->last_spec_mic_ch_ ||
-                       next.process_chunksize != this->last_spec_process_size_ ||
-                       next.fetch_chunksize != this->last_spec_fetch_size_);
+  bool spec_changed =
+      (new_mic_ch != this->last_spec_mic_ch_ || next.process_chunksize != this->last_spec_process_size_ ||
+       next.fetch_chunksize != this->last_spec_fetch_size_);
   (void) old_process;
   (void) old_fetch;
 
@@ -1042,8 +1018,8 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   release_drain();
   const uint32_t total_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - reinit_start_us));
   if (total_us >= REINIT_STAGE_WARN_US) {
-    ESP_LOGW(TAG, "AFE reinit total took %uus (type=%d mode=%d)",
-             (unsigned) total_us, this->afe_type_, this->afe_mode_);
+    ESP_LOGW(TAG, "AFE reinit total took %uus (type=%d mode=%d)", (unsigned) total_us, this->afe_type_,
+             this->afe_mode_);
   }
   return true;
 }
@@ -1076,13 +1052,11 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
   if (this->direct_iface_ != nullptr && this->direct_data_ != nullptr) {
     bool old_value = this->aec_enabled_.load(std::memory_order_relaxed);
     this->aec_enabled_.store(enabled, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "Applying aec_enabled=%s (single-mic AFE rebuild)",
-             enabled ? "true" : "false");
+    ESP_LOGI(TAG, "Applying aec_enabled=%s (single-mic AFE rebuild)", enabled ? "true" : "false");
     if (this->recreate_instance_(false)) {
       return true;
     }
-    ESP_LOGW(TAG, "Failed to apply aec_enabled=%s, rolling back",
-             enabled ? "true" : "false");
+    ESP_LOGW(TAG, "Failed to apply aec_enabled=%s, rolling back", enabled ? "true" : "false");
     this->aec_enabled_.store(old_value, std::memory_order_relaxed);
     if (!this->recreate_instance_(false)) {
       ESP_LOGE(TAG, "Rollback also failed for aec_enabled, AFE is down");
@@ -1097,7 +1071,7 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
   // mutex and time out.
   bool needs_rebuild = false;
   {
-    audio_core::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
+    esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
     if (!lock) {
       ESP_LOGW(TAG, "Timed out waiting to toggle AEC");
       return false;
@@ -1113,25 +1087,21 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     } else
 #endif
 #ifdef USE_ESP_AFE_GMF_PATH
-    if (this->afe_manager_ != nullptr) {
-      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(
-          this->afe_manager_, ESP_AFE_FEATURE_AEC, enabled));
+        if (this->afe_manager_ != nullptr) {
+      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, enabled));
       backend = "GMF AFE manager";
     } else
 #endif
     {
-      ESP_LOGW(TAG, "AFE %s AEC requested without a compiled backend",
-               enabled ? "enable" : "disable");
+      ESP_LOGW(TAG, "AFE %s AEC requested without a compiled backend", enabled ? "enable" : "disable");
       return false;
     }
     if (ret < 0) {
-      ESP_LOGW(TAG, "AFE %s AEC failed (ret=%d)",
-               enabled ? "enable" : "disable", ret);
+      ESP_LOGW(TAG, "AFE %s AEC failed (ret=%d)", enabled ? "enable" : "disable", ret);
       return false;
     }
 
-    ESP_LOGI(TAG, "AEC %s via %s", enabled ? "enabled" : "disabled",
-             backend);
+    ESP_LOGI(TAG, "AEC %s via %s", enabled ? "enabled" : "disabled", backend);
     this->aec_enabled_.store(enabled, std::memory_order_relaxed);
 
     // Live toggle left AFE running. If the user just turned AEC off and
@@ -1174,7 +1144,7 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
 
   bool needs_rebuild = false;
   {
-    audio_core::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
+    esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
     if (!lock) {
       ESP_LOGW(TAG, "Timed out waiting to toggle VAD");
       return false;
@@ -1193,25 +1163,21 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
     } else
 #endif
 #ifdef USE_ESP_AFE_GMF_PATH
-    if (this->afe_manager_ != nullptr) {
-      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(
-          this->afe_manager_, ESP_AFE_FEATURE_VAD, enabled));
+        if (this->afe_manager_ != nullptr) {
+      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, enabled));
       backend = "GMF AFE manager";
     } else
 #endif
     {
-      ESP_LOGW(TAG, "AFE %s VAD requested without a compiled backend",
-               enabled ? "enable" : "disable");
+      ESP_LOGW(TAG, "AFE %s VAD requested without a compiled backend", enabled ? "enable" : "disable");
       return false;
     }
     if (ret < 0) {
-      ESP_LOGW(TAG, "AFE %s VAD failed (ret=%d)",
-               enabled ? "enable" : "disable", ret);
+      ESP_LOGW(TAG, "AFE %s VAD failed (ret=%d)", enabled ? "enable" : "disable", ret);
       return false;
     }
 
-    ESP_LOGI(TAG, "VAD %s via %s", enabled ? "enabled" : "disabled",
-             backend);
+    ESP_LOGI(TAG, "VAD %s via %s", enabled ? "enabled" : "disabled", backend);
     this->vad_enabled_.store(enabled, std::memory_order_relaxed);
     if (!enabled) {
       this->voice_present_.store(false, std::memory_order_relaxed);
@@ -1255,17 +1221,15 @@ bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char 
 #ifdef USE_ESP_AFE_GMF_PATH
     has_instance = has_instance || this->afe_manager_ != nullptr;
 #endif
-    if (has_instance && this->config_mutex_ != nullptr && this->feed_chunksize_ > 0 &&
-        this->fetch_chunksize_ > 0) {
+    if (has_instance && this->config_mutex_ != nullptr && this->feed_chunksize_ > 0 && this->fetch_chunksize_ > 0) {
       bool old_value = flag.load(std::memory_order_relaxed);
       flag.store(enabled, std::memory_order_relaxed);
-      ESP_LOGI(TAG, "Applying %s=%s (pre-activation rebuild, frame_size_change=%s)",
-               name, enabled ? "true" : "false", allow_frame_change ? "allowed" : "locked");
+      ESP_LOGI(TAG, "Applying %s=%s (pre-activation rebuild, frame_size_change=%s)", name, enabled ? "true" : "false",
+               allow_frame_change ? "allowed" : "locked");
       if (this->recreate_instance_(!allow_frame_change)) {
         return true;
       }
-      ESP_LOGW(TAG, "Failed to apply %s=%s before activation, rolling back",
-               name, enabled ? "true" : "false");
+      ESP_LOGW(TAG, "Failed to apply %s=%s before activation, rolling back", name, enabled ? "true" : "false");
       flag.store(old_value, std::memory_order_relaxed);
       if (!this->recreate_instance_(!allow_frame_change)) {
         ESP_LOGE(TAG, "Rollback also failed for %s, AFE is down", name);
@@ -1274,8 +1238,7 @@ bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char 
     }
     // Before setup: commit immediately, build_instance_ will use it at setup.
     flag.store(enabled, std::memory_order_relaxed);
-    ESP_LOGD(TAG, "Deferring %s=%s until AFE is initialized",
-             name, enabled ? "true" : "false");
+    ESP_LOGD(TAG, "Deferring %s=%s until AFE is initialized", name, enabled ? "true" : "false");
     return true;
   }
   // Staged config: set flag, rebuild, rollback on failure.
@@ -1285,8 +1248,8 @@ bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char 
   //
   bool old_value = flag.load(std::memory_order_relaxed);
   flag.store(enabled, std::memory_order_relaxed);
-  ESP_LOGI(TAG, "Applying %s=%s (rebuild, frame_size_change=%s)",
-           name, enabled ? "true" : "false", allow_frame_change ? "allowed" : "locked");
+  ESP_LOGI(TAG, "Applying %s=%s (rebuild, frame_size_change=%s)", name, enabled ? "true" : "false",
+           allow_frame_change ? "allowed" : "locked");
   if (this->recreate_instance_(!allow_frame_change)) {
     return true;
   }
@@ -1309,30 +1272,25 @@ void EspAfe::setup() {
 
 void EspAfe::dump_config() {
   ESP_LOGCONFIG(TAG, "ESP AFE (Audio Front End):");
-  const char *type_name = (this->afe_type_ == AFE_TYPE_SR) ? "SR"
-                          : (this->afe_type_ == 3)          ? "FD"
-                                                             : "VC";
+  const char *type_name = (this->afe_type_ == AFE_TYPE_SR) ? "SR" : (this->afe_type_ == 3) ? "FD" : "VC";
   ESP_LOGCONFIG(TAG, "  Type: %s", type_name);
   ESP_LOGCONFIG(TAG, "  Mode: %s", this->afe_mode_ == AFE_MODE_LOW_COST ? "LOW_COST" : "HIGH_PERF");
   ESP_LOGCONFIG(TAG, "  Microphones: transport=%d, afe=%d", this->mic_num_, this->afe_mic_channels_());
   ESP_LOGCONFIG(TAG, "  AEC: %s (filter_length=%d, nlp=%s)",
-                this->aec_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF",
-                this->aec_filter_length_, aec_nlp_level_name(this->aec_nlp_level_));
+                this->aec_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF", this->aec_filter_length_,
+                aec_nlp_level_name(this->aec_nlp_level_));
   ESP_LOGCONFIG(TAG, "  AEC scratch: ~12 KB internal (always allocated, "
-                "live-toggle via esp-sr vtable; off-at-boot still pays the cost)");
-  ESP_LOGCONFIG(TAG, "  NS: %s (WebRTC)",
-                this->ns_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF");
+                     "live-toggle via esp-sr vtable; off-at-boot still pays the cost)");
+  ESP_LOGCONFIG(TAG, "  NS: %s (WebRTC)", this->ns_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF");
   ESP_LOGCONFIG(TAG, "  VAD: %s (mode=%d, speech=%dms, noise=%dms, delay=%dms)",
-                this->vad_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF",
-                this->vad_mode_, this->vad_min_speech_ms_,
-                this->vad_min_noise_ms_, this->vad_delay_ms_);
+                this->vad_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF", this->vad_mode_,
+                this->vad_min_speech_ms_, this->vad_min_noise_ms_, this->vad_delay_ms_);
   ESP_LOGCONFIG(TAG, "  Continuous VAD Background Input: %s", this->continuous_vad_ ? "ON" : "OFF");
   ESP_LOGCONFIG(TAG, "  AGC: %s (gain=%ddB, target=-%ddBFS)",
-                this->agc_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF",
-                this->agc_compression_gain_, this->agc_target_level_);
+                this->agc_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF", this->agc_compression_gain_,
+                this->agc_target_level_);
   if (this->mic_num_ >= 2) {
-    ESP_LOGCONFIG(TAG, "  Speech Enhancement: %s",
-                  this->is_se_enabled() ? "ON (structural dual-mic)" : "OFF");
+    ESP_LOGCONFIG(TAG, "  Speech Enhancement: %s", this->is_se_enabled() ? "ON (structural dual-mic)" : "OFF");
   } else {
     ESP_LOGCONFIG(TAG, "  Speech Enhancement: unavailable (mic_num < 2)");
   }
@@ -1342,11 +1300,11 @@ void EspAfe::dump_config() {
     ESP_LOGCONFIG(TAG, "  AEC-off dual-mic fallback: unavailable on official GMF element path");
   }
   ESP_LOGCONFIG(TAG, "  Alloc: %s, linear_gain=%.2f", this->memory_alloc_mode_to_str_(), this->afe_linear_gain_);
-  ESP_LOGCONFIG(TAG, "  SE Task: core=%d, priority=%d, ringbuf=%d",
-                this->task_core_, this->task_priority_, this->ringbuf_size_);
+  ESP_LOGCONFIG(TAG, "  SE Task: core=%d, priority=%d, ringbuf=%d", this->task_core_, this->task_priority_,
+                this->ringbuf_size_);
   ESP_LOGCONFIG(TAG, "  GMF Manager: feed core=%d prio=%d stack=%d, fetch core=%d prio=%d stack=%d",
-                this->feed_task_core_, this->feed_task_priority_, this->feed_task_stack_size_,
-                this->fetch_task_core_, this->fetch_task_priority_, this->fetch_task_stack_size_);
+                this->feed_task_core_, this->feed_task_priority_, this->feed_task_stack_size_, this->fetch_task_core_,
+                this->fetch_task_priority_, this->fetch_task_stack_size_);
   ESP_LOGCONFIG(TAG, "  Process: %d samples, Feed: %d samples, Fetch: %d samples, Channels: %d",
                 this->process_chunksize_, this->feed_chunksize_, this->fetch_chunksize_, this->total_channels_);
   ESP_LOGCONFIG(TAG, "  Initialized: %s", this->is_initialized() ? "YES" : "NO");
@@ -1385,12 +1343,18 @@ FeatureControl EspAfe::feature_control(AudioFeature feature) const {
 
 bool EspAfe::set_feature(AudioFeature feature, bool enabled) {
   switch (feature) {
-    case AudioFeature::AEC: return enabled ? this->enable_aec() : this->disable_aec();
-    case AudioFeature::SE:  return false;
-    case AudioFeature::NS:  return enabled ? this->enable_ns()  : this->disable_ns();
-    case AudioFeature::VAD: return enabled ? this->enable_vad() : this->disable_vad();
-    case AudioFeature::AGC: return enabled ? this->enable_agc() : this->disable_agc();
-    default: return false;
+    case AudioFeature::AEC:
+      return enabled ? this->enable_aec() : this->disable_aec();
+    case AudioFeature::SE:
+      return false;
+    case AudioFeature::NS:
+      return enabled ? this->enable_ns() : this->disable_ns();
+    case AudioFeature::VAD:
+      return enabled ? this->enable_vad() : this->disable_vad();
+    case AudioFeature::AGC:
+      return enabled ? this->enable_agc() : this->disable_agc();
+    default:
+      return false;
   }
 }
 
@@ -1425,17 +1389,15 @@ bool EspAfe::reconfigure(int type, int mode) {
   this->afe_type_ = type;
   this->afe_mode_ = mode;
   if (this->recreate_instance_(false)) {
-    const char *type_name = (this->afe_type_ == AFE_TYPE_SR) ? "SR"
-                            : (this->afe_type_ == 3)          ? "FD"
-                                                               : "VC";
+    const char *type_name = (this->afe_type_ == AFE_TYPE_SR) ? "SR" : (this->afe_type_ == 3) ? "FD" : "VC";
     ESP_LOGI(TAG, "AFE reconfigured: type=%s, mode=%s", type_name,
              this->afe_mode_ == AFE_MODE_LOW_COST ? "LOW_COST" : "HIGH_PERF");
     return true;
   }
   // Rollback on failure: restore the previous config and rebuild to avoid leaving
   // the DSP permanently non-functional.
-  ESP_LOGW(TAG, "reconfigure: new type=%d mode=%d build failed, rolling back to type=%d mode=%d",
-           type, mode, old_type, old_mode);
+  ESP_LOGW(TAG, "reconfigure: new type=%d mode=%d build failed, rolling back to type=%d mode=%d", type, mode, old_type,
+           old_mode);
   this->afe_type_ = old_type;
   this->afe_mode_ = old_mode;
   if (!this->recreate_instance_(false)) {
@@ -1444,8 +1406,7 @@ bool EspAfe::reconfigure(int type, int mode) {
   return false;
 }
 
-bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
-                     uint8_t mic_channels_in) {
+bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) {
   const int transport_mic_channels = std::max<int>(1, mic_channels_in);
   int qs = this->process_chunksize_ > 0 ? this->process_chunksize_ : this->fetch_chunksize_;
   int os = this->fetch_chunksize_;
@@ -1471,16 +1432,14 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     return false;
   }
 
-#if ESP_AFE_TIMING_TELEMETRY
-  const int64_t process_start_us = esp_timer_get_time();
+  const int64_t process_start_us = ESP_AFE_TIMING_TELEMETRY ? esp_timer_get_time() : 0;
   auto finish_process_timing = [this, process_start_us]() {
-    uint32_t elapsed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - process_start_us));
-    this->process_us_last_.store(elapsed_us, std::memory_order_relaxed);
-    update_peak_atomic(this->process_us_max_, elapsed_us);
+    if constexpr (ESP_AFE_TIMING_TELEMETRY) {
+      uint32_t elapsed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - process_start_us));
+      this->process_us_last_.store(elapsed_us, std::memory_order_relaxed);
+      update_peak_atomic(this->process_us_max_, elapsed_us);
+    }
   };
-#else
-  auto finish_process_timing = []() {};
-#endif
 
   // Seq_cst matches recreate_instance_ so either the writer sees busy=true, or
   // this frame sees drain_request_=true and emits silence before touching AFE.
@@ -1520,17 +1479,16 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // Drop any partial frame staged with a different channel count: mixing
   // two layouts in feed_buf_ would feed the AFE garbage if a caller changes
   // the transport channel layout without recreating the instance first.
-  if (this->last_process_mic_channels_ != 0 &&
-      this->last_process_mic_channels_ != transport_mic_channels && offset > 0) {
+  if (this->last_process_mic_channels_ != 0 && this->last_process_mic_channels_ != transport_mic_channels &&
+      offset > 0) {
     ESP_LOGD(TAG, "process(): mic_channels_in changed %d -> %d, resetting staged input",
              this->last_process_mic_channels_, transport_mic_channels);
     offset = 0;
   }
   this->last_process_mic_channels_ = transport_mic_channels;
 
-  const bool sample_rms =
-      (this->input_volume_sensor_enabled_ || this->output_rms_sensor_enabled_) &&
-      !this->warmup_remaining_ && qs > 0 && (++this->rms_sensor_divider_ >= 8);
+  const bool sample_rms = (this->input_volume_sensor_enabled_ || this->output_rms_sensor_enabled_) &&
+                          !this->warmup_remaining_ && qs > 0 && (++this->rms_sensor_divider_ >= 8);
   if (sample_rms) {
     this->rms_sensor_divider_ = 0;
   }
@@ -1541,17 +1499,19 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // channels (otherwise the RMS mixes mic1 + mic2 + reference and the
   // dBFS sensor reports nonsense).
   if (sample_rms && this->input_volume_sensor_enabled_) {
-    this->input_volume_dbfs_.store(
-        compute_rms_dbfs_i16(in_mic, static_cast<size_t>(qs),
-                             static_cast<size_t>(transport_mic_channels)),
-        std::memory_order_relaxed);
+    this->input_volume_dbfs_.store(esp_audio_stack::compute_rms_dbfs_i16(in_mic, static_cast<size_t>(qs),
+                                                                         static_cast<size_t>(transport_mic_channels)),
+                                   std::memory_order_relaxed);
   }
 
   const int tc = this->total_channels_;
   const size_t feed_bytes = static_cast<size_t>(fs) * this->total_channels_ * sizeof(int16_t);
+#ifdef USE_ESP_AFE_GMF_PATH
   const bool gmf_direct_frame = gmf_path && !direct_path && offset == 0 && qs == fs;
   void *gmf_slot = nullptr;
+#endif
   bool staged = true;
+#ifdef USE_ESP_AFE_GMF_PATH
   if (gmf_direct_frame) {
     gmf_slot = this->acquire_gmf_feed_slot_(feed_bytes, 0);
     if (gmf_slot == nullptr) {
@@ -1562,10 +1522,11 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
                             afe_mic_channels, tc);
       offset = fs;
     }
-  } else if (this->feed_buf_ != nullptr) {
+  } else
+#endif
+      if (this->feed_buf_ != nullptr) {
     int16_t *dst = this->feed_buf_ + offset * tc;
-    stage_afe_input_frame(dst, in_mic, in_ref, qs, transport_mic_channels,
-                          afe_mic_channels, tc);
+    stage_afe_input_frame(dst, in_mic, in_ref, qs, transport_mic_channels, afe_mic_channels, tc);
     offset += qs;
   } else {
     diag_add(this->input_ring_drop_);
@@ -1581,8 +1542,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
       int ret = this->direct_iface_->feed(this->direct_data_, this->feed_buf_);
       if (ret > 0) {
         diag_add(this->feed_ok_);
-        if (this->direct_feed_signal_ != nullptr &&
-            xSemaphoreGive(this->direct_feed_signal_) != pdTRUE) {
+        if (this->direct_feed_signal_ != nullptr && xSemaphoreGive(this->direct_feed_signal_) != pdTRUE) {
           diag_add(this->output_ring_drop_);
         }
       } else {
@@ -1612,9 +1572,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
       }
     }
 #else
-    {
-      diag_add(this->feed_rejected_);
-    }
+    { diag_add(this->feed_rejected_); }
 #endif
     offset = 0;
   }
@@ -1645,15 +1603,13 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // Output-side RMS depends on the samples handed to the caller. Input volume
   // is computed before feeding GMF, and VAD state comes from esp_gmf_afe events.
   if (processed && sample_rms && this->output_rms_sensor_enabled_) {
-    this->output_rms_dbfs_.store(compute_rms_dbfs_i16(out, os), std::memory_order_relaxed);
+    this->output_rms_dbfs_.store(esp_audio_stack::compute_rms_dbfs_i16(out, os), std::memory_order_relaxed);
   }
   finish_process_timing();
   return processed;
 }
 
-bool EspAfe::reinit_by_name(const std::string &name) {
-  return this->reinit_by_name(name.c_str());
-}
+bool EspAfe::reinit_by_name(const std::string &name) { return this->reinit_by_name(name.c_str()); }
 
 bool EspAfe::reinit_by_name(const char *name) {
   if (name == nullptr) {
@@ -1672,8 +1628,7 @@ bool EspAfe::reinit_by_name(const char *name) {
 
 bool EspAfe::start_reconfigure_task_() {
   if (this->reconfigure_queue_ == nullptr) {
-    this->reconfigure_queue_ = xQueueCreateStatic(1, sizeof(ReconfigureRequest),
-                                                  this->reconfigure_queue_storage_,
+    this->reconfigure_queue_ = xQueueCreateStatic(1, sizeof(ReconfigureRequest), this->reconfigure_queue_storage_,
                                                   &this->reconfigure_queue_struct_);
     if (this->reconfigure_queue_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create AFE reconfigure queue");
@@ -1685,19 +1640,16 @@ bool EspAfe::start_reconfigure_task_() {
   }
 
   this->reconfigure_task_running_.store(true, std::memory_order_release);
-  if (!audio_core::start_pinned_task(&EspAfe::reconfigure_task_trampoline_, "afe_reinit",
-                                           kReconfigureTaskStackBytes, this, 4, 0, false, TAG,
-                                           &this->reconfigure_task_handle_, &this->reconfigure_task_tcb_,
-                                           &this->reconfigure_task_stack_)) {
+  if (!esp_audio_stack::start_pinned_task(
+          &EspAfe::reconfigure_task_trampoline_, "afe_reinit", kReconfigureTaskStackBytes, this, 4, 0, false, TAG,
+          &this->reconfigure_task_handle_, &this->reconfigure_task_tcb_, &this->reconfigure_task_stack_)) {
     this->reconfigure_task_running_.store(false, std::memory_order_release);
     return false;
   }
   return true;
 }
 
-bool EspAfe::request_reinit_by_name(const std::string &name) {
-  return this->request_reinit_by_name(name.c_str());
-}
+bool EspAfe::request_reinit_by_name(const std::string &name) { return this->request_reinit_by_name(name.c_str()); }
 
 bool EspAfe::request_reinit_by_name(const char *name) {
   if (name == nullptr || name[0] == '\0') {
@@ -1715,8 +1667,8 @@ bool EspAfe::request_reinit_by_name(const char *name) {
   }
   ReconfigureRequest req{};
   std::strncpy(req.mode, name, sizeof(req.mode) - 1);
-  const bool already_pending = this->reconfigure_busy_.load(std::memory_order_acquire) ||
-                               uxQueueMessagesWaiting(this->reconfigure_queue_) > 0;
+  const bool already_pending =
+      this->reconfigure_busy_.load(std::memory_order_acquire) || uxQueueMessagesWaiting(this->reconfigure_queue_) > 0;
   this->reconfigure_busy_.store(true, std::memory_order_release);
   this->last_reconfigure_ok_.store(false, std::memory_order_release);
   if (xQueueOverwrite(this->reconfigure_queue_, &req) != pdTRUE) {
@@ -1724,8 +1676,7 @@ bool EspAfe::request_reinit_by_name(const char *name) {
     this->reconfigure_busy_.store(false, std::memory_order_release);
     return false;
   }
-  ESP_LOGI(TAG, "%s AFE reconfigure to %s",
-           already_pending ? "Updated pending" : "Queued", req.mode);
+  ESP_LOGI(TAG, "%s AFE reconfigure to %s", already_pending ? "Updated pending" : "Queued", req.mode);
   return true;
 }
 
@@ -1767,8 +1718,8 @@ bool EspAfe::enable_agc() { return this->set_reinit_flag_(this->agc_enabled_, tr
 bool EspAfe::disable_agc() { return this->set_reinit_flag_(this->agc_enabled_, false, "agc_enabled"); }
 
 #ifdef USE_ESP_AFE_GMF_PATH
-esp_gmf_err_io_t EspAfe::gmf_input_acquire_cb_(void *ctx, esp_gmf_payload_t *load,
-                                               uint32_t wanted_size, int wait_ticks) {
+esp_gmf_err_io_t EspAfe::gmf_input_acquire_cb_(void *ctx, esp_gmf_payload_t *load, uint32_t wanted_size,
+                                               int wait_ticks) {
   auto *self = static_cast<EspAfe *>(ctx);
   return self == nullptr ? ESP_GMF_IO_FAIL : self->gmf_input_acquire_(load, wanted_size, wait_ticks);
 }
@@ -1780,8 +1731,8 @@ esp_gmf_err_io_t EspAfe::gmf_input_release_cb_(void *ctx, esp_gmf_payload_t *loa
   return ESP_GMF_IO_OK;
 }
 
-esp_gmf_err_io_t EspAfe::gmf_output_acquire_cb_(void *ctx, esp_gmf_payload_t *load,
-                                                uint32_t wanted_size, int wait_ticks) {
+esp_gmf_err_io_t EspAfe::gmf_output_acquire_cb_(void *ctx, esp_gmf_payload_t *load, uint32_t wanted_size,
+                                                int wait_ticks) {
   (void) ctx;
   (void) load;
   (void) wanted_size;
@@ -1794,8 +1745,7 @@ esp_gmf_err_io_t EspAfe::gmf_output_release_cb_(void *ctx, esp_gmf_payload_t *lo
   return self == nullptr ? ESP_GMF_IO_FAIL : self->gmf_output_release_(load, wait_ticks);
 }
 
-esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wanted_size,
-                                            int wait_ticks) {
+esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wanted_size, int wait_ticks) {
   if (load == nullptr || load->buf == nullptr || wanted_size == 0 || this->feed_input_ring_ == nullptr) {
     return ESP_GMF_IO_FAIL;
   }
@@ -1815,22 +1765,19 @@ esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wa
   decrement_if_nonzero(this->feed_queue_frames_);
   esp_gmf_err_io_t ret = ESP_GMF_IO_FAIL;
   if (item_size == static_cast<size_t>(wanted_size) && load->buf_length >= wanted_size) {
-#if ESP_AFE_TIMING_TELEMETRY
-    const int64_t feed_start_us = esp_timer_get_time();
-#endif
+    const int64_t feed_start_us = ESP_AFE_TIMING_TELEMETRY ? esp_timer_get_time() : 0;
     memcpy(load->buf, item, item_size);
     load->valid_size = item_size;
-#if ESP_AFE_TIMING_TELEMETRY
-    uint32_t feed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - feed_start_us));
-    this->feed_us_last_.store(feed_us, std::memory_order_relaxed);
-    update_peak_atomic(this->feed_us_max_, feed_us);
-#endif
+    if constexpr (ESP_AFE_TIMING_TELEMETRY) {
+      uint32_t feed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - feed_start_us));
+      this->feed_us_last_.store(feed_us, std::memory_order_relaxed);
+      update_peak_atomic(this->feed_us_max_, feed_us);
+    }
     diag_add(this->feed_ok_);
     ret = ESP_GMF_IO_OK;
   } else {
-    ESP_LOGW(TAG, "GMF AFE input size mismatch (%u != %u, buf=%u)",
-             static_cast<unsigned>(item_size), static_cast<unsigned>(wanted_size),
-             static_cast<unsigned>(load->buf_length));
+    ESP_LOGW(TAG, "GMF AFE input size mismatch (%u != %u, buf=%u)", static_cast<unsigned>(item_size),
+             static_cast<unsigned>(wanted_size), static_cast<unsigned>(load->buf_length));
     diag_add(this->feed_rejected_);
   }
 
@@ -1898,8 +1845,8 @@ void EspAfe::handle_manager_result_(afe_fetch_result_t *result) {
     const bool new_voice = result->vad_state == VAD_SPEECH;
     const bool prev_voice = this->voice_present_.exchange(new_voice, std::memory_order_relaxed);
     if (new_voice != prev_voice) {
-      ESP_LOGD(TAG, "AFE VAD transition: %s -> %s",
-               prev_voice ? "speech" : "silence", new_voice ? "speech" : "silence");
+      ESP_LOGD(TAG, "AFE VAD transition: %s -> %s", prev_voice ? "speech" : "silence",
+               new_voice ? "speech" : "silence");
     }
   }
 
@@ -1925,8 +1872,7 @@ void EspAfe::direct_fetch_task_loop_() {
   const int feed_ms = (this->feed_chunksize_ > 0) ? (this->feed_chunksize_ / 16) : 32;
   const TickType_t fetch_timeout = pdMS_TO_TICKS(feed_ms + 10);
   while (this->direct_fetch_running_) {
-    if (this->direct_feed_signal_ == nullptr ||
-        xSemaphoreTake(this->direct_feed_signal_, fetch_timeout) != pdTRUE) {
+    if (this->direct_feed_signal_ == nullptr || xSemaphoreTake(this->direct_feed_signal_, fetch_timeout) != pdTRUE) {
       continue;
     }
     if (!this->direct_fetch_running_ || this->direct_iface_ == nullptr || this->direct_data_ == nullptr) {
@@ -1951,8 +1897,7 @@ bool EspAfe::start_direct_fetch_task_() {
   this->direct_fetch_stop_waiter_.store(nullptr, std::memory_order_release);
   if (this->direct_fetch_task_stack_ == nullptr) {
     this->direct_fetch_task_stack_ = static_cast<StackType_t *>(
-        heap_caps_malloc(kDirectFetchTaskStackWords * sizeof(StackType_t),
-                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        heap_caps_malloc(kDirectFetchTaskStackWords * sizeof(StackType_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (this->direct_fetch_task_stack_ == nullptr) {
       ESP_LOGE(TAG, "Failed to allocate single-mic AFE fetch task stack");
       return false;
@@ -1960,12 +1905,11 @@ bool EspAfe::start_direct_fetch_task_() {
   }
   this->direct_fetch_running_ = true;
   memset(&this->direct_fetch_task_tcb_, 0, sizeof(this->direct_fetch_task_tcb_));
-  const int core = (this->task_core_ <= 0) ? 1
-                                           : (this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY);
+  const int core = (this->task_core_ <= 0) ? 1 : (this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY);
   const int prio = this->task_priority_ > 1 ? this->task_priority_ - 1 : 1;
-  this->direct_fetch_task_handle_ = xTaskCreateStaticPinnedToCore(
-      &EspAfe::direct_fetch_task_trampoline_, "afe_fetch", kDirectFetchTaskStackWords, this,
-      prio, this->direct_fetch_task_stack_, &this->direct_fetch_task_tcb_, core);
+  this->direct_fetch_task_handle_ =
+      xTaskCreateStaticPinnedToCore(&EspAfe::direct_fetch_task_trampoline_, "afe_fetch", kDirectFetchTaskStackWords,
+                                    this, prio, this->direct_fetch_task_stack_, &this->direct_fetch_task_tcb_, core);
   if (this->direct_fetch_task_handle_ == nullptr) {
     this->direct_fetch_running_ = false;
     ESP_LOGE(TAG, "Failed to create single-mic AFE fetch task");
@@ -2000,19 +1944,19 @@ void EspAfe::stop_direct_fetch_task_() {
 #endif
 
 void EspAfe::update_fetch_ring_free_pct_() {
-#if ESP_AFE_DIAGNOSTIC_COUNTERS
-  if (!this->fetch_output_ring_) {
-    this->ringbuf_free_pct_.store(1.0f, std::memory_order_relaxed);
-    return;
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    if (!this->fetch_output_ring_) {
+      this->ringbuf_free_pct_.store(1.0f, std::memory_order_relaxed);
+      return;
+    }
+    const size_t free_bytes = this->fetch_output_ring_->free();
+    const size_t used_bytes = this->fetch_output_ring_->available();
+    const size_t total_bytes = free_bytes + used_bytes;
+    if (total_bytes > 0) {
+      this->ringbuf_free_pct_.store(static_cast<float>(free_bytes) / static_cast<float>(total_bytes),
+                                    std::memory_order_relaxed);
+    }
   }
-  const size_t free_bytes = this->fetch_output_ring_->free();
-  const size_t used_bytes = this->fetch_output_ring_->available();
-  const size_t total_bytes = free_bytes + used_bytes;
-  if (total_bytes > 0) {
-    this->ringbuf_free_pct_.store(static_cast<float>(free_bytes) / static_cast<float>(total_bytes),
-                                  std::memory_order_relaxed);
-  }
-#endif
 }
 
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -2038,9 +1982,8 @@ void EspAfe::gmf_event_cb_(esp_gmf_element_handle_t el, esp_gmf_afe_evt_t *event
   }
   const bool prev_voice = self->voice_present_.exchange(new_voice, std::memory_order_relaxed);
   if (new_voice != prev_voice) {
-    ESP_LOGD(TAG, "GMF AFE voice transition: %s -> %s (event=%d)",
-             prev_voice ? "speech" : "silence", new_voice ? "speech" : "silence",
-             static_cast<int>(event->type));
+    ESP_LOGD(TAG, "GMF AFE voice transition: %s -> %s (event=%d)", prev_voice ? "speech" : "silence",
+             new_voice ? "speech" : "silence", static_cast<int>(event->type));
   }
 }
 #endif
@@ -2208,14 +2151,12 @@ void EspAfe::stop_pipeline_() {
 
 #ifdef USE_ESP_AFE_GMF_PATH
 void EspAfe::flush_pipeline_before_stop_() {
-  if (this->afe_manager_ == nullptr || this->feed_input_ring_ == nullptr ||
-      this->feed_chunksize_ <= 0 || this->total_channels_ <= 0 ||
-      this->afe_stopped_.load(std::memory_order_acquire)) {
+  if (this->afe_manager_ == nullptr || this->feed_input_ring_ == nullptr || this->feed_chunksize_ <= 0 ||
+      this->total_channels_ <= 0 || this->afe_stopped_.load(std::memory_order_acquire)) {
     return;
   }
 
-  const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) *
-                            this->total_channels_ * sizeof(int16_t);
+  const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
   TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
   ulTaskNotifyTake(pdTRUE, 0);
   this->pipeline_flush_waiter_.store(waiter, std::memory_order_release);
@@ -2250,8 +2191,7 @@ bool EspAfe::commit_gmf_feed_slot_(void *slot) {
 }
 
 bool EspAfe::prepare_feed_input_ring_() {
-  if (this->afe_manager_ == nullptr ||
-      this->feed_chunksize_ <= 0) {
+  if (this->afe_manager_ == nullptr || this->feed_chunksize_ <= 0) {
     return false;
   }
 
@@ -2259,22 +2199,19 @@ bool EspAfe::prepare_feed_input_ring_() {
     // NOSPLIT ring: xRingbufferSend is atomic per-item; Receive returns a
     // complete frame. kBridgeRingFrames capacity absorbs BSS jitter without
     // memory bloat. Each NOSPLIT item adds an 8-byte header, included in sizing.
-    const size_t frame_bytes = static_cast<size_t>(this->feed_chunksize_) *
-                               this->total_channels_ * sizeof(int16_t);
+    const size_t frame_bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
     const size_t ring_size = (frame_bytes + kRingbufferItemHeaderBytes) * kBridgeRingFrames;
-    const uint32_t feed_ring_caps = this->feed_ring_in_psram_
-        ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-        : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const uint32_t feed_ring_caps =
+        this->feed_ring_in_psram_ ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     this->feed_input_ring_storage_ = static_cast<uint8_t *>(heap_caps_malloc(ring_size, feed_ring_caps));
     if (this->feed_input_ring_storage_ == nullptr && this->feed_ring_in_psram_) {
       ESP_LOGW(TAG, "feed_input_ring (%u bytes) fell back to internal RAM (PSRAM full/unavailable)",
                (unsigned) ring_size);
-      this->feed_input_ring_storage_ = static_cast<uint8_t *>(
-          heap_caps_malloc(ring_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+      this->feed_input_ring_storage_ =
+          static_cast<uint8_t *>(heap_caps_malloc(ring_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (this->feed_input_ring_storage_ == nullptr) {
-      ESP_LOGE(TAG, "Failed to allocate AFE feed input ring storage (%u bytes)",
-               (unsigned) ring_size);
+      ESP_LOGE(TAG, "Failed to allocate AFE feed input ring storage (%u bytes)", (unsigned) ring_size);
       return false;
     }
     this->feed_input_ring_struct_ = static_cast<StaticRingbuffer_t *>(
@@ -2285,9 +2222,8 @@ bool EspAfe::prepare_feed_input_ring_() {
       ESP_LOGE(TAG, "Failed to allocate AFE feed input ring struct");
       return false;
     }
-    this->feed_input_ring_ = xRingbufferCreateStatic(
-        ring_size, RINGBUF_TYPE_NOSPLIT,
-        this->feed_input_ring_storage_, this->feed_input_ring_struct_);
+    this->feed_input_ring_ = xRingbufferCreateStatic(ring_size, RINGBUF_TYPE_NOSPLIT, this->feed_input_ring_storage_,
+                                                     this->feed_input_ring_struct_);
     if (this->feed_input_ring_ == nullptr) {
       heap_caps_free(this->feed_input_ring_storage_);
       this->feed_input_ring_storage_ = nullptr;
@@ -2296,8 +2232,8 @@ bool EspAfe::prepare_feed_input_ring_() {
       ESP_LOGE(TAG, "Failed to create AFE feed input ring");
       return false;
     }
-    ESP_LOGI(TAG, "Feed input ring: %u bytes (%u per frame, %u slots, NOSPLIT)",
-             (unsigned) ring_size, (unsigned) frame_bytes, (unsigned) kBridgeRingFrames);
+    ESP_LOGI(TAG, "Feed input ring: %u bytes (%u per frame, %u slots, NOSPLIT)", (unsigned) ring_size,
+             (unsigned) frame_bytes, (unsigned) kBridgeRingFrames);
   }
   return true;
 }
@@ -2306,7 +2242,8 @@ bool EspAfe::prepare_feed_input_ring_() {
 void EspAfe::set_processing_active(bool active) {
   if (active) {
     bool was = this->processing_active_.exchange(true, std::memory_order_acq_rel);
-    if (was) return;
+    if (was)
+      return;
     if (this->afe_stopped_.load(std::memory_order_acquire)) {
       ESP_LOGI(TAG, "AFE active requested while stopped; pipeline will rebuild when a feature is enabled");
       return;
@@ -2318,7 +2255,8 @@ void EspAfe::set_processing_active(bool active) {
     }
     ESP_LOGI(TAG, "AFE active: processing pipeline running");
   } else {
-    if (!this->processing_active_.exchange(false, std::memory_order_acq_rel)) return;
+    if (!this->processing_active_.exchange(false, std::memory_order_acq_rel))
+      return;
     if (!this->afe_stopped_.load(std::memory_order_acquire)) {
       if (this->pause_pipeline_()) {
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -2384,9 +2322,10 @@ bool EspAfe::prepare_fetch_output_ring_() {
     // that would shift the microphone surface seen by MWW/VA/call components.
     const size_t frame_bytes = static_cast<size_t>(this->fetch_chunksize_) * sizeof(int16_t);
     const size_t ring_bytes = (frame_bytes + kRingbufferItemHeaderBytes) * kBridgeRingFrames;
-    this->fetch_output_ring_ = this->fetch_ring_in_psram_
-        ? audio_core::create_nosplit_prefer_psram(ring_bytes, "esp_afe.fetch_output_ring")
-        : audio_core::create_nosplit_internal(ring_bytes, "esp_afe.fetch_output_ring");
+    this->fetch_output_ring_ =
+        this->fetch_ring_in_psram_
+            ? esp_audio_stack::create_nosplit_prefer_psram(ring_bytes, "esp_afe.fetch_output_ring")
+            : esp_audio_stack::create_nosplit_internal(ring_bytes, "esp_afe.fetch_output_ring");
     if (!this->fetch_output_ring_) {
       ESP_LOGE(TAG, "Failed to allocate AFE fetch output ring buffer");
       return false;
@@ -2423,8 +2362,7 @@ bool EspAfe::prepare_runtime_() {
 #else
   const bool direct_path = false;
 #endif
-  ESP_LOGI(TAG, "AFE runtime prepared (%s)",
-           direct_path ? "ESP-SR direct single-mic" : "GMF feed/fetch rings");
+  ESP_LOGI(TAG, "AFE runtime prepared (%s)", direct_path ? "ESP-SR direct single-mic" : "GMF feed/fetch rings");
   return true;
 }
 
@@ -2451,7 +2389,7 @@ EspAfe::~EspAfe() {
   // Quiesce: acquire mutex to ensure process() is not mid-frame.
   if (this->config_mutex_ != nullptr) {
     {
-      audio_core::ScopedLock lock(this->config_mutex_, pdMS_TO_TICKS(500));
+      esp_audio_stack::ScopedLock lock(this->config_mutex_, pdMS_TO_TICKS(500));
       AfeInstance instance = this->detach_instance_();
       this->destroy_instance_(&instance);
       this->release_runtime_buffers_();

@@ -1,3 +1,4 @@
+// namespace esp_afe marker for ESPHome lint; vendored GMF C API remains global.
 /*
  * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO., LTD
  * SPDX-License-Identifier: LicenseRef-Espressif-Modified-MIT
@@ -15,7 +16,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
 
 /**
  * @brief  Configuration structure for AEC
@@ -28,11 +29,12 @@ extern "C" {
  *        which are the microphone channel, the microphone channel, an unused channel, and the playback channel
  */
 typedef struct {
-    uint8_t    filter_len;    /*!< The length of filter. The larger the filter, the higher the CPU loading
-                               *  Recommended filter_length = 4 for esp32s3 and esp32p4. Recommended filter_length = 2 for esp32c5 */
-    afe_type_t type;          /*!< AFE type */
-    afe_mode_t mode;          /*!< AFE mode */
-    char      *input_format;  /*!< Input format */
+  uint8_t filter_len; /*!< The length of filter. The larger the filter, the higher the CPU loading
+                       *  Recommended filter_length = 4 for esp32s3 and esp32p4. Recommended filter_length = 2 for
+                       * esp32c5 */
+  afe_type_t type;    /*!< AFE type */
+  afe_mode_t mode;    /*!< AFE mode */
+  char *input_format; /*!< Input format */
 } esp_gmf_aec_cfg_t;
 
 /**
@@ -50,4 +52,4 @@ esp_gmf_err_t esp_gmf_aec_init(esp_gmf_aec_cfg_t *cfg, esp_gmf_obj_handle_t *out
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
+#endif /* __cplusplus */

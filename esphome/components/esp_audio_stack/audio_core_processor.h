@@ -5,8 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace esphome {
-namespace audio_core {
+namespace esphome::esp_audio_stack {
 
 /// Audio processing features that can be queried and toggled.
 enum class AudioFeature : uint8_t {
@@ -82,8 +81,7 @@ class AudioProcessor {
   /// @param mic_channels_in  how many mic channels are interleaved in in_mic
   /// @return true if processed by DSP, false if not processed (implementation
   ///         may emit silence rather than raw audio)
-  virtual bool process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
-                       uint8_t mic_channels_in = 1) = 0;
+  virtual bool process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) = 0;
 
   /// Query how a feature can be controlled.
   virtual FeatureControl feature_control(AudioFeature feature) const = 0;
@@ -119,7 +117,6 @@ class AudioProcessor {
   virtual bool wants_background_input() const { return false; }
 };
 
-}  // namespace audio_core
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // ESPHOME_AUDIO_CORE_PROCESSOR_H

@@ -7,8 +7,7 @@
 
 #include <cmath>
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
 static const char *const TAG = "audio_stack.spk";
 
@@ -27,7 +26,7 @@ void ESPAudioStackSpeaker::setup() {
 
   // Forward frame-played notifications from I2S audio task to mixer callbacks.
   // Without this, mixer source speakers can't track pending_playback_frames.
-  if (!this->parent_->add_speaker_output_callback(ESPAudioStackSpeaker::speaker_output_callback_, this)) {
+  if (!this->parent_->add_speaker_output_callback(ESPAudioStackSpeaker::speaker_output_callback, this)) {
     ESP_LOGE(TAG, "Failed to register parent speaker callback");
     this->mark_failed();
   }
@@ -59,8 +58,8 @@ void ESPAudioStackSpeaker::start() {
 
   // Idempotent: register listener only once per stream session.
   bool expected = false;
-  if (!this->listener_registered_.compare_exchange_strong(
-          expected, true, std::memory_order_acq_rel, std::memory_order_relaxed))
+  if (!this->listener_registered_.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed))
     return;
 
   if (xSemaphoreTake(this->active_listeners_semaphore_, 0) != pdTRUE) {
@@ -95,16 +94,13 @@ void ESPAudioStackSpeaker::finish() {
   this->enable_loop_soon_any_context();
 }
 
-void ESPAudioStackSpeaker::speaker_output_callback_(void *ctx, uint32_t frames, int64_t timestamp) {
+void ESPAudioStackSpeaker::speaker_output_callback(void *ctx, uint32_t frames, int64_t timestamp) {
   static_cast<ESPAudioStackSpeaker *>(ctx)->audio_output_callback_.call(frames, timestamp);
 }
 
-size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length) {
-  return this->play(data, length, 0);
-}
+size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length) { return this->play(data, length, 0); }
 
-size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length,
-                                    TickType_t ticks_to_wait) {
+size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t ticks_to_wait) {
   if (this->is_failed()) {
     return 0;
   }
@@ -125,8 +121,7 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length,
 }
 
 bool ESPAudioStackSpeaker::has_buffered_data() const {
-  return this->parent_->get_speaker_buffer_available() > 0 ||
-         this->parent_->has_pending_speaker_output();
+  return this->parent_->get_speaker_buffer_available() > 0 || this->parent_->has_pending_speaker_output();
 }
 
 void ESPAudioStackSpeaker::set_volume(float volume) {
@@ -246,7 +241,6 @@ void ESPAudioStackSpeaker::loop() {
   }
 }
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

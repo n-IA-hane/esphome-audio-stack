@@ -3,7 +3,7 @@
 #ifdef USE_ESP32
 
 #include "esphome/components/ring_buffer/ring_buffer.h"
-#include "esphome/core/log.h"
+#include "audio_core_log_utils.h"
 
 #include <esp_heap_caps.h>
 #include <esp_memory_utils.h>
@@ -16,8 +16,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace esphome {
-namespace audio_core {
+namespace esphome::esp_audio_stack {
 
 /// Ring buffer allocation policy.
 ///
@@ -94,13 +93,14 @@ inline RingBufferPtr create_nosplit_prefer_psram(size_t len, const char *name) {
   return create_nosplit_ring_buffer(len, RingBufferPolicy::PREFER_PSRAM, name);
 }
 
-
 namespace detail {
 
 inline const char *policy_str(RingBufferPolicy p) {
   switch (p) {
-    case RingBufferPolicy::INTERNAL: return "internal";
-    case RingBufferPolicy::PREFER_PSRAM: return "prefer_psram";
+    case RingBufferPolicy::INTERNAL:
+      return "internal";
+    case RingBufferPolicy::PREFER_PSRAM:
+      return "prefer_psram";
   }
   return "?";
 }
@@ -202,7 +202,7 @@ inline bool CapsRingBuffer::discard_bytes_(size_t discard_bytes) {
 
 inline RingBufferPtr create_ring_buffer_with_type(size_t len, RingBufferPolicy policy, const char *name,
                                                   RingbufferType_t type) {
-  auto rb = RingBufferPtr(new CapsRingBuffer());
+  auto rb = std::make_unique<CapsRingBuffer>();
 
   bool ok = false;
   switch (policy) {
@@ -217,16 +217,16 @@ inline RingBufferPtr create_ring_buffer_with_type(size_t len, RingBufferPolicy p
   }
 
   if (!ok) {
-    ESP_LOGE("ring_buffer_caps", "ringbuffer '%s': alloc %u bytes FAILED (policy=%s)",
-             name, static_cast<unsigned>(len), detail::policy_str(policy));
+    log_error("ring_buffer_caps", "ringbuffer '%s': alloc %u bytes FAILED (policy=%s)", name,
+              static_cast<unsigned>(len), detail::policy_str(policy));
     return nullptr;
   }
 
   const void *storage = rb->probe_storage();
   const char *placement = esp_ptr_internal(storage) ? "internal" : "psram";
-  ESP_LOGI("ring_buffer_caps", "ringbuffer '%s': size=%u policy=%s type=%s placement=%s",
-           name, static_cast<unsigned>(len), detail::policy_str(policy),
-           type == RINGBUF_TYPE_NOSPLIT ? "nosplit" : "bytebuf", placement);
+  log_info("ring_buffer_caps", "ringbuffer '%s': size=%u policy=%s type=%s placement=%s", name,
+           static_cast<unsigned>(len), detail::policy_str(policy), type == RINGBUF_TYPE_NOSPLIT ? "nosplit" : "bytebuf",
+           placement);
 
   return rb;
 }
@@ -239,7 +239,6 @@ inline RingBufferPtr create_nosplit_ring_buffer(size_t len, RingBufferPolicy pol
   return create_ring_buffer_with_type(len, policy, name, RINGBUF_TYPE_NOSPLIT);
 }
 
-}  // namespace audio_core
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

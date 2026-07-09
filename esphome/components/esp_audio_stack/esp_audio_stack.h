@@ -34,22 +34,9 @@
 #include <memory>
 #include <string>
 
-#ifdef USE_AUDIO_PROCESSOR
 #include "audio_core_processor.h"
-#endif
 
-namespace esphome {
-namespace esp_audio_stack {
-
-#ifdef USE_AUDIO_PROCESSOR
-using audio_core::AudioProcessor;
-using audio_core::ProcessorTelemetry;
-#endif
-using audio_core::RingBufferPtr;
-using audio_core::ScopedLock;
-using audio_core::create_internal;
-using audio_core::create_prefer_psram;
-using audio_core::start_pinned_task;
+namespace esphome::esp_audio_stack {
 
 // Maximum listener count for microphone/speaker reference counting
 static constexpr UBaseType_t MAX_LISTENERS = 16;
@@ -115,8 +102,8 @@ class AudioEffectsRateConverter {
   AudioEffectsRateConverter(const AudioEffectsRateConverter &) = delete;
   AudioEffectsRateConverter &operator=(const AudioEffectsRateConverter &) = delete;
 
-  void init(uint32_t ratio, uint32_t src_rate = 0, uint32_t dest_rate = 0,
-            uint8_t complexity = 3, uint8_t perf_type = 1);
+  void init(uint32_t ratio, uint32_t src_rate = 0, uint32_t dest_rate = 0, uint8_t complexity = 3,
+            uint8_t perf_type = 1);
   void reset();
 
   // Contiguous int16 input.
@@ -124,11 +111,9 @@ class AudioEffectsRateConverter {
   // Preallocate scratch and open the Espressif converter before the first realtime frame.
   bool prepare(size_t in_count, bool source_32bit = false);
   // Strided int16 input: deinterleave into scratch, then rate-convert.
-  bool process_strided(const int16_t *in, int16_t *out, size_t out_count,
-                       size_t stride, size_t offset);
+  bool process_strided(const int16_t *in, int16_t *out, size_t out_count, size_t stride, size_t offset);
   // Strided int32 input with inline >>16 downshift.
-  bool process_strided_32(const int32_t *in, int16_t *out, size_t out_count,
-                          size_t stride, size_t offset);
+  bool process_strided_32(const int32_t *in, int16_t *out, size_t out_count, size_t stride, size_t offset);
 
  private:
   std::unique_ptr<AudioEffectsRateConverterImpl> impl_;
@@ -146,13 +131,12 @@ class MultiChannelAudioEffectsRateConverter {
   MultiChannelAudioEffectsRateConverter(const MultiChannelAudioEffectsRateConverter &) = delete;
   MultiChannelAudioEffectsRateConverter &operator=(const MultiChannelAudioEffectsRateConverter &) = delete;
 
-  void init(uint32_t ratio, uint8_t num_channels, uint32_t src_rate = 0, uint32_t dest_rate = 0,
-            uint8_t complexity = 3, uint8_t perf_type = 1);
+  void init(uint32_t ratio, uint8_t num_channels, uint32_t src_rate = 0, uint32_t dest_rate = 0, uint8_t complexity = 3,
+            uint8_t perf_type = 1);
   void reset();
   // Preallocate scratch and per-channel output buffers before the first
   // realtime TDM/stereo conversion frame.
-  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels,
-               uint8_t source_channels, bool source_32bit);
+  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit);
 
   // Convert N channels from strided int16 TDM input, producing:
   //   - mic_interleaved: [mic1, mic2, mic1, mic2, ...] (num_mic_ch interleaved, for AFE)
@@ -160,15 +144,11 @@ class MultiChannelAudioEffectsRateConverter {
   //   - ref_out: ref contiguous (for AEC, may be nullptr if no ref channel)
   // channel_offsets: slot indices in TDM frame [mic1_slot, mic2_slot, ref_slot]
   // num_mic_ch: 1 or 2 (how many of the channels are mic, rest is ref)
-  bool process_multi(const int16_t *in, size_t out_count, size_t in_stride,
-                     const uint8_t *channel_offsets,
-                     int16_t *mic_interleaved, int16_t *mic_mono,
-                     int16_t *ref_out, uint8_t num_mic_ch);
+  bool process_multi(const int16_t *in, size_t out_count, size_t in_stride, const uint8_t *channel_offsets,
+                     int16_t *mic_interleaved, int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch);
   // Same but for 32-bit I2S input with inline >>16 downshift.
-  bool process_multi_32(const int32_t *in, size_t out_count, size_t in_stride,
-                        const uint8_t *channel_offsets,
-                        int16_t *mic_interleaved, int16_t *mic_mono,
-                        int16_t *ref_out, uint8_t num_mic_ch);
+  bool process_multi_32(const int32_t *in, size_t out_count, size_t in_stride, const uint8_t *channel_offsets,
+                        int16_t *mic_interleaved, int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch);
 
  private:
   std::unique_ptr<MultiChannelAudioEffectsRateConverterImpl> impl_;
@@ -246,8 +226,8 @@ class ESPAudioStack : public Component {
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   void set_codec_i2c_bus(i2c::I2CBus *bus) { this->codec_backend_.set_i2c_bus(bus); }
-  void configure_es7210_codec(uint8_t address, uint8_t mic_selected, float input_gain_db,
-                              bool has_ref_channel_gain, uint8_t ref_channel, float ref_channel_gain_db) {
+  void configure_es7210_codec(uint8_t address, uint8_t mic_selected, float input_gain_db, bool has_ref_channel_gain,
+                              uint8_t ref_channel, float ref_channel_gain_db) {
     CodecDevBackend::Es7210Config cfg;
     cfg.enabled = true;
     cfg.address = address;
@@ -298,10 +278,8 @@ class ESPAudioStack : public Component {
   }
 #endif
 
-#ifdef USE_AUDIO_PROCESSOR
   // Optional AEC/AFE processor attachment.
-  void set_processor(AudioProcessor *aec);
-#endif
+  void set_processor(AudioProcessor *processor);
   void set_processor_enabled(bool enabled) { this->processor_enabled_.store(enabled, std::memory_order_relaxed); }
   bool is_processor_enabled() const { return this->processor_enabled_.load(std::memory_order_relaxed); }
 
@@ -341,7 +319,8 @@ class ESPAudioStack : public Component {
   void set_tdm_ref_slot(uint8_t slot) { this->tdm_ref_slot_ = slot; }
   void set_tdm_tx_slot(uint8_t slot) { this->tdm_tx_slot_ = slot; }
   void set_tdm_slot_level_sensor_enabled(uint8_t slot, bool enabled) {
-    if (slot >= 8) return;
+    if (slot >= 8)
+      return;
     this->tdm_slot_level_sensor_enabled_[slot] = enabled;
     bool any = false;
     for (bool slot_enabled : this->tdm_slot_level_sensor_enabled_) {
@@ -350,14 +329,17 @@ class ESPAudioStack : public Component {
     this->any_tdm_slot_level_sensor_enabled_.store(any, std::memory_order_relaxed);
   }
   float get_tdm_slot_level_dbfs(uint8_t slot) const {
-    if (slot >= 8) return -120.0f;
+    if (slot >= 8)
+      return -120.0f;
     return this->tdm_slot_level_dbfs_[slot].load(std::memory_order_relaxed);
   }
 
   // Microphone interface
   bool add_mic_data_callback(MicDataCallback callback, void *ctx) {
-    if (callback == nullptr) return false;
-    if (this->mic_callback_count_ >= MAX_LISTENERS) return false;
+    if (callback == nullptr)
+      return false;
+    if (this->mic_callback_count_ >= MAX_LISTENERS)
+      return false;
     this->mic_callbacks_[this->mic_callback_count_++] = MicCallbackSlot{callback, ctx};
     return true;
   }
@@ -402,10 +384,11 @@ class ESPAudioStack : public Component {
 
   // Speaker output callback registration (for mixer pending_playback_frames tracking)
   bool add_speaker_output_callback(SpeakerOutputCallback callback, void *ctx) {
-    if (callback == nullptr) return false;
-    if (this->speaker_output_callback_count_ >= MAX_LISTENERS) return false;
-    this->speaker_output_callbacks_[this->speaker_output_callback_count_++] =
-        SpeakerOutputCallbackSlot{callback, ctx};
+    if (callback == nullptr)
+      return false;
+    if (this->speaker_output_callback_count_ >= MAX_LISTENERS)
+      return false;
+    this->speaker_output_callbacks_[this->speaker_output_callback_count_++] = SpeakerOutputCallbackSlot{callback, ctx};
     return true;
   }
 
@@ -447,6 +430,7 @@ class ESPAudioStack : public Component {
   void set_telemetry_log_interval_frames(uint16_t frames) { this->telemetry_log_interval_frames_ = frames; }
   void set_rate_cvt_complexity(uint8_t complexity) { this->rate_cvt_complexity_ = complexity; }
   void set_rate_cvt_perf_type(uint8_t perf_type) { this->rate_cvt_perf_type_ = perf_type; }
+
  protected:
   bool init_audio_stack_();
   bool prepare_i2s_channels_();
@@ -474,8 +458,8 @@ class ESPAudioStack : public Component {
   struct AudioTaskCtx {
     // ── Invariants (set once at task start) ──
     uint32_t ratio{1};
-    uint8_t i2s_bps{2};       // 2 or 4 bytes per I2S sample
-    uint8_t num_ch{1};        // TX channels
+    uint8_t i2s_bps{2};  // 2 or 4 bytes per I2S sample
+    uint8_t num_ch{1};   // TX channels
     bool use_stereo_aec_ref{false};
     bool rx_slot_mode_stereo{false};
     bool use_tdm_bus{false};
@@ -539,7 +523,7 @@ class ESPAudioStack : public Component {
     int16_t *output_buffer{nullptr};  // points to mic_buffer or aec_output
     size_t current_output_frame_bytes{0};
     size_t current_output_frame_size{0};
-    bool mic_separate{false};         // true if mic_buffer != rx_buffer
+    bool mic_separate{false};  // true if mic_buffer != rx_buffer
     bool need_rx_processing{false};
     bool need_rx_drain{false};
     bool need_tx_audio{false};
@@ -566,7 +550,6 @@ class ESPAudioStack : public Component {
     size_t speaker_got{0};  // bytes actually read from speaker ring buffer
     bool mic_running{false};
     uint32_t now_ms{0};
-
   };
 
   // Refactored audio processing functions (called from audio_task_ main loop)
@@ -609,7 +592,7 @@ class ESPAudioStack : public Component {
     uint32_t real_frames{0};
     uint32_t trailing_silence_frames{0};
   };
-  static bool IRAM_ATTR tx_on_sent_cb_(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+  static bool IRAM_ATTR tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
   bool prepare_tx_completion_tracking_();
   bool prime_tx_completion_records_(bool preload_dma);
   void drain_tx_completion_events_();
@@ -646,7 +629,7 @@ class ESPAudioStack : public Component {
   bool correct_dc_offset_{false};      // IIR high-pass filter to remove mic DC bias
   uint8_t num_channels_{1};            // Physical STD TX bus channels: 1 or 2
   uint8_t speaker_channels_{1};        // Public ESPHome speaker stream channels
-  bool i2s_mode_secondary_{false};     // false = master (primary), true = slave (secondary)
+  bool i2s_mode_secondary_{false};     // false = primary controller, true = secondary peripheral
   bool use_apll_{false};               // Use APLL clock source (ESP32 original only)
   uint8_t i2s_num_{0};                 // I2S port number (0 or 1)
   uint32_t mclk_multiple_{256};        // MCLK multiple: 128, 256, 384, or 512
@@ -656,7 +639,7 @@ class ESPAudioStack : public Component {
   bool tx_slot_right_{false};          // TX mono slot: false=LEFT (default), true=RIGHT
   uint8_t slot_bit_width_{0};          // 0 = auto (match bits_per_sample), or 16/24/32
   uint32_t output_sample_rate_{0};     // 0 = use sample_rate_ (no rate conversion)
-  uint32_t rate_conversion_ratio_{1};       // sample_rate_ / output_sample_rate_ (computed in setup)
+  uint32_t rate_conversion_ratio_{1};  // sample_rate_ / output_sample_rate_ (computed in setup)
   uint8_t rate_cvt_complexity_{3};     // esp_ae_rate_cvt complexity, 1..3
   uint8_t rate_cvt_perf_type_{1};      // esp_ae_rate_cvt perf type: 0=memory, 1=speed
 
@@ -665,10 +648,10 @@ class ESPAudioStack : public Component {
   MultiChannelAudioEffectsRateConverter rx_rate_converter_;  // Multi-channel: TDM/stereo RX path
 #endif
 #ifdef USE_ESP_AUDIO_STACK_MONO_RX
-  AudioEffectsRateConverter mic_rate_converter_;             // Mono RX without TDM/stereo
+  AudioEffectsRateConverter mic_rate_converter_;  // Mono RX without TDM/stereo
 #endif
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
-  AudioEffectsRateConverter play_ref_rate_converter_;        // Mono mode: bus-rate ref from play() converted in audio_task
+  AudioEffectsRateConverter play_ref_rate_converter_;  // Mono mode: bus-rate ref from play() converted in audio_task
 #endif
 
   // I2S handles managed as a coordinated RX/TX pair
@@ -733,9 +716,9 @@ class ESPAudioStack : public Component {
   std::atomic<bool> teardown_pending_{false};
 
   AudioStackRuntimeState compute_runtime_state_() const;
-  static const char *runtime_state_to_string_(AudioStackRuntimeState state);
+  static const char *runtime_state_to_string(AudioStackRuntimeState state);
   void update_runtime_state_();
-  static const char *i2s_hardware_state_to_string_(I2SHardwareState state);
+  static const char *i2s_hardware_state_to_string(I2SHardwareState state);
   void set_i2s_hardware_state_(I2SHardwareState state);
   void log_memory_snapshot_(const char *label) const;
   void service_speaker_reset_();
@@ -772,50 +755,48 @@ class ESPAudioStack : public Component {
   size_t speaker_buffer_size_{0};  // Actual allocated size (scales with rate_conversion_ratio_)
   uint32_t speaker_buffer_duration_ms_{500};
 
-#ifdef USE_AUDIO_PROCESSOR
   // Optional AEC/AFE processor support.
   AudioProcessor *processor_{nullptr};
-#endif
   std::atomic<bool> processor_enabled_{false};  // Runtime toggle (only enabled when processor_ is set)
   std::atomic<bool> processor_background_consumer_registered_{false};
   void sync_processor_background_consumer_();
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
-  int16_t *direct_aec_ref_{nullptr};     // TX-side converted reference storage/scratch (processor rate)
-  bool direct_aec_ref_valid_{false};     // True after first previous_frame reference has been saved
+  int16_t *direct_aec_ref_{nullptr};  // TX-side converted reference storage/scratch (processor rate)
+  bool direct_aec_ref_valid_{false};  // True after first previous_frame reference has been saved
 #endif
 
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
   // AEC ring buffer reference (TYPE2-style, for no-codec setups)
-  uint32_t aec_ref_buffer_ms_{80};       // Config: ring buffer size in ms
+  uint32_t aec_ref_buffer_ms_{80};     // Config: ring buffer size in ms
   RingBufferPtr aec_ref_ring_buffer_;  // Ring buffer for AEC ref (processor rate, post-volume)
 #endif
 
   // Gain controls (atomic: written from main loop, read from audio task via snapshot)
-  std::atomic<float> mic_gain_{1.0f};         // Public/debug value, applied AFTER AEC.
+  std::atomic<float> mic_gain_{1.0f};             // Public/debug value, applied AFTER AEC.
   std::atomic<int32_t> mic_gain_q31_{INT32_MAX};  // Official esp-audio-libs attenuation path.
-  std::atomic<int8_t> mic_gain_boost_db_{0};  // >0 dB via official esp_ae_alc.
-  std::atomic<float> input_gain_{1.0f};  // Public/debug value before the processor.
+  std::atomic<int8_t> mic_gain_boost_db_{0};      // >0 dB via official esp_ae_alc.
+  std::atomic<float> input_gain_{1.0f};           // Public/debug value before the processor.
   std::atomic<int32_t> input_gain_q31_{INT32_MAX};
   std::atomic<float> input_gain_boost_{1.0f};
-  std::atomic<float> master_volume_public_{1.0f};  // public/debug master value
+  std::atomic<float> master_volume_public_{1.0f};          // public/debug master value
   std::atomic<int32_t> hot_output_volume_q31_{INT32_MAX};  // combined hot-path fixed-point output volume
-  std::atomic<int32_t> output_volume_q31_{INT32_MAX};   // media_player/speaker abstraction volume
-  std::atomic<int32_t> master_volume_q31_{INT32_MAX};   // board master volume
-  std::atomic<float> master_volume_linear_{1.0f};    // unclipped user value for hardware codec volume APIs
-  float master_volume_min_db_{-49.0f};  // 0..100% master curve floor; 0% remains hard mute
+  std::atomic<int32_t> output_volume_q31_{INT32_MAX};      // media_player/speaker abstraction volume
+  std::atomic<int32_t> master_volume_q31_{INT32_MAX};      // board master volume
+  std::atomic<float> master_volume_linear_{1.0f};          // unclipped user value for hardware codec volume APIs
+  float master_volume_min_db_{-49.0f};                     // 0..100% master curve floor; 0% remains hard mute
   void *mic_alc_handle_{nullptr};
   int8_t mic_alc_gain_db_{0};
-  bool use_stereo_aec_ref_{false}; // ES8311 digital feedback: RX stereo with L=mic, R=ref
-  bool ref_channel_right_{false};  // Which channel is AEC reference: false=L, true=R
+  bool use_stereo_aec_ref_{false};  // ES8311 digital feedback: RX stereo with L=mic, R=ref
+  bool ref_channel_right_{false};   // Which channel is AEC reference: false=L, true=R
 
   // TDM bus/reference (ES7210 in TDM mode)
   bool use_tdm_bus_{false};
   bool use_tdm_ref_{false};
   uint8_t tdm_total_slots_{4};
-  uint8_t tdm_mic_slot_{0};    // TDM slot index for voice mic
+  uint8_t tdm_mic_slot_{0};         // TDM slot index for voice mic
   int8_t tdm_second_mic_slot_{-1};  // Optional second mic slot for dual-mic AFE
-  uint8_t tdm_ref_slot_{1};    // TDM slot index for AEC reference
-  uint8_t tdm_tx_slot_{0};     // TDM slot index for speaker TX
+  uint8_t tdm_ref_slot_{1};         // TDM slot index for AEC reference
+  uint8_t tdm_tx_slot_{0};          // TDM slot index for speaker TX
   bool tdm_slot_level_sensor_enabled_[8] = {false};
   std::atomic<bool> any_tdm_slot_level_sensor_enabled_{false};
   std::atomic<float> tdm_slot_level_dbfs_[8] = {};
@@ -826,19 +807,20 @@ class ESPAudioStack : public Component {
   static constexpr uint32_t AEC_ACTIVE_TIMEOUT_MS{250};
 
   // Task configuration (defaults match ESP-IDF audio best practices)
-  uint8_t task_priority_{19};     // Above lwIP(18), below WiFi(23)
-  int8_t task_core_{0};           // Core 0: canonical Espressif AEC pattern; -1 = unpinned
+  uint8_t task_priority_{19};  // Above lwIP(18), below WiFi(23)
+  int8_t task_core_{0};        // Core 0: canonical Espressif AEC pattern; -1 = unpinned
   uint32_t task_stack_size_{8192};
   uint32_t dma_desc_num_{6};
   uint32_t dma_frame_num_{0};
   bool dma_frame_num_configured_{false};
-  bool buffers_in_psram_{false};  // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)
+  bool buffers_in_psram_{false};           // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)
   bool audio_task_stack_in_psram_{false};  // Audio task stack in PSRAM (saves ~8KB internal RAM)
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
-  bool aec_ref_ring_in_psram_{false};  // AEC reference ring in PSRAM (saves ~3-5 KB internal, costs ~13.6 us/frame Core 0)
+  bool aec_ref_ring_in_psram_{
+      false};  // AEC reference ring in PSRAM (saves ~3-5 KB internal, costs ~13.6 us/frame Core 0)
 #endif
   StackType_t *audio_task_stack_{nullptr};  // Owned when audio_task_stack_in_psram_ is true
-  StaticTask_t audio_task_tcb_{};            // Static TCB for the permanent audio task
+  StaticTask_t audio_task_tcb_{};           // Static TCB for the permanent audio task
   uint16_t telemetry_log_interval_frames_{128};
 
   // Error propagation: set by audio_task_ on persistent I2S failures
@@ -894,7 +876,6 @@ class ESPAudioStack : public Component {
   void *tx_bit_cvt_handle_{nullptr};
   uint8_t tx_bit_cvt_channels_{0};
 #endif
-
 };
 
 // Native actions for YAML automations
@@ -918,7 +899,6 @@ template<typename... Ts> class IsIdleCondition : public Condition<Ts...>, public
   bool check(const Ts &...x) override { return this->parent_->is_idle(); }
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

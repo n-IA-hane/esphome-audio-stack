@@ -34,8 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
 static const char *const TAG = "i2s_codec_dev";
 
@@ -93,8 +92,7 @@ static int ctrl_read_reg(const audio_codec_ctrl_if_t *ctrl, int reg, int reg_len
   if (!encode_reg(reg, reg_len, reg_buf)) {
     return ESP_CODEC_DEV_INVALID_ARG;
   }
-  auto result = self->bus->write_readv(self->address, reg_buf, reg_len,
-                                       static_cast<uint8_t *>(data), data_len);
+  auto result = self->bus->write_readv(self->address, reg_buf, reg_len, static_cast<uint8_t *>(data), data_len);
   return result == i2c::NO_ERROR ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_READ_FAIL;
 }
 
@@ -200,8 +198,7 @@ const char *CodecDevBackend::output_codec_name() const {
 }
 
 const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecConfig &config, bool input,
-                                                            uint16_t mclk_div,
-                                                            const audio_codec_ctrl_if_t **ctrl) {
+                                                            uint16_t mclk_div, const audio_codec_ctrl_if_t **ctrl) {
   if (!config.enabled || ctrl == nullptr) {
     return nullptr;
   }
@@ -270,9 +267,8 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
   }
 }
 
-bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
-                            i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
-                            i2s_clock_src_t clk_src, uint32_t mclk_multiple) {
+bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle,
+                            i2s_chan_handle_t rx_handle, i2s_clock_src_t clk_src, uint32_t mclk_multiple) {
   this->teardown();
   const uint16_t codec_mclk_div = mclk_multiple == 0 ? 256 : static_cast<uint16_t>(mclk_multiple);
 
@@ -354,8 +350,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     return false;
 #endif
   } else if (rx_handle != nullptr && this->input_codec_.enabled) {
-    this->rx_codec_if_ =
-        this->new_generic_codec_(this->input_codec_, true, codec_mclk_div, &this->input_codec_ctrl_);
+    this->rx_codec_if_ = this->new_generic_codec_(this->input_codec_, true, codec_mclk_div, &this->input_codec_ctrl_);
     if (this->rx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create %s ADC codec interface", this->input_codec_name());
       return false;
@@ -407,12 +402,11 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
 
   this->prepared_ = true;
 #ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
-  ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s, data_if=%s)",
-           this->input_codec_name(), this->output_codec_name(),
-           shared_i2s_data ? "shared" : "split");
+  ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s, data_if=%s)", this->input_codec_name(),
+           this->output_codec_name(), shared_i2s_data ? "shared" : "split");
 #else
-  ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s)",
-           this->input_codec_name(), this->output_codec_name());
+  ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s)", this->input_codec_name(),
+           this->output_codec_name());
 #endif
   return true;
 }
@@ -510,8 +504,10 @@ void CodecDevBackend::set_output_volume_curve(float min_db) {
   if (!std::isfinite(min_db)) {
     return;
   }
-  if (min_db < -96.0f) min_db = -96.0f;
-  if (min_db > 0.0f) min_db = 0.0f;
+  if (min_db < -96.0f)
+    min_db = -96.0f;
+  if (min_db > 0.0f)
+    min_db = 0.0f;
   this->output_volume_min_db_ = min_db;
   this->output_volume_curve_configured_ = true;
   this->apply_output_volume_curve_();
@@ -608,7 +604,6 @@ void CodecDevBackend::teardown() {
   this->open_ = false;
 }
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32 && USE_ESP_AUDIO_STACK_HARDWARE_CODEC

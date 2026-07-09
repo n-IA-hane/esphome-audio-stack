@@ -1,26 +1,37 @@
 """Number platform for ESP Audio Stack - mic gain and Master Volume"""
-import esphome.codegen as cg
-import esphome.config_validation as cv
-from esphome.components import number, speaker
-from esphome.const import CONF_MAX_VALUE, CONF_MIN_VALUE, ENTITY_CATEGORY_CONFIG, UNIT_PERCENT
 
-from . import esp_audio_stack_ns, ESPAudioStack, CONF_ESP_AUDIO_STACK_ID
-CONF_MIC_GAIN = "mic_gain"
+import esphome.codegen as cg
+from esphome.components import number, speaker
+import esphome.config_validation as cv
+from esphome.const import (
+    CONF_MAX_VALUE,
+    CONF_MIC_GAIN,
+    CONF_MIN_VALUE,
+    ENTITY_CATEGORY_CONFIG,
+    UNIT_PERCENT,
+)
+
+from . import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
+
 CONF_MASTER_VOLUME = "master_volume"
 CONF_SPEAKER_ID = "speaker_id"
 
 # Number classes
 MicGainNumber = esp_audio_stack_ns.class_("MicGainNumber", number.Number, cg.Component)
-MasterVolumeNumber = esp_audio_stack_ns.class_("MasterVolumeNumber", number.Number, cg.Component)
+MasterVolumeNumber = esp_audio_stack_ns.class_(
+    "MasterVolumeNumber", number.Number, cg.Component
+)
 
 MIC_GAIN_SCHEMA = number.number_schema(
     MicGainNumber,
     entity_category=ENTITY_CATEGORY_CONFIG,
     icon="mdi:microphone",
-).extend({
-    cv.Optional(CONF_MIN_VALUE, default=-20.0): cv.float_range(min=-20.0, max=30.0),
-    cv.Optional(CONF_MAX_VALUE, default=30.0): cv.float_range(min=-20.0, max=30.0),
-})
+).extend(
+    {
+        cv.Optional(CONF_MIN_VALUE, default=-20.0): cv.float_range(min=-20.0, max=30.0),
+        cv.Optional(CONF_MAX_VALUE, default=30.0): cv.float_range(min=-20.0, max=30.0),
+    }
+)
 
 
 def _validate_mic_gain_range(config):
@@ -31,18 +42,22 @@ def _validate_mic_gain_range(config):
 
 MIC_GAIN_SCHEMA = cv.All(MIC_GAIN_SCHEMA, _validate_mic_gain_range)
 
-CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_ESP_AUDIO_STACK_ID): cv.use_id(ESPAudioStack),
-    cv.Optional(CONF_MIC_GAIN): MIC_GAIN_SCHEMA,
-    cv.Optional(CONF_MASTER_VOLUME): number.number_schema(
-        MasterVolumeNumber,
-        entity_category=ENTITY_CATEGORY_CONFIG,
-        icon="mdi:volume-high",
-        unit_of_measurement=UNIT_PERCENT,
-    ).extend({
-        cv.Optional(CONF_SPEAKER_ID): cv.use_id(speaker.Speaker),
-    }),
-})
+CONFIG_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_ESP_AUDIO_STACK_ID): cv.use_id(ESPAudioStack),
+        cv.Optional(CONF_MIC_GAIN): MIC_GAIN_SCHEMA,
+        cv.Optional(CONF_MASTER_VOLUME): number.number_schema(
+            MasterVolumeNumber,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:volume-high",
+            unit_of_measurement=UNIT_PERCENT,
+        ).extend(
+            {
+                cv.Optional(CONF_SPEAKER_ID): cv.use_id(speaker.Speaker),
+            }
+        ),
+    }
+)
 
 
 async def _setup_mic_gain(config, key, parent):

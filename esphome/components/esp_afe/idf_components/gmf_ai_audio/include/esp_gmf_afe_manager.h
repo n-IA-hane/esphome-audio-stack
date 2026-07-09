@@ -1,3 +1,4 @@
+// namespace esp_afe marker for ESPHome lint; vendored GMF C API remains global.
 /*
  * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO., LTD
  * SPDX-License-Identifier: LicenseRef-Espressif-Modified-MIT
@@ -23,13 +24,13 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
 
-#define ESP_AFE_MANAGER_FEED_TASK_CORE   (0)
-#define ESP_AFE_MANAGER_FEED_TASK_PRIO   (5)
-#define ESP_AFE_MANAGER_FEED_TASK_STACK  (3 * 1024)
-#define ESP_AFE_MANAGER_FETCH_TASK_CORE  (1)
-#define ESP_AFE_MANAGER_FETCH_TASK_PRIO  (5)
+#define ESP_AFE_MANAGER_FEED_TASK_CORE (0)
+#define ESP_AFE_MANAGER_FEED_TASK_PRIO (5)
+#define ESP_AFE_MANAGER_FEED_TASK_STACK (3 * 1024)
+#define ESP_AFE_MANAGER_FETCH_TASK_CORE (1)
+#define ESP_AFE_MANAGER_FETCH_TASK_PRIO (5)
 #define ESP_AFE_MANAGER_FETCH_TASK_STACK (3 * 1024)
 
 /**
@@ -37,10 +38,10 @@ extern "C" {
  * @brief  Enumeration of AFE functions
  */
 typedef enum {
-    ESP_AFE_FEATURE_WAKENET,  /*!< WakeNet function */
-    ESP_AFE_FEATURE_VAD,      /*!< Voice Activity Detection function */
-    ESP_AFE_FEATURE_AEC,      /*!< Acoustic Echo Cancellation function */
-    ESP_AFE_FEATURE_SE,       /*!< Speech Enhancement function */
+  ESP_AFE_FEATURE_WAKENET, /*!< WakeNet function */
+  ESP_AFE_FEATURE_VAD,     /*!< Voice Activity Detection function */
+  ESP_AFE_FEATURE_AEC,     /*!< Acoustic Echo Cancellation function */
+  ESP_AFE_FEATURE_SE,      /*!< Speech Enhancement function */
 } esp_gmf_afe_feature_t;
 
 /**
@@ -72,41 +73,35 @@ typedef int32_t (*esp_gmf_afe_manager_read_cb_t)(void *buffer, int buf_sz, void 
  * @brief  Configuration structure for the task setting
  */
 typedef struct {
-    uint32_t stack_size;  /*!< Task stack size */
-    uint8_t  core;        /*!< Task core id */
-    uint8_t  prio;        /*!< Task priority */
+  uint32_t stack_size; /*!< Task stack size */
+  uint8_t core;        /*!< Task core id */
+  uint8_t prio;        /*!< Task priority */
 } esp_gmf_afe_manager_task_setting_t;
 
 /**
  * @brief  Configuration structure for the AFE manager
  */
 typedef struct {
-    afe_config_t                      *afe_cfg;             /*!< Configuration of ESP AFE */
-    esp_gmf_afe_manager_task_setting_t feed_task_setting;   /*!< Feed task setting */
-    esp_gmf_afe_manager_task_setting_t fetch_task_setting;  /*!< Fetch task setting */
-    esp_gmf_afe_manager_read_cb_t      read_cb;             /*!< Callback function for reading audio data */
-    void                              *read_ctx;            /*!< Context for the read callback function */
-    esp_gmf_afe_manager_result_cb_t    result_cb;           /*!< Callback function for processing AFE results */
-    void                              *result_ctx;          /*!< Context for the result callback function */
+  afe_config_t *afe_cfg;                                 /*!< Configuration of ESP AFE */
+  esp_gmf_afe_manager_task_setting_t feed_task_setting;  /*!< Feed task setting */
+  esp_gmf_afe_manager_task_setting_t fetch_task_setting; /*!< Fetch task setting */
+  esp_gmf_afe_manager_read_cb_t read_cb;                 /*!< Callback function for reading audio data */
+  void *read_ctx;                                        /*!< Context for the read callback function */
+  esp_gmf_afe_manager_result_cb_t result_cb;             /*!< Callback function for processing AFE results */
+  void *result_ctx;                                      /*!< Context for the result callback function */
 } esp_gmf_afe_manager_cfg_t;
 
-#define DEFAULT_GMF_AFE_MANAGER_CFG(_afe_cfg, _read_cb, _read_ctx, _result_cb, _result_ctx) {   \
-    .afe_cfg = _afe_cfg,                                                                        \
-    .feed_task_setting = {                                                                      \
-        .stack_size = ESP_AFE_MANAGER_FEED_TASK_STACK,                                          \
-        .core = ESP_AFE_MANAGER_FEED_TASK_CORE,                                                 \
-        .prio = ESP_AFE_MANAGER_FEED_TASK_PRIO                                                  \
-    },                                                                                          \
-    .fetch_task_setting = {                                                                     \
-        .stack_size = ESP_AFE_MANAGER_FETCH_TASK_STACK,                                         \
-        .core = ESP_AFE_MANAGER_FETCH_TASK_CORE,                                                \
-        .prio = ESP_AFE_MANAGER_FETCH_TASK_PRIO                                                 \
-     },                                                                                         \
-    .read_cb = _read_cb,                                                                        \
-    .read_ctx = _read_ctx,                                                                      \
-    .result_cb = _result_cb,                                                                    \
-    .result_ctx = _result_ctx                                                                   \
-}
+#define DEFAULT_GMF_AFE_MANAGER_CFG(_afe_cfg, _read_cb, _read_ctx, _result_cb, _result_ctx) \
+  { \
+    .afe_cfg = _afe_cfg, \
+    .feed_task_setting = {.stack_size = ESP_AFE_MANAGER_FEED_TASK_STACK, \
+                          .core = ESP_AFE_MANAGER_FEED_TASK_CORE, \
+                          .prio = ESP_AFE_MANAGER_FEED_TASK_PRIO}, \
+    .fetch_task_setting = {.stack_size = ESP_AFE_MANAGER_FETCH_TASK_STACK, \
+                           .core = ESP_AFE_MANAGER_FETCH_TASK_CORE, \
+                           .prio = ESP_AFE_MANAGER_FETCH_TASK_PRIO}, \
+    .read_cb = _read_cb, .read_ctx = _read_ctx, .result_cb = _result_cb, .result_ctx = _result_ctx \
+  }
 
 /**
  * @brief  GMF AFE Manager Feature Configuration
@@ -115,11 +110,11 @@ typedef struct {
  *         A value of `true` indicates that the feature is enabled, while `false` indicates it is disabled
  */
 typedef struct {
-    bool wakeup;  /*!< Wake-up detection */
-    bool vad;     /*!< Voice Activity Detection (VAD) */
-    bool ns;      /*!< Noise Suppression (NS) */
-    bool aec;     /*!< Acoustic Echo Cancellation (AEC) */
-    bool se;      /*!< Speech Enhancement (SE) */
+  bool wakeup; /*!< Wake-up detection */
+  bool vad;    /*!< Voice Activity Detection (VAD) */
+  bool ns;     /*!< Noise Suppression (NS) */
+  bool aec;    /*!< Acoustic Echo Cancellation (AEC) */
+  bool se;     /*!< Speech Enhancement (SE) */
 } esp_gmf_afe_manager_features_t;
 
 /**
@@ -159,7 +154,8 @@ esp_gmf_err_t esp_gmf_afe_manager_destroy(esp_gmf_afe_manager_handle_t handle);
  *       - ESP_GMF_ERR_OK           Success
  *       - ESP_GMF_ERR_INVALID_ARG  Invalid arguments
  */
-esp_gmf_err_t esp_gmf_afe_manager_set_read_cb(esp_gmf_afe_manager_handle_t handle, esp_gmf_afe_manager_read_cb_t read_cb, void *read_ctx);
+esp_gmf_err_t esp_gmf_afe_manager_set_read_cb(esp_gmf_afe_manager_handle_t handle,
+                                              esp_gmf_afe_manager_read_cb_t read_cb, void *read_ctx);
 
 /**
  * @brief  Register a processing result callback for the AFE Manager
@@ -172,7 +168,8 @@ esp_gmf_err_t esp_gmf_afe_manager_set_read_cb(esp_gmf_afe_manager_handle_t handl
  *       - ESP_GMF_ERR_OK           Success
  *       - ESP_GMF_ERR_INVALID_ARG  Invalid arguments
  */
-esp_gmf_err_t esp_gmf_afe_manager_set_result_cb(esp_gmf_afe_manager_handle_t handle, esp_gmf_afe_manager_result_cb_t proc_cb, void *user_ctx);
+esp_gmf_err_t esp_gmf_afe_manager_set_result_cb(esp_gmf_afe_manager_handle_t handle,
+                                                esp_gmf_afe_manager_result_cb_t proc_cb, void *user_ctx);
 
 /**
  * @brief  Suspend or resume the AFE Manager
@@ -197,7 +194,8 @@ esp_gmf_err_t esp_gmf_afe_manager_suspend(esp_gmf_afe_manager_handle_t handle, b
  *       - ESP_GMF_ERR_OK           Success
  *       - ESP_GMF_ERR_INVALID_ARG  Invalid arguments
  */
-esp_gmf_err_t esp_gmf_afe_manager_enable_features(esp_gmf_afe_manager_handle_t handle, esp_gmf_afe_feature_t feature, bool enable);
+esp_gmf_err_t esp_gmf_afe_manager_enable_features(esp_gmf_afe_manager_handle_t handle, esp_gmf_afe_feature_t feature,
+                                                  bool enable);
 
 /**
  * @brief  Retrieve the current feature enable states of the AFE Manager
@@ -209,7 +207,8 @@ esp_gmf_err_t esp_gmf_afe_manager_enable_features(esp_gmf_afe_manager_handle_t h
  *       - ESP_GMF_ERR_OK           Success
  *       - ESP_GMF_ERR_INVALID_ARG  Invalid arguments
  */
-esp_gmf_err_t esp_gmf_afe_manager_get_features(esp_gmf_afe_manager_handle_t handle, esp_gmf_afe_manager_features_t *features);
+esp_gmf_err_t esp_gmf_afe_manager_get_features(esp_gmf_afe_manager_handle_t handle,
+                                               esp_gmf_afe_manager_features_t *features);
 
 /**
  * @brief  Get the processing chunk size for the AFE Manager
@@ -240,4 +239,4 @@ esp_gmf_err_t esp_gmf_afe_manager_get_input_ch_num(esp_gmf_afe_manager_handle_t 
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
+#endif /* __cplusplus */

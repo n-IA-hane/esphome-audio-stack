@@ -7,8 +7,7 @@
 #include "esphome/core/log.h"
 #include "../audio_core_log_utils.h"
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
 static const char *const TAG = "audio_stack.mic";
 
@@ -38,7 +37,7 @@ void ESPAudioStackMicrophone::setup() {
 
   // Standard microphone output is always post-processor. MWW, VA and
   // call components all consume the same cleaned stream.
-  if (!this->parent_->add_mic_data_callback(ESPAudioStackMicrophone::mic_data_callback_, this)) {
+  if (!this->parent_->add_mic_data_callback(ESPAudioStackMicrophone::mic_data_callback, this)) {
     ESP_LOGE(TAG, "Failed to register parent mic callback");
     this->mark_failed();
   }
@@ -89,7 +88,7 @@ void ESPAudioStackMicrophone::stop() {
   this->enable_loop_soon_any_context();
 }
 
-void ESPAudioStackMicrophone::mic_data_callback_(void *ctx, const uint8_t *data, size_t len) {
+void ESPAudioStackMicrophone::mic_data_callback(void *ctx, const uint8_t *data, size_t len) {
   static_cast<ESPAudioStackMicrophone *>(ctx)->on_audio_data_(data, len);
 }
 
@@ -99,8 +98,8 @@ void ESPAudioStackMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
   }
 
   if (len > this->audio_buffer_.capacity()) {
-    LOG_W_THROTTLED("Mic callback frame too large: %u > %u bytes; dropping",
-                    (unsigned) len, (unsigned) this->audio_buffer_.capacity());
+    LOG_W_THROTTLED("Mic callback frame too large: %u > %u bytes; dropping", (unsigned) len,
+                    (unsigned) this->audio_buffer_.capacity());
     return;
   }
   this->audio_buffer_.resize(len);
@@ -113,9 +112,11 @@ void ESPAudioStackMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
   // ESPHome's base Microphone wrapper allocates a temporary zero vector when
   // mute_state_ is true. We have already zero-filled the preallocated callback
   // buffer, so clear the flag only while dispatching to avoid RT-task heap churn.
-  if (muted) this->mute_state_ = false;
+  if (muted)
+    this->mute_state_ = false;
   this->data_callbacks_.call(this->audio_buffer_);
-  if (muted) this->mute_state_ = true;
+  if (muted)
+    this->mute_state_ = true;
 }
 
 void ESPAudioStackMicrophone::loop() {
@@ -179,7 +180,6 @@ void ESPAudioStackMicrophone::loop() {
   }
 }
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

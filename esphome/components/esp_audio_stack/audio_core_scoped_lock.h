@@ -5,8 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-namespace esphome {
-namespace audio_core {
+namespace esphome::esp_audio_stack {
 
 /// RAII guard around a FreeRTOS mutex / counting semaphore handle, with an
 /// optional acquire timeout.
@@ -23,7 +22,7 @@ namespace audio_core {
 ///
 /// Usage:
 /// \code
-///   audio_core::ScopedLock lock(this->spk_ref_mutex_, pdMS_TO_TICKS(2));
+///   esp_audio_stack::ScopedLock lock(this->spk_ref_mutex_, pdMS_TO_TICKS(2));
 ///   if (lock) {
 ///     // protected section, auto-released on scope exit
 ///   }
@@ -32,17 +31,16 @@ class ScopedLock {
  public:
   /// Take the handle with `portMAX_DELAY`. Behaves like esphome::LockGuard.
   explicit ScopedLock(SemaphoreHandle_t handle)
-      : handle_(handle),
-        locked_(handle != nullptr && xSemaphoreTake(handle, portMAX_DELAY) == pdTRUE) {}
+      : handle_(handle), locked_(handle != nullptr && xSemaphoreTake(handle, portMAX_DELAY) == pdTRUE) {}
 
   /// Take the handle with the given FreeRTOS tick timeout. On timeout the
   /// guard is constructed but `locked_` stays false; destructor is a noop.
   ScopedLock(SemaphoreHandle_t handle, TickType_t timeout_ticks)
-      : handle_(handle),
-        locked_(handle != nullptr && xSemaphoreTake(handle, timeout_ticks) == pdTRUE) {}
+      : handle_(handle), locked_(handle != nullptr && xSemaphoreTake(handle, timeout_ticks) == pdTRUE) {}
 
   ~ScopedLock() {
-    if (this->locked_) xSemaphoreGive(this->handle_);
+    if (this->locked_)
+      xSemaphoreGive(this->handle_);
   }
 
   ScopedLock(const ScopedLock &) = delete;
@@ -59,7 +57,6 @@ class ScopedLock {
   bool locked_;
 };
 
-}  // namespace audio_core
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

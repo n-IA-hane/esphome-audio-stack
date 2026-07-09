@@ -16,7 +16,9 @@ namespace esphome {
 namespace i2c {
 class I2CBus;
 }  // namespace i2c
-namespace esp_audio_stack {
+}  // namespace esphome
+
+namespace esphome::esp_audio_stack {
 
 class CodecDevBackend {
  public:
@@ -66,8 +68,7 @@ class CodecDevBackend {
   void set_input_codec_config(const GenericCodecConfig &config) { this->input_codec_ = config; }
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
 
-  bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
-             i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
+  bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
              i2s_clock_src_t clk_src, uint32_t mclk_multiple);
   bool open(const SampleConfig *tx_config, const SampleConfig *rx_config);
   void close();
@@ -96,8 +97,8 @@ class CodecDevBackend {
 
   const audio_codec_ctrl_if_t *new_i2c_ctrl_(uint8_t address);
   void apply_output_volume_curve_();
-  const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config, bool input,
-                                             uint16_t mclk_div, const audio_codec_ctrl_if_t **ctrl);
+  const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config, bool input, uint16_t mclk_div,
+                                             const audio_codec_ctrl_if_t **ctrl);
   void destroy_codecs_();
 
   i2c::I2CBus *i2c_bus_{nullptr};
@@ -125,7 +126,6 @@ class CodecDevBackend {
   bool open_{false};
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32 && USE_ESP_AUDIO_STACK_HARDWARE_CODEC

@@ -1,16 +1,16 @@
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import switch
+import esphome.config_validation as cv
 from esphome.const import ENTITY_CATEGORY_CONFIG
 
-from . import esp_afe_ns, EspAfe, CONF_ESP_AFE_ID
+from . import CONF_ESP_AFE_ID, EspAfe, esp_afe_ns
 
 DEPENDENCIES = ["esp_afe"]
 
 CONF_AEC = "aec"
 CONF_NS = "ns"
-CONF_VAD = "vad"
 CONF_AGC = "agc"
+CONF_VAD = "vad"
 
 AfeAecSwitch = esp_afe_ns.class_(
     "AfeAecSwitch", switch.Switch, cg.Component, cg.Parented.template(EspAfe)

@@ -1,10 +1,11 @@
 """Sensor platform for ESP Audio Stack diagnostics."""
+
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import sensor
+import esphome.config_validation as cv
 from esphome.const import ENTITY_CATEGORY_DIAGNOSTIC
 
-from . import esp_audio_stack_ns, ESPAudioStack, CONF_ESP_AUDIO_STACK_ID
+from . import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
 
 CONF_SLOT = "slot"
 CONF_TDM_SLOT_LEVELS = "tdm_slot_levels"

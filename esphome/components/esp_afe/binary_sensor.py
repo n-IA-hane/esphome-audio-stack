@@ -1,9 +1,9 @@
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import binary_sensor
+import esphome.config_validation as cv
 from esphome.const import DEVICE_CLASS_SOUND, ENTITY_CATEGORY_DIAGNOSTIC
 
-from . import esp_afe_ns, EspAfe, CONF_ESP_AFE_ID
+from . import CONF_ESP_AFE_ID, EspAfe, esp_afe_ns
 
 DEPENDENCIES = ["esp_afe"]
 
@@ -24,8 +24,7 @@ CONFIG_SCHEMA = cv.Schema(
             device_class=DEVICE_CLASS_SOUND,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             icon="mdi:account-voice",
-        )
-        .extend(cv.polling_component_schema("100ms"))
+        ).extend(cv.polling_component_schema("100ms")),
     }
 )
 

@@ -15,17 +15,23 @@ def read(path: Path) -> str:
 
 
 def test_component_core_does_not_autoload_entity_platforms() -> None:
-    disallowed = ('"switch"', '"sensor"', '"binary_sensor"', '"number"')
-
     for rel in (
         "esp_audio_stack/__init__.py",
         "esp_aec/__init__.py",
         "esp_afe/__init__.py",
     ):
         text = read(COMPONENTS / rel)
-        for token in disallowed:
-            assert f"AUTO_LOAD = [{token}" not in text
-            assert f", {token}" not in text
+        assert "AUTO_LOAD" not in text
+
+
+def test_upstream_docs_use_placeholder_gpio_pins() -> None:
+    docs = list((ROOT / "docs" / "esphome.io").rglob("*.mdx"))
+    assert docs
+
+    for path in docs:
+        text = read(path)
+        for pin in ("GPIO4", "GPIO5", "GPIO6", "GPIO7", "GPIO8", "GPIO47", "GPIO48"):
+            assert pin not in text, f"{pin} found in {path.relative_to(ROOT)}"
 
 
 def test_upstream_code_has_no_product_specific_references() -> None:
@@ -102,3 +108,18 @@ def test_upstream_yaml_tests_do_not_use_external_components() -> None:
         text = read(path).lower()
         for token in forbidden:
             assert token.lower() not in text, f"{token!r} found in {path.relative_to(ROOT)}"
+
+
+def test_upstream_yaml_tests_cover_maintained_targets() -> None:
+    for component in ("esp_audio_stack", "esp_aec", "esp_afe"):
+        base = ROOT / "tests" / "components" / component
+        assert (base / "test.esp32-s3-idf.yaml").exists()
+        assert (base / "test.esp32-p4-idf.yaml").exists()
+
+        p4_text = read(base / "test.esp32-p4-idf.yaml")
+        assert "board: esp32-p4_r3-evboard" in p4_text
+        assert "variant: esp32p4" in p4_text
+
+    gmf_text = read(ROOT / "tests" / "components" / "esp_afe" / "test.esp32-p4-gmf-idf.yaml")
+    assert "mic_num: 2" in gmf_text
+    assert "se_enabled: true" in gmf_text

@@ -12,12 +12,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
-class ESPAudioStackMicrophone : public microphone::Microphone,
-                                  public Component,
-                                  public Parented<ESPAudioStack> {
+class ESPAudioStackMicrophone : public microphone::Microphone, public Component, public Parented<ESPAudioStack> {
  public:
   void setup() override;
   void loop() override;
@@ -29,7 +26,7 @@ class ESPAudioStackMicrophone : public microphone::Microphone,
   void stop() override;
 
  protected:
-  static void mic_data_callback_(void *ctx, const uint8_t *data, size_t len);
+  static void mic_data_callback(void *ctx, const uint8_t *data, size_t len);
   void on_audio_data_(const uint8_t *data, size_t len);
 
   std::vector<uint8_t> audio_buffer_;
@@ -38,7 +35,6 @@ class ESPAudioStackMicrophone : public microphone::Microphone,
   SemaphoreHandle_t active_listeners_semaphore_{nullptr};
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

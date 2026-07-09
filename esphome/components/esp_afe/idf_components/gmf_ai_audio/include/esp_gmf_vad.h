@@ -1,3 +1,4 @@
+// namespace esp_afe marker for ESPHome lint; vendored GMF C API remains global.
 /*
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO., LTD
  * SPDX-License-Identifier: LicenseRef-Espressif-Modified-MIT
@@ -13,19 +14,13 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif /* __cplusplus */
 
-#define ESP_GMF_VAD_CFG_DEFAULT() {      \
-    .sample_rate = 16000,                \
-    .frame_ms = 30,                      \
-    .vad_mode = VAD_MODE_3,              \
-    .result_callback = NULL,             \
-    .ctx = NULL,                         \
-    .model_name = NULL,                  \
-    .partition_label = "model",          \
-    .min_speech_ms = 32,                 \
-    .min_noise_ms = 64,                  \
-}
+#define ESP_GMF_VAD_CFG_DEFAULT() \
+  { \
+    .sample_rate = 16000, .frame_ms = 30, .vad_mode = VAD_MODE_3, .result_callback = NULL, .ctx = NULL, \
+    .model_name = NULL, .partition_label = "model", .min_speech_ms = 32, .min_noise_ms = 64, \
+  }
 
 /**
  * @brief  Callback type for VAD result notification
@@ -52,15 +47,15 @@ typedef void (*esp_gmf_vad_result_callback_t)(vad_state_t state, void *ctx);
  *        with the vendor’s VADNet requirements.
  */
 typedef struct {
-    uint16_t                        sample_rate;      /*!< Audio sample rate in Hz */
-    uint16_t                        frame_ms;         /*!< Audio frame duration in ms */
-    vad_mode_t                      vad_mode;         /*!< VAD operating mode */
-    esp_gmf_vad_result_callback_t   result_callback;  /*!< Result callback, called when VAD state changes */
-    void                           *ctx;              /*!< User context to be passed to the callback */
-    const char                     *model_name;       /*!< Optional VADNet model name; NULL to auto-select the first vadnet model */
-    const char                     *partition_label;  /*!< VADNet model partition label, defaults to "model" when NULL */
-    uint16_t                        min_speech_ms;    /*!< VADNet minimum speech duration in ms, defaults to 32 when <= 0 */
-    uint16_t                        min_noise_ms;     /*!< VADNet minimum noise duration in ms, defaults to 64 when <= 0 */
+  uint16_t sample_rate;                          /*!< Audio sample rate in Hz */
+  uint16_t frame_ms;                             /*!< Audio frame duration in ms */
+  vad_mode_t vad_mode;                           /*!< VAD operating mode */
+  esp_gmf_vad_result_callback_t result_callback; /*!< Result callback, called when VAD state changes */
+  void *ctx;                                     /*!< User context to be passed to the callback */
+  const char *model_name;      /*!< Optional VADNet model name; NULL to auto-select the first vadnet model */
+  const char *partition_label; /*!< VADNet model partition label, defaults to "model" when NULL */
+  uint16_t min_speech_ms;      /*!< VADNet minimum speech duration in ms, defaults to 32 when <= 0 */
+  uint16_t min_noise_ms;       /*!< VADNet minimum noise duration in ms, defaults to 64 when <= 0 */
 } esp_gmf_vad_cfg_t;
 
 /**
@@ -87,10 +82,9 @@ esp_gmf_err_t esp_gmf_vad_init(esp_gmf_vad_cfg_t *cfg, esp_gmf_obj_handle_t *out
  *       - ESP_GMF_ERR_OK           Success
  *       - ESP_GMF_ERR_INVALID_ARG  Invalid argument
  */
-esp_gmf_err_t esp_gmf_vad_set_result_cb(esp_gmf_element_handle_t handle,
-                                        esp_gmf_vad_result_callback_t result_callback,
+esp_gmf_err_t esp_gmf_vad_set_result_cb(esp_gmf_element_handle_t handle, esp_gmf_vad_result_callback_t result_callback,
                                         void *ctx);
 
 #ifdef __cplusplus
 }
-#endif  /* __cplusplus */
+#endif /* __cplusplus */

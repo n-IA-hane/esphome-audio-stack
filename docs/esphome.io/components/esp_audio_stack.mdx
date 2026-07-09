@@ -19,20 +19,15 @@ is not supported.
 
 ```yaml
 i2c:
-  sda: GPIO47
-  scl: GPIO48
+  sda: GPIOXX
+  scl: GPIOXX
 
 esp_audio_stack:
   id: audio_stack
-  sample_rate: 48000
-  output_sample_rate: 16000
-  bits_per_sample: 32
-  slot_bit_width: 32
-  i2s_mclk_pin: GPIO5
-  i2s_bclk_pin: GPIO6
-  i2s_lrclk_pin: GPIO7
-  i2s_din_pin: GPIO4
-  i2s_dout_pin: GPIO8
+  i2s_bclk_pin: GPIOXX
+  i2s_lrclk_pin: GPIOXX
+  i2s_din_pin: GPIOXX
+  i2s_dout_pin: GPIOXX
   codec:
     input:
       type: es8311
@@ -49,6 +44,9 @@ speaker:
     id: stack_speaker
     esp_audio_stack_id: audio_stack
 ```
+
+Set `sample_rate`, `output_sample_rate`, slot width and codec options when the
+board requires values different from the defaults.
 
 ## Configuration variables
 

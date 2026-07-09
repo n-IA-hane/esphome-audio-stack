@@ -1,13 +1,16 @@
 """ESP Audio Stack Microphone Platform - Wraps full-duplex bus as standard ESPHome microphone"""
+
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import audio, microphone
-from esphome.const import CONF_BITS_PER_SAMPLE, CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
-from .. import (
-    esp_audio_stack_ns,
-    ESPAudioStack,
-    CONF_ESP_AUDIO_STACK_ID,
+import esphome.config_validation as cv
+from esphome.const import (
+    CONF_BITS_PER_SAMPLE,
+    CONF_ID,
+    CONF_NUM_CHANNELS,
+    CONF_SAMPLE_RATE,
 )
+
+from .. import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
 
 DEPENDENCIES = ["esp_audio_stack"]
 CODEOWNERS = ["@n-IA-hane"]

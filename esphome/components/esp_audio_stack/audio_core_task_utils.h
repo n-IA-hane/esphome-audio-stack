@@ -3,19 +3,18 @@
 #ifdef USE_ESP32
 
 #include "esphome/core/helpers.h"
-#include "esphome/core/log.h"
+#include "audio_core_log_utils.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-namespace esphome {
-namespace audio_core {
+namespace esphome::esp_audio_stack {
 
 /// Pin a FreeRTOS task to a core, with optional static stack from PSRAM.
 ///
 /// Two creation paths are folded into one call so callers do not have to
 /// repeat the if/else. Both paths log the failure reason via the provided
-/// `log_tag` (uses ESP_LOGE).
+/// `log_tag`.
 ///
 ///  - `psram_stack=true`: allocate `stack_bytes` worth of StackType_t storage
 ///    from PSRAM, then call xTaskCreateStaticPinnedToCore.
@@ -31,11 +30,9 @@ namespace audio_core {
 /// Returns true if the task is alive and pinned. Returns false if either the
 /// stack allocation or the task creation failed; in that case the caller
 /// stays responsible for any other resources it allocated for the task.
-inline bool start_pinned_task(TaskFunction_t fn, const char *name, uint32_t stack_bytes,
-                              void *param, UBaseType_t prio, BaseType_t core,
-                              bool psram_stack, const char *log_tag,
-                              TaskHandle_t *handle_out, StaticTask_t *tcb_out,
-                              StackType_t **stack_out) {
+inline bool start_pinned_task(TaskFunction_t fn, const char *name, uint32_t stack_bytes, void *param, UBaseType_t prio,
+                              BaseType_t core, bool psram_stack, const char *log_tag, TaskHandle_t *handle_out,
+                              StaticTask_t *tcb_out, StackType_t **stack_out) {
   *handle_out = nullptr;
   const uint32_t stack_words = (stack_bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
   if (psram_stack) {
@@ -43,20 +40,18 @@ inline bool start_pinned_task(TaskFunction_t fn, const char *name, uint32_t stac
     RAMAllocator<StackType_t> alloc(RAMAllocator<StackType_t>::ALLOC_EXTERNAL);
     *stack_out = alloc.allocate(stack_words);
     if (*stack_out == nullptr) {
-      ESP_LOGE(log_tag, "Failed to allocate PSRAM stack for %s task", name);
+      log_error(log_tag, "Failed to allocate PSRAM stack for %s task", name);
       return false;
     }
-    *handle_out = xTaskCreateStaticPinnedToCore(fn, name, stack_bytes, param, prio,
-                                                 *stack_out, tcb_out, core);
+    *handle_out = xTaskCreateStaticPinnedToCore(fn, name, stack_bytes, param, prio, *stack_out, tcb_out, core);
   } else {
-    BaseType_t ok = xTaskCreatePinnedToCore(fn, name, stack_bytes,
-                                             param, prio, handle_out, core);
+    BaseType_t ok = xTaskCreatePinnedToCore(fn, name, stack_bytes, param, prio, handle_out, core);
     if (ok != pdPASS) {
       *handle_out = nullptr;
     }
   }
   if (*handle_out == nullptr) {
-    ESP_LOGE(log_tag, "Failed to create %s task", name);
+    log_error(log_tag, "Failed to create %s task", name);
     if (psram_stack && *stack_out != nullptr) {
       RAMAllocator<StackType_t> alloc(RAMAllocator<StackType_t>::ALLOC_EXTERNAL);
       alloc.deallocate(*stack_out, stack_words);
@@ -67,7 +62,6 @@ inline bool start_pinned_task(TaskFunction_t fn, const char *name, uint32_t stac
   return true;
 }
 
-}  // namespace audio_core
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32

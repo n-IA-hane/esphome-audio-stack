@@ -1,13 +1,13 @@
 #pragma once
 
-#ifdef USE_ESP32
+#if defined(USE_ESP32) && defined(USE_SWITCH)
 
 #include "esphome/components/switch/switch.h"
 #include "esphome/core/component.h"
 #include "esp_audio_stack.h"
+#include "audio_core_log_utils.h"
 
-namespace esphome {
-namespace esp_audio_stack {
+namespace esphome::esp_audio_stack {
 
 class AECSwitch : public switch_::Switch, public Component {
  public:
@@ -25,9 +25,7 @@ class AECSwitch : public switch_::Switch, public Component {
     }
   }
 
-  void dump_config() override {
-    ESP_LOGCONFIG("audio_stack.aec_switch", "AEC Switch");
-  }
+  void dump_config() override { log_config("audio_stack.aec_switch", "AEC Switch"); }
 
  protected:
   void write_state(bool state) override {
@@ -40,7 +38,6 @@ class AECSwitch : public switch_::Switch, public Component {
   ESPAudioStack *parent_{nullptr};
 };
 
-}  // namespace esp_audio_stack
-}  // namespace esphome
+}  // namespace esphome::esp_audio_stack
 
-#endif  // USE_ESP32
+#endif  // USE_ESP32 && USE_SWITCH

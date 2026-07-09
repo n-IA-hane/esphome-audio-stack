@@ -1,15 +1,15 @@
-import esphome.codegen as cg
-import esphome.config_validation as cv
+from pathlib import Path
+
 from esphome import automation
+import esphome.codegen as cg
 from esphome.components import psram
+from esphome.components.esp32 import add_idf_component
+import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_MODE, CONF_TYPE, Framework
 from esphome.core import CORE
-from esphome.components.esp32 import add_idf_component
-from pathlib import Path
 
 CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = ["esp32"]
-AUTO_LOAD = ["esp_audio_stack"]
 
 _SUPPORTED_VARIANTS = ("ESP32S3", "ESP32P4")
 GMF_AI_AUDIO_PATH = Path(__file__).parent / "idf_components" / "gmf_ai_audio"
@@ -17,7 +17,7 @@ GMF_AI_AUDIO_PATH = Path(__file__).parent / "idf_components" / "gmf_ai_audio"
 
 def _validate_esp32_variant(config):
     if CORE.is_esp32:
-        import esphome.components.esp32 as esp32
+        from esphome.components import esp32
 
         variant = esp32.get_esp32_variant()
         if variant not in _SUPPORTED_VARIANTS:
@@ -31,9 +31,13 @@ def _validate_feature_config(config):
     if config[CONF_SE_ENABLED] and config[CONF_MIC_NUM] < 2:
         raise cv.Invalid("se_enabled requires mic_num: 2")
     if config[CONF_MIC_NUM] >= 2 and not config[CONF_SE_ENABLED]:
-        raise cv.Invalid("dual-mic esp_afe requires se_enabled: true (SE/BSS is structural)")
+        raise cv.Invalid(
+            "dual-mic esp_afe requires se_enabled: true (SE/BSS is structural)"
+        )
     if config.get(CONF_INPUT_FORMAT) in ("MMR", "MMNR") and config[CONF_MIC_NUM] < 2:
-        raise cv.Invalid(f"input_format: {config[CONF_INPUT_FORMAT]} requires mic_num: 2")
+        raise cv.Invalid(
+            f"input_format: {config[CONF_INPUT_FORMAT]} requires mic_num: 2"
+        )
     return config
 
 
@@ -84,7 +88,7 @@ AFE_TYPES = {
 }
 
 AFE_MODES = {
-    "low_cost": 0,   # AFE_MODE_LOW_COST
+    "low_cost": 0,  # AFE_MODE_LOW_COST
     "high_perf": 1,  # AFE_MODE_HIGH_PERF
 }
 
@@ -107,6 +111,7 @@ INPUT_FORMATS = {
     "mmr": "MMR",
     "mmnr": "MMNR",
 }
+
 
 def _validate_task_layout(config):
     if config[CONF_FEED_TASK_CORE] == config[CONF_FETCH_TASK_CORE]:
@@ -136,8 +141,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_NS_ENABLED, default=True): cv.boolean,
             cv.Optional(CONF_VAD_ENABLED, default=False): cv.boolean,
             cv.Optional(CONF_VAD_MODE, default=3): cv.int_range(min=0, max=4),
-            cv.Optional(CONF_VAD_MIN_SPEECH_MS, default=128): cv.int_range(min=32, max=60000),
-            cv.Optional(CONF_VAD_MIN_NOISE_MS, default=1000): cv.int_range(min=64, max=60000),
+            cv.Optional(CONF_VAD_MIN_SPEECH_MS, default=128): cv.int_range(
+                min=32, max=60000
+            ),
+            cv.Optional(CONF_VAD_MIN_NOISE_MS, default=1000): cv.int_range(
+                min=64, max=60000
+            ),
             cv.Optional(CONF_VAD_DELAY_MS, default=128): cv.int_range(min=0, max=60000),
             cv.Optional(CONF_VAD_MUTE_PLAYBACK, default=False): cv.boolean,
             cv.Optional(CONF_VAD_ENABLE_CHANNEL_TRIGGER, default=False): cv.boolean,
@@ -146,12 +155,16 @@ CONFIG_SCHEMA = cv.All(
             # a runtime feature, but prevents boot/background mic ownership.
             cv.Optional(CONF_CONTINUOUS_VAD, default=False): cv.boolean,
             cv.Optional(CONF_AGC_ENABLED, default=True): cv.boolean,
-            cv.Optional(CONF_AGC_COMPRESSION_GAIN, default=9): cv.int_range(min=0, max=30),
+            cv.Optional(CONF_AGC_COMPRESSION_GAIN, default=9): cv.int_range(
+                min=0, max=30
+            ),
             cv.Optional(CONF_AGC_TARGET_LEVEL, default=3): cv.int_range(min=0, max=31),
             cv.Optional(CONF_MEMORY_ALLOC_MODE, default="more_psram"): cv.enum(
                 MEMORY_ALLOC_MODES, lower=True
             ),
-            cv.Optional(CONF_AFE_LINEAR_GAIN, default=1.0): cv.float_range(min=0.1, max=10.0),
+            cv.Optional(CONF_AFE_LINEAR_GAIN, default=1.0): cv.float_range(
+                min=0.1, max=10.0
+            ),
             cv.Optional(CONF_TASK_CORE, default=1): cv.int_range(min=0, max=1),
             cv.Optional(CONF_TASK_PRIORITY, default=5): cv.int_range(min=1, max=24),
             cv.Optional(CONF_RINGBUF_SIZE, default=8): cv.int_range(min=2, max=32),
@@ -159,11 +172,19 @@ CONFIG_SCHEMA = cv.All(
             # feed and fetch on different cores to avoid AFE task watchdog
             # contention under load.
             cv.Optional(CONF_FEED_TASK_CORE, default=0): cv.int_range(min=0, max=1),
-            cv.Optional(CONF_FEED_TASK_PRIORITY, default=5): cv.int_range(min=1, max=23),
-            cv.Optional(CONF_FEED_TASK_STACK_SIZE, default=3072): cv.int_range(min=1024, max=16384),
+            cv.Optional(CONF_FEED_TASK_PRIORITY, default=5): cv.int_range(
+                min=1, max=23
+            ),
+            cv.Optional(CONF_FEED_TASK_STACK_SIZE, default=3072): cv.int_range(
+                min=1024, max=16384
+            ),
             cv.Optional(CONF_FETCH_TASK_CORE, default=1): cv.int_range(min=0, max=1),
-            cv.Optional(CONF_FETCH_TASK_PRIORITY, default=5): cv.int_range(min=1, max=23),
-            cv.Optional(CONF_FETCH_TASK_STACK_SIZE, default=3072): cv.int_range(min=1024, max=16384),
+            cv.Optional(CONF_FETCH_TASK_PRIORITY, default=5): cv.int_range(
+                min=1, max=23
+            ),
+            cv.Optional(CONF_FETCH_TASK_STACK_SIZE, default=3072): cv.int_range(
+                min=1024, max=16384
+            ),
             # Optional esp-sr AFE input format override for diagnostics and
             # board-specific dual-mic layouts. Default auto preserves the
             # historical MR/MMR behavior. On single-mic runtime shape the

@@ -14,14 +14,13 @@ pipeline.
 ```yaml
 esp_aec:
   id: aec_processor
-  mode: sr_low_cost
 
 esp_audio_stack:
   id: audio_stack
   processor_id: aec_processor
-  sample_rate: 48000
-  output_sample_rate: 16000
 ```
+
+The parent `esp_audio_stack` component owns the I2S bus and echo reference.
 
 ## Configuration variables
 
