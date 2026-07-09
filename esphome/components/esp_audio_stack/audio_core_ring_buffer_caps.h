@@ -88,11 +88,6 @@ inline RingBufferPtr create_prefer_psram(size_t len, const char *name) {
   return create_ring_buffer(len, RingBufferPolicy::PREFER_PSRAM, name);
 }
 
-/// Convenience: PSRAM only. Use only when internal must be preserved at all cost.
-inline RingBufferPtr create_psram(size_t len, const char *name) {
-  return create_ring_buffer(len, RingBufferPolicy::PSRAM_ONLY, name);
-}
-
 inline RingBufferPtr create_nosplit_internal(size_t len, const char *name) {
   return create_nosplit_ring_buffer(len, RingBufferPolicy::INTERNAL, name);
 }

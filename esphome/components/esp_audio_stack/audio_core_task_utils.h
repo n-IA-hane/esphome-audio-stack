@@ -120,15 +120,6 @@ inline void cleanup_pinned_task(TaskHandle_t *handle, StackType_t **stack, uint3
   }
 }
 
-/// Convenience factory for the most common allocator we hand around: an
-/// `RAMAllocator<T>` set to allocate from PSRAM. Equivalent to writing
-/// `RAMAllocator<T>(RAMAllocator<T>::ALLOC_EXTERNAL)` inline, but documents
-/// intent and reads better at call sites that allocate audio buffers.
-template<typename T>
-inline RAMAllocator<T> psram_allocator() {
-  return RAMAllocator<T>(RAMAllocator<T>::ALLOC_EXTERNAL);
-}
-
 }  // namespace audio_core
 }  // namespace esphome
 
