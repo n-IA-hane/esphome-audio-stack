@@ -9,7 +9,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AFE = ROOT / "esphome" / "components" / "esp_afe"
 AEC = ROOT / "esphome" / "components" / "esp_aec"
-GMF = AFE / "idf_components" / "gmf_ai_audio"
 
 
 def read(name: str) -> str:
@@ -59,13 +58,13 @@ def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
 def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:
     init = read("__init__.py")
     aec_init = read_aec("__init__.py")
-    gmf_manifest = (GMF / "idf_component.yml").read_text(encoding="utf-8")
 
     assert 'add_idf_component(name="espressif/esp-sr", ref="^2.4.6")' in init
     assert 'name="espressif/gmf_ai_audio"' in init
-    assert "path=str(GMF_AI_AUDIO_PATH)" in init
+    assert 'repo="https://github.com/n-IA-hane/esp-gmf.git"' in init
+    assert 'ref="gmf-ai-audio-esp-sr-2.4.6"' in init
+    assert 'path="elements/gmf_ai_audio"' in init
+    assert not (AFE / "idf_components" / "gmf_ai_audio").exists()
     assert 'ref="0.8.3"' not in init
-    assert "version: ^2.4.6" in gmf_manifest
-    assert "version: 2.4.4" not in gmf_manifest
     assert 'add_idf_component(name="espressif/esp-sr", ref="^2.4.6")' in aec_init
     assert 'ref="^2.4.4"' not in aec_init
