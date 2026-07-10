@@ -13,6 +13,10 @@ It provides AEC, noise suppression, VAD, AGC and optional dual-mic Speech
 Enhancement/BSS. Use it when a product needs more than standalone echo
 cancellation.
 
+Single-mic profiles call the ESP-SR AFE feed/fetch interface directly from the
+parent audio task. Dual-mic profiles use the fetched GMF AFE manager/pipeline
+and complete-frame bridge rings.
+
 .. code-block:: yaml
 
     esp_afe:
@@ -43,8 +47,32 @@ Configuration variables:
   ``mmnr``.
 - **aec_enabled**, **ns_enabled**, **vad_enabled**, **agc_enabled**
   (*Optional*, boolean): Enable or disable individual AFE stages.
+- **aec_filter_length** (*Optional*, int): ESP-SR filter-length parameter,
+  ``1`` to ``8``. Defaults to ``4``; effective time coverage is engine
+  dependent.
+- **aec_nlp_level** (*Optional*, string): ``normal``, ``aggressive`` or
+  ``very_aggressive``. Defaults to ``aggressive``.
 - **mic_num** (*Optional*, int): Number of microphone channels, ``1`` or ``2``.
 - **se_enabled** (*Optional*, boolean): Enable dual-mic Speech Enhancement/BSS.
+- **vad_mode**, **vad_min_speech_ms**, **vad_min_noise_ms**, **vad_delay_ms**
+  (*Optional*): VAD aggressiveness and transition timing.
+- **vad_mute_playback**, **vad_enable_channel_trigger**, **continuous_vad**
+  (*Optional*, boolean): Optional VAD playback/channel/standby behavior.
+- **agc_compression_gain**, **agc_target_level** (*Optional*, int): AGC level
+  controls. NS/AGC changes rebuild the AFE.
+- **memory_alloc_mode** (*Optional*, string): ``more_internal``,
+  ``internal_psram_balance`` or ``more_psram``. Defaults to ``more_psram``.
+- **afe_linear_gain** (*Optional*, float): Output multiplier, ``0.1`` to
+  ``10.0``. Defaults to ``1.0``.
+- **ringbuf_size** (*Optional*, int): Requested ESP-SR ring size, ``2`` to
+  ``32``. The direct single-mic path normalizes values below ``16`` to ``16``.
+- **task_core** / **task_priority** (*Optional*, int): ESP-SR SE/BSS worker
+  placement.
+- **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
+  matching ``fetch_task_*`` options (*Optional*, int): Dual-mic GMF manager/pipeline
+  task settings.
+- **feed_buf_in_psram**, **feed_ring_in_psram**, **fetch_ring_in_psram**
+  (*Optional*, boolean): Wrapper scratch/bridge placement controls.
 
 Dual-mic Speech Enhancement requires a TDM topology with two microphone slots
 and a valid echo reference supplied by ``esp_audio_stack``.
@@ -52,15 +80,18 @@ and a valid echo reference supplied by ``esp_audio_stack``.
 ``esp_afe.set_mode`` Action
 ---------------------------
 
-Switches the AFE type/mode at runtime.
+Queues an AFE type/mode rebuild. Stop and wait for ``esp_audio_stack`` first;
+then wait for ``is_reconfigure_idle()`` and check
+``get_last_reconfigure_ok()`` before restarting audio. Rebuild duration is
+target dependent and can extend to hundreds of milliseconds on a dual-mic GMF
+graph.
 
 .. code-block:: yaml
 
     on_...:
       - esp_afe.set_mode:
           id: afe_processor
-          type: fd
-          mode: high_perf
+          mode: fd_high_perf
 
 See Also
 --------

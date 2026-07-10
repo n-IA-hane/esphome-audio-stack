@@ -17,6 +17,10 @@ backend.
 This component requires the ESP-IDF framework and the `psram` component. Arduino
 is not supported.
 
+One resident audio task is created during setup and parks while idle. I2S
+channels, DMA and codec paths start on first consumer and stop after the last
+consumer leaves; the task TCB/stack remains allocated across those cycles.
+
 ```yaml
 i2c:
   sda: GPIOXX
@@ -55,7 +59,7 @@ board requires values different from the defaults.
 - **output_sample_rate** (*Optional*, int): Microphone sample rate exposed to consumers, from `8000` to `48000`. Must divide `sample_rate` exactly, with a maximum decimation ratio of 6.
 - **bits_per_sample** (*Optional*, int): Sample container on the bus. One of `16`, `24`, `32`. Defaults to `16`.
 - **slot_bit_width** (*Optional*, string or int): Physical slot width on the bus, or `auto` to follow `bits_per_sample`. Defaults to `auto`.
-- **num_channels** (*Optional*, int): RX channel count on the physical bus, `1` or `2`. Defaults to `1`.
+- **num_channels** (*Optional*, int): Physical channel count on the standard I2S bus, `1` or `2`. Defaults to `1`.
 - **speaker_channels** (*Optional*, int): Playback channel count, `1` or `2`. Defaults to `1`.
 - **mic_channel** (*Optional*, string): Stereo slot carrying the microphone, `left` or `right`. Defaults to `left`.
 - **rx_slot_mode** (*Optional*, string): Read one or both stereo slots on RX, `mono` or `stereo`. Defaults to `mono`.
@@ -106,6 +110,9 @@ Dual-bus mode does not support TDM.
 - **codec** (*Optional*): Hardware codec configuration.
 - **codec.input** (*Optional*): ADC-side codec. Supported types are `es7210`, `es8311`, `es8388`, `es8374` and `es8389`.
 - **codec.output** (*Optional*): DAC-side codec. Supported types are `es8311`, `es8388`, `es8374` and `es8389`.
+- Common codec fields include **address**, input **gain_db**, **use_mclk** and
+  **no_dac_ref**. ES7210 additionally exposes **mic_selected**,
+  **ref_channel** and **ref_gain_db**.
 
 ### Task, memory and diagnostics
 
@@ -117,7 +124,16 @@ Dual-bus mode does not support TDM.
 - **aec_ref_ring_in_psram** (*Optional*, boolean): Place the AEC reference ring in PSRAM. Defaults to `false`.
 - **telemetry** (*Optional*, boolean): Enable per-stage diagnostics. Defaults to `false`.
 - **telemetry_log_interval_frames** (*Optional*, int): Telemetry log cadence in frames, from `1` to `8192`. Defaults to `128`.
-- **audio_effects** (*Optional*): Rate-converter tuning.
+- **audio_effects** (*Optional*): Rate-converter tuning with
+  **rate_cvt_complexity** (`1` to `3`) and **rate_cvt_perf_type** (`speed` or
+  `memory`).
+
+## Automation triggers
+
+`on_start`, `on_idle` and `on_state` follow the aggregate runtime state.
+`on_mic_start` / `on_mic_idle`, `on_speaker_start` / `on_speaker_idle`, and
+`on_amplifier_required` / `on_amplifier_idle` expose consumer edges without a
+timer-based lifecycle guess.
 
 ## Actions
 

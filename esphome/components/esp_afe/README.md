@@ -1,14 +1,16 @@
 # ESP AFE - Full Audio Front-End Pipeline
 
 > ⚠ **Important: `esp_afe` requires `esp_audio_stack` in front of it.** The AFE
-> pipeline expects fixed 512-sample 16 kHz frames at a steady cadence. Use it as
-> the processor behind `esp_audio_stack`, not as an arbitrary standalone filter.
+> pipeline expects a steady 16 kHz frame cadence using the frame shape reported
+> by ESP-SR. Use it as the processor behind `esp_audio_stack`, not as an
+> arbitrary standalone filter.
 
 ESPHome component wrapping Espressif's **ESP-SR AFE** (Audio Front End)
-through the official `esp_gmf_afe` element in a GMF pipeline/task. Provides a
-complete audio processing pipeline (AEC, Speech Enhancement on dual-mic
-targets, and optional NS/VAD/AGC stages) in a single component, with runtime
-AEC control and diagnostic sensors.
+through two target-specific paths: single-mic profiles call the ESP-SR AFE
+feed/fetch interface directly, while dual-mic profiles use the official
+`esp_gmf_afe` element and GMF manager/pipeline tasks. The component provides
+AEC, Speech Enhancement on dual-mic targets, optional NS/VAD/AGC stages,
+runtime controls and diagnostic sensors.
 Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 
 ## Overview
@@ -16,12 +18,14 @@ Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 `esp_afe` uses the closed-source `esp-sr` library's AFE pipeline, which chains multiple DSP stages depending on configuration:
 
 **Single-mic (MR) mode** (`mic_num: 1`):
-```
+
+```text
 [mic + ref] -> |AEC| -> |NS| -> |VAD| -> |AGC| -> [clean output]
 ```
 
 **Dual-mic (MMR/MMNR) mode** (`se_enabled: true` with `mic_num: 2`):
-```
+
+```text
 [mic1 + mic2 + ref] -> |AEC| -> |Speech Enhancement| -> [clean output]
 ```
 
@@ -44,10 +48,10 @@ interface, but the AFE feed/fetch task model needs the steady producer that
 | Noise Suppression | No | Yes (WebRTC, single-mic mode) |
 | Voice Activity Detection | No | Yes (WebRTC) |
 | Automatic Gain Control | No | Yes (WebRTC, when kept by `afe_config_check`) |
-| Runtime switches in HA | AEC only | AEC and VAD live through GMF manager; NS/AGC by AFE reinit; SE/BSS is structural |
+| Runtime switches in HA | Parent-stack processor bypass | AEC and VAD live through the active AFE API; NS/AGC by AFE reinit; SE/BSS is structural |
 | Diagnostic sensors | No | Input volume, output RMS, voice presence |
-| CPU usage (SR LOW_COST) | ~22% Core 0 | ~23% Core 0 (8.4% feed + 15% fetch) |
-| Internal RAM overhead | ~80 KB | ~100 KB (MR), ~120 KB (MMR with Speech Enhancement) |
+| Runtime shape | Synchronous on the parent audio task | Direct feed/fetch for one mic; GMF manager/pipeline for two mics |
+| Relative footprint | Lower | Higher and target/graph dependent |
 | Supported platforms | ESP32-S3, ESP32-P4 | ESP32-S3, ESP32-P4 |
 
 **Choose `esp_aec`** when you need minimal RAM usage and only echo cancellation.
@@ -92,12 +96,12 @@ esp_audio_stack:
 ```yaml
 esp_afe:
   id: afe_processor
-  type: sr                    # sr (speech recognition) or vc (voice communication)
+  type: sr                    # sr, vc (voice communication), or fd (full duplex)
   mode: low_cost              # low_cost or high_perf
   mic_num: 2                  # Number of microphones (1 or 2)
   se_enabled: true            # Speech Enhancement, requires mic_num: 2
   aec_enabled: true           # Echo cancellation
-  aec_filter_length: 4        # Echo tail in frames (4 = 64ms)
+  aec_filter_length: 4        # ESP-SR filter-length parameter (1-8)
   aec_nlp_level: aggressive   # normal, aggressive, or very_aggressive
   ns_enabled: true            # Noise suppression (WebRTC)
   vad_enabled: false          # Voice activity detection
@@ -113,12 +117,12 @@ esp_afe:
   task_core: 1                # esp-sr SE/BSS worker core preference
   task_priority: 5            # esp-sr SE/BSS worker priority
   ringbuf_size: 8             # Internal ring buffer size in frames (default 8)
-  feed_task_core: 0           # GMF AFE manager feed task core
-  feed_task_priority: 5       # GMF AFE manager feed task priority
-  feed_task_stack_size: 3072  # GMF AFE manager feed task stack
-  fetch_task_core: 1          # GMF AFE manager fetch task and pipeline task core
-  fetch_task_priority: 5      # GMF AFE manager fetch task and pipeline task priority
-  fetch_task_stack_size: 3072 # GMF AFE manager fetch task and pipeline task stack
+  feed_task_core: 0           # Dual-mic GMF manager feed task core
+  feed_task_priority: 5       # Dual-mic GMF manager feed task priority
+  feed_task_stack_size: 3072  # Dual-mic GMF manager feed task stack
+  fetch_task_core: 1          # Dual-mic GMF fetch and pipeline task core
+  fetch_task_priority: 5      # Dual-mic GMF fetch/pipeline priority
+  fetch_task_stack_size: 3072 # Dual-mic GMF fetch/pipeline stack
 ```
 
 ### Configuration Options
@@ -130,7 +134,7 @@ esp_afe:
 | `mode` | string | `low_cost` | AFE mode: `low_cost` or `high_perf` |
 | `mic_num` | int | `1` | Number of microphones (1 or 2). Dual-mic configs must enable `se_enabled`; SE/BSS is structural for two-mic AFE |
 | `aec_enabled` | bool | **true** | Enable acoustic echo cancellation |
-| `aec_filter_length` | int | `4` | AEC filter length in frames (1-8). 4 = 64ms tail, sufficient for most setups |
+| `aec_filter_length` | int | `4` | ESP-SR filter-length parameter (1-8). Effective time coverage depends on the selected engine/frame shape; tune it from measured echo-tail behavior. |
 | `aec_nlp_level` | string | `aggressive` | ESP-SR nonlinear echo suppression level: `normal`, `aggressive`, or `very_aggressive`. Lower levels preserve near-end wake speech better while playback is active; higher levels suppress speaker leakage harder |
 | `ns_enabled` | bool | **true** | Enable noise suppression (WebRTC engine) |
 | `agc_enabled` | bool | **true** | Enable automatic gain control (WebRTC engine) |
@@ -149,35 +153,34 @@ esp_afe:
 | `afe_linear_gain` | float | `1.0` | Linear gain multiplier applied to output (0.1-10.0) |
 | `task_core` | int | `1` | Core preference for the esp-sr SE/BSS worker task created by the AFE instance. |
 | `task_priority` | int | `5` | Priority for the esp-sr SE/BSS worker task. |
-| `ringbuf_size` | int | `8` | Internal ring buffer size in frames (2-32). Larger = more latency tolerance, more memory |
-| `feed_task_core` | int | `0` | Official `esp_gmf_afe_manager` feed task core. Espressif defaults this to Core 0. |
-| `feed_task_priority` | int | `5` | Official `esp_gmf_afe_manager` feed task priority. |
-| `feed_task_stack_size` | int | `3072` | Official `esp_gmf_afe_manager` feed task stack size in bytes. |
-| `fetch_task_core` | int | `1` | Official `esp_gmf_afe_manager` fetch task core; also used for the single-element GMF pipeline task so the output side stays on the same core. |
-| `fetch_task_priority` | int | `5` | Official `esp_gmf_afe_manager` fetch task priority; also used for the GMF pipeline task. |
-| `fetch_task_stack_size` | int | `3072` | Official `esp_gmf_afe_manager` fetch task stack size in bytes; also used for the GMF pipeline task stack. |
+| `ringbuf_size` | int | `8` | Requested ESP-SR internal ring size in frames (2-32). The direct single-mic path normalizes values below 16 to 16 for stable feed/fetch cadence. Larger values trade memory and latency for tolerance. |
+| `feed_task_core` | int | `0` | Dual-mic GMF manager feed-task core. |
+| `feed_task_priority` | int | `5` | Dual-mic GMF manager feed-task priority. |
+| `feed_task_stack_size` | int | `3072` | Dual-mic GMF manager feed-task stack size in bytes. |
+| `fetch_task_core` | int | `1` | Dual-mic GMF manager fetch-task core; also used for its single-element pipeline task. |
+| `fetch_task_priority` | int | `5` | Dual-mic GMF manager fetch/pipeline priority. |
+| `fetch_task_stack_size` | int | `3072` | Dual-mic GMF manager fetch/pipeline stack size in bytes. |
 | `feed_buf_in_psram` | bool | `false` | Place the direct-path or split-frame feed scratch buffer in PSRAM. GMF profiles whose process frame equals the feed frame write directly into the feed ring and do not allocate this buffer. |
-| `feed_ring_in_psram` | bool | `false` | Place the ~12 KB feed staging ring (I2S task to GMF feed task) in PSRAM. Default internal saves ~20 us/frame on Core 0 writes. Set `true` if internal RAM headroom is tight. |
-| `fetch_ring_in_psram` | bool | `false` | Place the ~4 KB fetch output ring (GMF fetch task to I2S task) in PSRAM. Default internal saves ~6.8 us/frame on Core 0 reads. Set `true` if internal RAM headroom is tight. |
+| `feed_ring_in_psram` | bool | `false` | Place the complete-frame feed bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
+| `fetch_ring_in_psram` | bool | `false` | Place the complete-frame output bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
 
 > **Buffer placement guidance**: defaults are tuned for the fastest Core 0
-> audio path. Total internal cost when all bridge buffers are allocated and the
-> three flags are `false` is up to about 19 KB. Dual-mic voice profiles usually keep
+> audio path. Dual-mic voice profiles usually keep
 > `feed_buf_in_psram`, `feed_ring_in_psram` and `fetch_ring_in_psram` false
 > when the board has enough contiguous internal/DMA heap. This avoids PSRAM
-> traffic on the hot AFE bridge path and improved P4 VoIP/TTS latency during
-> validation. Each flag remains independent for board-specific tuning: enabling
-> them can recover up to about 19 KB internal RAM when every bridge buffer is
-> present, at the cost of Core 0 PSRAM reads/writes. GMF profiles with matching
+> traffic on the hot AFE bridge path. Each flag remains independent for
+> board-specific tuning: enabling it recovers that buffer's internal allocation
+> at the cost of PSRAM reads/writes. GMF profiles with matching
 > process/feed frame sizes omit the feed buffer, reducing both memory and PSRAM
 > traffic for that path.
 
 > **Defaults are designed so that a minimal config already enables AEC + NS + AGC.** You only need to declare options that differ from the defaults. In particular:
 > - `aec_enabled`, `ns_enabled`, `agc_enabled` are **true** by default. Only set them if you want to **disable** a feature.
 > - `se_enabled` and `vad_enabled` are **false** by default. Set `se_enabled: true` for every dual-mic AFE target; set `vad_enabled: true` only when the product explicitly needs VAD active at boot.
-> - `memory_alloc_mode` defaults to `more_psram`, SE/BSS worker defaults to `task_core: 1` / `task_priority: 5`, and the GMF AFE path keeps manager feed on Core 0 while manager fetch and the GMF pipeline task run on Core 1. Override only if telemetry shows task starvation or a board-specific scheduling issue.
+> - `memory_alloc_mode` defaults to `more_psram`, SE/BSS worker defaults to `task_core: 1` / `task_priority: 5`, and the dual-mic GMF path keeps manager feed on Core 0 while manager fetch and the GMF pipeline task run on Core 1. Override only if telemetry shows task starvation or a board-specific scheduling issue.
 >
 > **Minimal single-mic** (AEC + NS + AGC out of the box):
+>
 > ```yaml
 > esp_afe:
 >   id: afe_processor
@@ -186,6 +189,7 @@ esp_afe:
 > ```
 >
 > **Minimal dual-mic** (adds Speech Enhancement):
+>
 > ```yaml
 > esp_afe:
 >   id: afe_processor
@@ -205,14 +209,20 @@ esp_afe:
 
 The combination of `type` and `mode` determines the AEC engine and DSP pipeline:
 
-| type + mode | AEC Engine | CPU (Core 0) | MWW Compatible | Use Case |
-|-------------|-----------|-------------|----------------|----------|
-| `sr` + `low_cost` | `esp_aec3` (linear, SIMD) | **~23%** | **Yes** (10/10) | VA + MWW + VoIP |
-| `sr` + `high_perf` | `esp_aec3` (FFT) | ~25% | Yes | Not recommended (DMA memory on S3) |
-| `vc` + `low_cost` | `dios_ssp_aec` (Speex) | ~60% | No (2/10) | VoIP without wake word |
-| `vc` + `high_perf` | `dios_ssp_aec` | ~64% | No | VoIP without wake word |
+| type + mode | AEC shape | Recognition impact | Starting point |
+|-------------|-----------|--------------------|----------------|
+| `sr` + `low_cost` | Linear speech-recognition AEC | Usually preserves wake-word features best | VA + MWW + VoIP baseline |
+| `sr` + `high_perf` | Higher-cost SR/FFT variant | Recognition-oriented | Test only with verified contiguous internal heap |
+| `vc` + `low_cost` | Communication AEC with residual suppression | May reduce wake-word accuracy | Call-focused target without MWW |
+| `vc` + `high_perf` | Higher-cost communication variant | May reduce wake-word accuracy | Call-focused target with measured headroom |
+| `fd` + `low_cost` | Full-duplex/NLP pipeline | Target dependent | Two-way speech baseline |
+| `fd` + `high_perf` | Higher-cost full-duplex variant | Target dependent | Qualified target with measured headroom |
 
-> **Important**: Use `sr` + `low_cost` for Voice Assistant + MWW setups. The `vc` modes add a residual echo suppressor (RES) that distorts spectral features, reducing MWW detection from 10/10 to 2/10.
+> **Starting guidance**: use `sr` + `low_cost` for Voice Assistant + MWW.
+> Communication-oriented residual suppression can change the spectral features
+> a wake-word model consumes. Record repeatable target tests before selecting a
+> different engine; CPU and detection rates are not portable across builds,
+> enclosures and playback levels.
 
 NS and AGC always use the WebRTC engine regardless of type/mode. They work at boot, but the stock GMF AFE manager does not publish NS/AGC feature toggles, so this component changes them through AFE reinit (see [Feature Toggle Behavior](#feature-toggle-behavior)).
 
@@ -242,9 +252,9 @@ switch:
 
 | Switch | Icon | Description |
 |--------|------|-------------|
-| `aec` | `mdi:ear-hearing` | Echo cancellation toggle (live, no audio gap) |
-| `ns` | `mdi:volume-off` | Noise suppression toggle (requires AFE reinit, ~70ms gap). Use only on single-mic AFE builds; esp-sr prioritizes SE/BSS over NS on dual-mic input |
-| `vad` | `mdi:account-voice` | Voice activity detection toggle. VAD is structurally initialized and enabled/disabled live through the GMF AFE manager |
+| `aec` | `mdi:ear-hearing` | Echo cancellation toggle through the active direct/GMF AFE control API (live, no rebuild) |
+| `ns` | `mdi:volume-off` | Noise suppression toggle (requires AFE reinit and an audible gap). Use only on single-mic AFE builds; esp-sr prioritizes SE/BSS over NS on dual-mic input |
+| `vad` | `mdi:account-voice` | Voice activity detection toggle. VAD is structurally initialized and enabled/disabled through the active direct/GMF AFE control API |
 | `agc` | `mdi:tune-vertical` | Auto gain control toggle (requires AFE reinit). Use only on single-mic or custom diagnostic builds whose checked runtime config keeps `agc_init: true`; public dual-mic packages omit it |
 
 Use `RESTORE_DEFAULT_OFF` for VAD restore on devices where wake word or another
@@ -260,7 +270,7 @@ internal output buffer. That element path does not expose
 `afe_fetch_result_t::raw_data[n]`; keep AEC enabled by default on dual-mic
 SE/BSS boards because AEC-off output may sound metallic.
 
-```
+```text
 TDM / codec input
   mic 1 slot --------------+
   mic 2 slot --------------+--> esp_audio_stack --> ESP-SR feed frame
@@ -377,30 +387,29 @@ cannot allocate the contiguous DMA-capable internal block).
 
 ## Feature Toggle Behavior
 
-AEC, VAD, and NS/AGC toggle differently because the stock GMF AFE
-manager exposes only part of the lower ESP-SR runtime control surface:
+AEC, VAD, and NS/AGC toggle differently because the selected direct/GMF path
+exposes only part of the lower ESP-SR runtime control surface:
 
 | Feature | Toggle Method | Audio Gap | Notes |
 |---------|-------------|-----------|-------|
-| AEC | Live GMF manager call | None | Immediate on/off via `ESP_AFE_FEATURE_AEC` |
+| AEC | Live AFE control | None | Immediate on/off through the direct API or `ESP_AFE_FEATURE_AEC` on GMF |
 | SE | Boot-time graph choice | N/A | Structural on dual-mic builds; single-mic users should use a single-mic config or `esp_aec` |
 | NS | AFE reinit | hundreds of ms plus possible audio-task restart | ESP-SR exposes low-level vtable entries, but `esp_gmf_afe_manager` does not expose an NS feature enum. Not exposed on dual-mic SE/BSS builds because `afe_config_check()` prioritizes BSS over NS |
 | AGC | AFE reinit | hundreds of ms plus possible audio-task restart | Same manager limitation as NS. Avoid toggling while real-time audio is active. |
-| VAD | Live GMF manager call | None | `vad_init` stays structural; runtime on/off gates `ESP_AFE_FEATURE_VAD` without rebuilding the AFE instance |
+| VAD | Live AFE control | None | `vad_init` stays structural; runtime on/off uses the selected direct/GMF control without rebuilding the AFE instance |
 
 **Why reinit for NS/AGC?** ESP-SR's low-level AFE vtable includes
 `enable_ns()`, `disable_ns()`, `enable_agc()`, and `disable_agc()`, but the
 stock GMF manager keeps the AFE iface/data private and only publishes runtime
 feature toggles for AEC, VAD, and SE that are relevant to this component.
-Staying on the stock manager
-therefore means NS/AGC changes are represented as config changes and require
-destroying and rebuilding the AFE instance.
+For consistent behavior across the direct and GMF implementations, this wrapper
+represents NS/AGC changes as config changes and rebuilds the AFE instance.
 
 The reinit is safe: the previous AFE is destroyed first (ESP-SR's FFT resources are a global singleton, only one instance can exist), then the new one is built. While an AFE instance is active, missing processed output is emitted as silence rather than raw pre-AFE microphone audio.
 
 ## Architecture
 
-```
+```text
                AudioProcessor interface
                        |
               +--------+--------+
@@ -425,25 +434,26 @@ supported pairings are:
 
 ### Internal Pipeline
 
-```
-feed() ----> AFE internal tasks ----> fetch()
-  |           (FreeRTOS, Core 1)         |
-  |                                      |
-  mic + ref interleaved             clean mono output
-  (512 samples * 2 channels)        (512 samples)
+```text
+single mic:
+  esp_audio_stack task -> direct ESP-SR feed/fetch -> clean mono output
+
+dual mic:
+  esp_audio_stack task -> complete-frame feed ring
+                       -> GMF manager feed/fetch + pipeline tasks
+                       -> complete-frame output ring -> clean mono output
 ```
 
-Espressif's `esp_gmf_afe` element runs in a GMF pipeline/task. The wrapper keeps
-`process()` as the ESPHome-facing contract by publishing complete feed frames
-into a NOSPLIT bridge ring and reading processed output from an ESPHome BYTEBUF
-ring without blocking. When the process frame already matches the GMF feed
-frame, `process()` writes directly into the acquired ring slot; split-frame
-topologies keep the staging scratch. The GMF pipeline stays prepared and is
-stopped when no microphone consumer is active; prepared rings and scratch
-buffers remain allocated while idle.
-Fetch-output writes disable partial writes, so a full output span is either
-queued intact or dropped; this keeps fixed-size consumer reads sample-aligned
-after overflow.
+For one microphone, the wrapper owns the ESP-SR AFE instance directly and
+executes its feed/fetch contract from the parent audio task. For two
+microphones, Espressif's `esp_gmf_afe` element runs in GMF manager/pipeline
+tasks. The wrapper keeps `process()` as the ESPHome-facing contract by
+publishing complete feed frames into a NOSPLIT bridge ring and reading complete
+processed frames without blocking. When process and feed shapes match, the GMF
+path writes directly into an acquired ring slot; split-frame topologies retain
+a staging scratch. Prepared rings/scratch remain allocated while the GMF path
+is idle. Output writes are all-or-drop so fixed-size reads stay sample-aligned
+after pressure.
 
 ## Complete Example
 
@@ -498,6 +508,7 @@ binary_sensor:
 # Runtime mode switching
 select:
   - platform: template
+    id: afe_mode_select
     name: "AEC Mode"
     options:
       - sr_low_cost
@@ -506,6 +517,11 @@ select:
     optimistic: false
     restore_value: false
     set_action:
+      - esp_audio_stack.stop_and_wait: audio_stack
+      - wait_until:
+          condition:
+            esp_audio_stack.is_idle: audio_stack
+          timeout: 2s
       - esp_afe.set_mode:
           id: afe_processor
           mode: !lambda 'return x;'
@@ -513,33 +529,38 @@ select:
           condition:
             lambda: 'return id(afe_processor).is_reconfigure_idle();'
           timeout: 20s
+      - if:
+          condition:
+            lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
+          then:
+            - esp_audio_stack.start: audio_stack
+          else:
+            - logger.log:
+                level: ERROR
+                format: "AFE mode switch failed; audio restart skipped"
       - lambda: 'id(afe_mode_select).publish_state(id(afe_processor).get_mode_name());'
 ```
 
 ## Memory Usage
 
-| Component | Internal RAM | PSRAM | Notes |
-|-----------|-------------|-------|-------|
-| AFE framework | ~55-70 KB | Variable | Closed-source esp-sr allocations, cannot be moved to PSRAM |
-| Speech Enhancement | ~15-25 KB | Variable | Only allocated when `se_enabled: true` with `mic_num: 2` |
-| AEC filter | ~20-30 KB | ~60 KB | Depends on filter_length and mode |
-| NS (WebRTC) | ~10-15 KB | ~10 KB | Allocated even when SE replaces it at runtime |
-| AGC (WebRTC) | ~2-3 KB | ~3 KB | |
-| Feed buffer | selectable | selectable | Direct-path or split-frame scratch; omitted for GMF profiles where process frame equals feed frame. Controlled by `feed_buf_in_psram` when allocated |
-| AFE internal ring | esp-sr owned | esp-sr owned | `ringbuf_size * frame_size` inside the closed-source esp-sr instance |
-| Feed bridge ring | selectable | selectable | `kBridgeRingFrames` complete NOSPLIT feed frames; controlled by `feed_ring_in_psram` |
-| Fetch output ring | selectable | selectable | `kBridgeRingFrames` mono output frames; controlled by `fetch_ring_in_psram` |
+ESP-SR owns the AFE graph, filter and internal-ring allocations. Their size and
+internal/PSRAM placement vary with the resolved ESP-SR version, type/mode,
+filter length, features and target. `memory_alloc_mode` influences that policy,
+but does not make every private allocation user-placeable. The wrapper's
+feed scratch and bridge rings have independent `*_in_psram` controls, and a
+matching GMF frame shape can omit the feed scratch entirely.
 
-With `memory_alloc_mode: more_psram`, total internal RAM usage is approximately:
-- **~100 KB** for MR mode (single-mic: AEC + NS + AGC)
-- **~120 KB** for MMR mode (dual-mic: AEC + Speech Enhancement)
-- **~80 KB** for standalone `esp_aec`
+Budget the final composite firmware from runtime free, minimum-free and largest
+internal blocks plus PSRAM usage. Fixed totals copied from another board are
+especially misleading across single-mic direct and dual-mic GMF graphs.
 
-### IRAM Optimization (Critical for ESP32-S3)
+### ESP32-S3 IRAM/DRAM Profile
 
 On ESP32-S3, IRAM and DRAM share the same 512 KB of SRAM. Every KB of code placed in IRAM reduces available DRAM heap by 1 KB. With `CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y`, code runs from the PSRAM instruction cache, making IRAM placement unnecessary for many application functions.
 
-**Keep PSRAM XIP enabled on full AFE builds:**
+PSRAM XIP is a useful starting point on maintained full-AFE profiles because it
+can recover shared internal SRAM. Confirm flash/PSRAM mode support and measure
+latency on the exact board:
 
 ```yaml
 esp32:
@@ -563,11 +584,13 @@ risk on the same network path that carries TTS/media, API and VoIP traffic.
 
 1. **Speech Enhancement replaces NS on dual-mic input**: With two microphone channels, `afe_config_check()` prioritizes SE/BSS over NS. SE/BSS is structural and is not a runtime toggle. Public dual-mic profiles keep AGC disabled and do not expose AGC controls because AGC changes require full AFE reinit.
 
-2. **Runtime toggles**: AEC and VAD are toggled through the GMF manager without rebuilding. NS/AGC and type/mode changes require a full AFE reinit.
+2. **Runtime toggles**: AEC and VAD use the active direct/GMF control without rebuilding. NS/AGC and type/mode changes require a full AFE reinit.
 
 3. **data_volume**: The AFE's built-in `data_volume` field is not used as a product signal in this ESPHome integration. Input/output RMS is computed locally instead.
 
-4. **ESP-SR is closed source**: No API to move AFE internal allocations to PSRAM. The ~55-86 KB internal RAM overhead is unavoidable. Use the IRAM optimization options above to compensate.
+4. **ESP-SR is closed source**: `memory_alloc_mode` influences its placement,
+   but not every private allocation is controllable or observable. Measure the
+   resolved graph instead of assuming a fixed unavoidable total.
 
 5. **Single instance**: ESP-SR's FFT resources are a global singleton. Only one AFE (or AEC) instance can exist at a time.
 
@@ -579,17 +602,26 @@ Check logs for `afe_config_init failed`. This means esp-sr couldn't initialize w
 
 ### High internal RAM usage / esp-aes: Failed to allocate memory
 
-With AFE active, free internal RAM may drop to ~15 KB without IRAM optimization. This causes TLS failures (`esp-aes: Failed to allocate memory`) and WiFi heap corruption crashes. Solutions in order of impact:
+If the final firmware leaves too little contiguous internal RAM, TLS/network
+allocations or a high-performance AFE rebuild can fail. Do not normalize a low
+headline free-heap value or infer corruption from that value alone; inspect
+minimum free heap and the largest block around the actual failure. Useful
+responses are:
 
-1. **Apply IRAM optimization** (see [IRAM Optimization](#iram-optimization-critical-for-esp32-s3)) - frees ~30 KB
+1. Validate the maintained PSRAM-XIP profile for the board (see
+   [ESP32-S3 IRAM/DRAM Profile](#esp32-s3-iramdram-profile)).
 2. Set `memory_alloc_mode: more_psram`
 3. Use a single-mic config or `esp_aec` if Speech Enhancement is not needed
-4. Reduce `ringbuf_size` (minimum 2, default 8)
+4. Reduce `ringbuf_size` carefully; the single-mic direct path uses an effective
+   minimum of 16 even when a smaller YAML value is requested
 5. Consider using `esp_aec` instead if you don't need NS/AGC/VAD/SE
 
 ### Switch toggle has no effect
 
-AEC and VAD are live through the GMF AFE manager. NS and AGC toggles require AFE reinit. Public dual-mic packages do not expose NS or AGC toggles. If reinit is in progress, active AFE output is silenced instead of exposing raw pre-AFE microphone audio.
+AEC and VAD are live through the selected direct/GMF control. NS and AGC
+toggles require AFE reinit. Public dual-mic packages do not expose NS or AGC
+toggles. If reinit is in progress, active AFE output is silenced instead of
+exposing raw pre-AFE microphone audio.
 
 ### Voice presence always OFF
 
@@ -597,18 +629,22 @@ Ensure `vad_enabled: true` in the `esp_afe` config. VAD is disabled by default.
 
 ### Audio gap when toggling NS/AGC
 
-This is expected (~70ms). AEC can be toggled without audio interruption. Public dual-mic packages avoid NS/AGC runtime toggles.
+Rebuilding the AFE causes a target-dependent gap that can extend to hundreds of
+milliseconds. AEC can be toggled without rebuilding. Public dual-mic packages
+avoid NS/AGC runtime toggles.
 
 ## Logging
 
 The component logs under the tag `esp_afe`.
 
 - `WARN` - GMF pipeline start failures, GMF manager toggle failures, AFE config failures, esp-sr allocation failures, mode-switch rebuild failure
-- `INFO` - `AFE active: GMF pipeline running`, `AFE idle: GMF pipeline stopped`, `AEC enabled/disabled via GMF AFE manager`, and rebuild lifecycle messages for runtime mode switches
+- `INFO` - direct/GMF AFE lifecycle, live feature state and rebuild messages for runtime mode switches
 - `DEBUG` - bridge feed/fetch instrumentation (only when `esp_audio_stack.telemetry: true`), per-stage enable/disable acks
 
 To mute AFE chatter without losing project-wide DEBUG: `logger.logs.esp_afe: INFO`.
 
 ## License
 
-MIT License
+The ESPHome wrapper code is MIT-licensed. ESP-SR, GMF and other fetched
+Espressif dependencies retain their own licenses and product-use restrictions;
+see the repository `THIRD_PARTY_NOTICES.md`.

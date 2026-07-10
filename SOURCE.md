@@ -1,5 +1,8 @@
 # Source Snapshot
 
+This file records the initial extraction only. Subsequent changes and snapshots
+are identified by commits in this standalone repository.
+
 This repository was extracted from:
 
 - Repository: `n-IA-hane/esphome-intercom`

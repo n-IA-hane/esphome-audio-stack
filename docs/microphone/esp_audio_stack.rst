@@ -9,10 +9,11 @@ The ``esp_audio_stack`` microphone platform exposes the capture stream owned by
 the :doc:`ESP Audio Stack </components/esp_audio_stack>` component as a normal
 ESPHome microphone.
 
-When ``processor_id`` is configured on the stack, this microphone is the
-post-processor stream. Wake word, Voice Assistant, VoIP and custom consumers
-receive near-end speech after echo cancellation, not the audio currently being
-played by the local speaker.
+When ``processor_id`` is configured and enabled on the stack, this microphone
+is the post-processor stream. If an enabled processor is unavailable, output is
+silence. Disabling the parent AEC switch is an explicit bypass that publishes
+converted raw mic through this same entity; it does not create a second
+microphone path.
 
 .. code-block:: yaml
 

@@ -11,6 +11,10 @@ audio-processor interface used by `esp_audio_stack`.
 It provides AEC, noise suppression, VAD, AGC and optional dual-mic Speech
 Enhancement/BSS.
 
+Single-mic profiles use the direct ESP-SR AFE feed/fetch path. Dual-mic
+profiles use the fetched GMF AFE manager/pipeline and complete-frame bridge
+rings.
+
 ```yaml
 esp_afe:
   id: afe_processor
@@ -31,12 +35,31 @@ boards that need those features.
 - **mode** (*Optional*, string): `low_cost` or `high_perf`. Defaults to `low_cost`.
 - **input_format** (*Optional*, string): ESP-SR input layout. Defaults to `auto`.
 - **aec_enabled** (*Optional*, boolean): Enable acoustic echo cancellation.
+- **aec_filter_length** (*Optional*, int): ESP-SR filter-length parameter, from
+  `1` to `8`. Defaults to `4`; effective time coverage is engine dependent.
+- **aec_nlp_level** (*Optional*, string): `normal`, `aggressive` or
+  `very_aggressive`. Defaults to `aggressive`.
 - **ns_enabled** (*Optional*, boolean): Enable noise suppression.
 - **vad_enabled** (*Optional*, boolean): Enable voice activity detection.
+- **vad_mode**, **vad_min_speech_ms**, **vad_min_noise_ms**, **vad_delay_ms**
+  (*Optional*): VAD aggressiveness and transition timing.
+- **vad_mute_playback**, **vad_enable_channel_trigger**, **continuous_vad**
+  (*Optional*, boolean): Optional playback, per-channel and standby behavior.
 - **agc_enabled** (*Optional*, boolean): Enable automatic gain control.
+- **agc_compression_gain**, **agc_target_level** (*Optional*, int): AGC level
+  controls. NS/AGC changes rebuild the AFE.
 - **mic_num** (*Optional*, int): Number of microphone channels, `1` or `2`.
 - **se_enabled** (*Optional*, boolean): Enable dual-mic Speech Enhancement/BSS.
 - **memory_alloc_mode** (*Optional*, string): ESP-SR memory allocation strategy. Defaults to `more_psram`.
+- **afe_linear_gain** (*Optional*, float): Output multiplier, from `0.1` to
+  `10.0`. Defaults to `1.0`.
+- **ringbuf_size** (*Optional*, int): Requested ESP-SR ring size, from `2` to
+  `32`. The direct single-mic path normalizes values below `16` to `16`.
+- **task_core**, **task_priority** (*Optional*, int): ESP-SR SE/BSS worker
+  placement.
+- **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
+  corresponding `fetch_task_*` settings (*Optional*, int): Dual-mic GMF task
+  placement.
 - **feed_buf_in_psram** (*Optional*, boolean): Place the feed scratch buffer in PSRAM. Defaults to `false`.
 - **feed_ring_in_psram** (*Optional*, boolean): Place the feed staging ring in PSRAM. Defaults to `false`.
 - **fetch_ring_in_psram** (*Optional*, boolean): Place the fetch output ring in PSRAM. Defaults to `false`.
@@ -45,14 +68,15 @@ boards that need those features.
 
 ### `esp_afe.set_mode`
 
-Switches the AFE type and mode at runtime.
+Queues an AFE type/mode rebuild. Stop and wait for the parent audio stack first,
+then wait for `is_reconfigure_idle()` and check `get_last_reconfigure_ok()`
+before restarting it.
 
 ```yaml
 on_...:
   - esp_afe.set_mode:
       id: afe_processor
-      type: fd
-      mode: high_perf
+      mode: fd_high_perf
 ```
 
 ## See Also

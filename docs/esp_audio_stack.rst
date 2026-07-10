@@ -20,10 +20,11 @@ Assistant and calls share one speaker.
 
 An optional audio processor, :doc:`esp_aec </components/esp_aec>` or
 :doc:`esp_afe </components/esp_afe>`, can be attached behind the microphone
-surface. When a processor is configured, the microphone platform exposes only
-the post-processor stream: wake word, Voice Assistant and call components
-receive near-end speech after echo cancellation, not the remote caller or TTS
-coming out of the speaker.
+surface. When a processor is configured and enabled, the microphone platform
+exposes the post-processor stream. If that processor is temporarily
+unavailable, output is silence. The optional parent AEC switch is an explicit
+bypass that publishes converted raw mic on the same surface; there is no
+parallel raw microphone entity.
 
 This component requires the ESP-IDF framework and the ESPHome ``psram``
 component. It is not supported on Arduino. Maintained release targets are
@@ -170,14 +171,18 @@ Task, memory and diagnostics:
 - **task_core** (*Optional*, int): Core pinning, ``-1`` (unpinned) to ``1``. Core ``1`` is rejected on
   single-core SoC variants. Defaults to ``0``.
 - **task_stack_size** (*Optional*, int): Audio task stack in bytes, ``4096`` to ``32768``. Defaults to ``8192``.
-- **buffers_in_psram** (*Optional*, boolean): Place non-DMA audio buffers in PSRAM (saves roughly
-  15 KB of internal RAM). DMA buffers always use internal RAM. Defaults to ``false``.
-- **audio_task_stack_in_psram** (*Optional*, boolean): Place the audio task stack in PSRAM (saves
-  roughly 8 KB of internal RAM, increases per-frame latency). Uses ESPHome's PSRAM task-stack
-  helper and requires the ``psram`` component. Defaults to ``false``.
-- **aec_ref_ring_in_psram** (*Optional*, boolean): Place the AEC reference ring in PSRAM. Internal
-  placement is approximately 13.6 microseconds per frame faster at a cost of 3 to 5 KB of internal
-  RAM. Defaults to ``false``.
+- **buffers_in_psram** (*Optional*, boolean): Place eligible non-DMA audio
+  buffers in PSRAM. The amount follows the active topology/frame sizes; DMA
+  buffers remain internal. Defaults to ``false``.
+- **audio_task_stack_in_psram** (*Optional*, boolean): Place the configured
+  audio-task stack in PSRAM. This recovers approximately ``task_stack_size``
+  bytes of internal allocation but can increase per-frame latency. It uses
+  ESPHome's PSRAM task-stack helper and requires ``psram``. Defaults to
+  ``false``.
+- **aec_ref_ring_in_psram** (*Optional*, boolean): Place the software AEC
+  reference ring in PSRAM. Its size follows the configured rate/frame/capacity;
+  internal is faster, while PSRAM recovers that allocation. Defaults to
+  ``false``.
 - **telemetry** (*Optional*, boolean): Per-stage cycle counting and diagnostics. Debug only, adds
   overhead. Defaults to ``false``.
 - **telemetry_log_interval_frames** (*Optional*, int): Telemetry log cadence in frames, ``1`` to
@@ -202,10 +207,13 @@ Automation triggers:
 Lifecycle
 ---------
 
-The audio task, DMA channels and codec paths start when the first consumer (a microphone listener or
-a speaker stream) appears and stop after the last one leaves. Consumers are reference-counted.
-Explicit control is rarely needed; the actions below exist for cases where determinism matters, such
-as reconfiguring hardware or entering deep sleep.
+The audio task is created once during component setup and parks while idle. DMA
+channels and codec paths start when the first consumer (a microphone listener
+or a speaker stream) appears and stop after the last one leaves. Consumers are
+reference-counted; the task's TCB/stack remains reserved across those hardware
+cycles. Explicit control is rarely needed; the actions below exist for cases
+where determinism matters, such as reconfiguring hardware or entering deep
+sleep.
 
 .. _esp_audio_stack-start_action:
 

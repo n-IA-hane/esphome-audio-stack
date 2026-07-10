@@ -25,13 +25,19 @@ The parent `esp_audio_stack` component owns the I2S bus and echo reference.
 ## Configuration variables
 
 - **id** (*Optional*, ID): Manually specify the processor ID.
+- **sample_rate** (*Optional*, int): ESP-SR AEC rate. Only `16000` is accepted
+  and it is the default.
+- **filter_length** (*Optional*, int): ESP-SR filter-length parameter, from `1`
+  to `8`. Defaults to `4`; effective time coverage depends on the selected
+  engine/frame shape.
 - **mode** (*Optional*, string): AEC engine and profile. One of `sr_low_cost`, `sr_high_perf`, `fd_low_cost`, `fd_high_perf`, `voip_low_cost` and `voip_high_perf`. Defaults to `sr_low_cost`.
 
 ## Actions
 
 ### `esp_aec.set_mode`
 
-Switches the AEC mode at runtime.
+Switches the AEC mode at runtime by rebuilding its ESP-SR handle. Stop the audio
+path or otherwise ensure no real-time consumer is active first.
 
 ```yaml
 on_...:

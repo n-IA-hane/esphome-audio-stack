@@ -7,8 +7,9 @@ import APIRef from '@components/APIRef.astro';
 
 The `esp_audio_stack` speaker platform writes playback audio into the
 full-duplex audio backend owned by the `esp_audio_stack` component. The stack
-handles bus-rate conversion, buffering, codec output and the echo-cancellation
-reference.
+writes at its parent bus rate; upstream ESPHome resampler/mixer speakers convert
+sources at other rates. The stack owns buffering, codec output and the
+echo-cancellation reference.
 
 ```yaml
 esp_audio_stack:

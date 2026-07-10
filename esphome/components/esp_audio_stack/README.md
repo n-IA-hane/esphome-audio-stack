@@ -27,7 +27,7 @@ independent devices. They are not enough for every full-duplex voice target:
 `esp_audio_stack` owns that lower layer and exposes a normal ESPHome surface
 above it.
 
-```
+```text
 Hardware / codec / I2S
         ↓
 esp_audio_stack: I2S, codec IO, rate/layout conversion, speaker reference
@@ -85,9 +85,9 @@ Micro Wake Word, Voice Assistant, media_player, mixer, custom components
 
 ## Clean Mic Surface For Wake Word, Voice Assistant And Calls
 
-This is the main reason to use `esp_audio_stack` on full voice devices. The
-public `microphone: platform: esp_audio_stack` entry is the post-processor
-surface, not a second raw microphone tap. Speaker PCM from HA media, TTS,
+This is the main reason to use `esp_audio_stack` on full voice devices. With
+the processor enabled, the public `microphone: platform: esp_audio_stack` entry
+is the post-processor surface, not a second raw microphone tap. Speaker PCM from HA media, TTS,
 timers, local files and call playback is also captured as the AEC/AFE
 reference. `esp_aec` or `esp_afe` subtracts that reference before frames are
 delivered to ESPHome consumers.
@@ -99,10 +99,12 @@ wake-word microphone to wire and no need to route Voice Assistant or Micro Wake
 Word around the media player.
 
 If no processor is configured, the facade is still a coordinated full-duplex
-mic/speaker provider, but the microphone is not echo-cancelled. If a configured
-processor cannot produce valid output, the stack emits silence instead of
-falling back to raw mic audio, so speaker echo is not silently leaked into wake
-word, STT or VoIP TX.
+mic/speaker provider, but the microphone is not echo-cancelled. The parent AEC
+switch is an explicit bypass: disabling it publishes converted raw mic on this
+same surface. When the processor remains enabled but cannot produce valid
+output, the stack emits silence instead of silently falling back to raw mic, so
+speaker echo is not leaked into wake word, STT or VoIP TX during failures or
+rebuilds.
 
 The YAML stays normal ESPHome from the consumer side:
 
@@ -222,10 +224,11 @@ flowchart TD
 - **Core 0**: Real-time audio (I2S + AEC). WiFi (prio 23) briefly preempts for sub-ms bursts.
 - **Core 1**: ESPHome main loop and other application tasks.
 
-**CPU budget** (sr_low_cost: 512 samples @ 16kHz = 32ms per frame):
-- Without AEC: ~300us processing (< 2% of a core)
-- With SR AEC active: ~22% of Core 0 (vs ~58% with VOIP mode)
-- IDLE headroom: Core 0 ~70%, Core 1 ~73% (measured with music + MWW + VA)
+**CPU budget:** processor cost varies materially with ESP-SR version, selected
+engine, frame shape, target clock, PSRAM placement and the rest of the
+firmware. Use telemetry for a bounded diagnostic run on the final image and
+record per-frame worst case and deadline misses; do not reuse percentage
+figures measured on another board as a scheduler budget.
 
 ## Requirements
 
@@ -366,7 +369,7 @@ First-version limits:
 | `processor_id` | ID | - | Reference to audio processor component (`esp_aec` or `esp_afe`) for echo cancellation and audio processing |
 | `input_gain` | float | 1.0 | Input gain before the processor (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
 | `master_volume_min_db` | float | - | Optional 1% master-volume floor in dB (-96..0). Omit it to keep codec-dev's native curve on hardware codecs; set it to tune board UX. No-codec software volume defaults to ESPHome's -49 dB curve. |
-| `slot_bit_width` | int | auto | I2S slot width in bits (16 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
+| `slot_bit_width` | int | auto | I2S slot width in bits (16, 24 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
 | `correct_dc_offset` | bool | false | Enable DC offset removal. Required for MEMS mics without built-in HPF (MSM261, SPH0645). |
 | `mic_channel` | string | `left` | Which STD slot carries the microphone: `left` or `right`. In mono RX mode this becomes the IDF slot mask. With `rx_slot_mode: stereo`, both STD slots are read and this selects the slot in software. |
 | `rx_slot_mode` | string | `mono` | `mono` reads only `mic_channel`. `stereo` reads both STD RX slots and then selects `mic_channel`; useful for MEMS mics strapped to L/R where the wire behaves better as a full stereo frame. This is not an AEC reference mode. |
@@ -381,11 +384,13 @@ First-version limits:
 | `task_priority` | int | 19 | FreeRTOS priority of the audio task (1-24). Default 19 is above lwIP (18), below WiFi (23). |
 | `task_core` | int | 0 | Core affinity: 0 or 1 for pinned, -1 for unpinned. Default 0 keeps the non-network realtime I2S bridge below Wi-Fi and above lwIP on the ESP-IDF protocol core. |
 | `task_stack_size` | int | 8192 | Audio task stack size in bytes (4096-32768). Increase if you see stack overflow warnings. |
+| `dma_desc_num` | int | 6 | I2S DMA descriptor count (2-16). Tune only from measured latency/underrun evidence. |
+| `dma_frame_num` | int | auto | Frames per DMA descriptor (64-4092). Omitted means a rate/layout-derived value near 10 ms, clamped to IDF limits. |
 | `buffers_in_psram` | bool | false | Move component-owned frame buffers (RX scratch, speaker frame scratch, processor interleave, mic/ref/output buffers) to PSRAM where possible. DMA descriptors and I2S driver buffers remain internal. Saves internal heap on full builds at the cost of PSRAM traffic. |
-| `audio_task_stack_in_psram` | bool | false | Place the audio task's own stack in PSRAM through ESPHome's PSRAM task-stack helper. Saves ~8KB of DMA-capable internal RAM at the cost of slower function return paths. Only enable on boards that need the internal headroom. With GMF-backed `esp_afe`, heavy esp-sr work runs in Espressif manager tasks, so PSRAM stack latency is acceptable here. Requires the `psram` component. Leave it `false` on any board that does not hit the "not enough internal RAM" boundary; normal lifecycle is identical to the non-opt-in path. |
+| `audio_task_stack_in_psram` | bool | false | Place the audio task's configured stack in PSRAM through ESPHome's PSRAM task-stack helper. This recovers approximately `task_stack_size` bytes of internal allocation at the cost of slower accesses. Enable only after measuring internal pressure and per-frame worst case. Requires `psram`; keep `false` when the target already has headroom. |
 | `aec_reference` | string | `ring_buffer` | Mono-mode AEC reference source for no-codec setups. `ring_buffer` is the Espressif/ADF TYPE2-style software reference: speaker TX is staged in a delay-tunable ring before being fed to the processor. `previous_frame` is a lighter custom mode that reuses the prior TX frame, with no ring buffer and no delay tuning. Ignored when `use_stereo_aec_reference` or `use_tdm_reference` is true. |
 | `aec_reference_buffer_ms` | int | 80 | Capacity of the AEC reference ring buffer in milliseconds (32 to 500). Only used with `aec_reference: ring_buffer`. Larger values absorb more producer/consumer jitter at the cost of latency. |
-| `aec_ref_ring_in_psram` | bool | false | Place the AEC reference ring buffer storage (~3-5 KB) in PSRAM. Default `false` keeps it in internal RAM, saving ~13.6 us/frame on Core 0 (the audio task reads and writes the ring every frame). Set `true` to save internal RAM at the cost of Core 0 PSRAM traffic. Has no effect when `aec_reference: previous_frame` or when `use_stereo_aec_reference` / `use_tdm_reference` is set, since the ring path is not compiled for those modes. |
+| `aec_ref_ring_in_psram` | bool | false | Place the software AEC reference ring in PSRAM. Its size follows rate, frame shape and `aec_reference_buffer_ms`; internal is faster, while PSRAM recovers that allocation. Measure the trade-off on target. It has no effect with `previous_frame` or a stereo/TDM hardware reference because the ring path is not compiled. |
 
 ### I2S Bus Advanced Options
 
@@ -408,9 +413,10 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 
 ### Microphone Options
 
-The public `microphone: platform: esp_audio_stack` entry is intentionally thin
-and always exposes the post-processor stream. Raw/pre-AEC audio is not a
-standard microphone output path for MWW, VA or VoIP:
+The public `microphone: platform: esp_audio_stack` entry is intentionally thin.
+It exposes the post-processor stream while the processor is enabled; the parent
+AEC switch can explicitly replace that same surface with converted raw mic.
+There is no second parallel pre-AEC microphone for MWW, VA or VoIP:
 
 ```yaml
 microphone:
@@ -513,7 +519,7 @@ Mic/ref rate conversion, 32-bit to 16-bit conversion, channel deinterleave and T
 
 The selected primitives are logged at boot in `dump_config()`:
 
-```
+```text
 [C][esp_audio_stack:...]:   Rate Converter: esp_ae_rate_cvt
 ```
 
@@ -544,20 +550,23 @@ DMA timing rather than to an intermediate buffer.
 
 ### AEC with Voice Assistant + MWW
 
-Use `sr_low_cost` AEC mode for simultaneous VA + MWW. This is critical: VOIP modes add a residual echo suppressor (RES) that distorts spectral features MWW relies on (confirmed: VOIP = 2/10 detection, SR = 10/10). Espressif engineer (esp-sr #159): *"For speech recognition and wake word models, adding the non-linear module reduces recognition accuracy."*
+Use `sr_low_cost` as the starting AEC mode for simultaneous VA + MWW.
+Communication-oriented modes add residual suppression that can alter spectral
+features used by a wake-word model. Validate any other choice with repeatable
+tests on the actual enclosure and playback level.
 
 ```yaml
 esp_aec:
   id: aec_component
   sample_rate: 16000
-  filter_length: 4        # 64ms tail (4 for integrated codec, 8 for separate mic+speaker)
+  filter_length: 4        # Starting point; tune against measured echo-tail behavior
   mode: sr_low_cost       # Linear-only AEC, preserves spectral features for MWW
 
 esp_audio_stack:
   id: audio_stack
   # ... pins ...
   processor_id: aec_component   # or esp_afe component
-  buffers_in_psram: true  # Required for sr_low_cost (512-sample frames need more memory)
+  buffers_in_psram: true  # Optional when the composite firmware needs internal headroom
 
 microphone:
   - platform: esp_audio_stack
@@ -571,18 +580,26 @@ voice_assistant:
   microphone: mic_aec
 ```
 
-With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playback. No separate unprocessed microphone path is needed. MWW task priority can be boosted from default 3 to 8 via `on_boot` lambda for reliable barge-in.
+The post-AEC surface avoids a second microphone path. Whether wake-word
+barge-in meets the product target must still be measured with real TTS/music,
+far-field speech and worst-case concurrent load. Do not change MWW or audio task
+priorities without deadline/latency evidence.
 
 ### AEC Mode Comparison
 
-| Mode | Engine | CPU (Core 0) | RES | MWW compatible |
-|------|--------|-------------|-----|----------------|
-| `sr_low_cost` | `esp_aec3_728` (linear, SIMD) | **~22%** | No | **Yes** (10/10) |
-| `sr_high_perf` | `esp_aec3_hps16fft` (linear, FFT) | ~25% | No | Yes |
-| `voip_low_cost` | `dios_ssp_aec` (Speex-based) | **~58%** | Yes (always) | **No** (2/10) |
-| `voip_high_perf` | `dios_ssp_aec` | ~64% | Yes (always) | No |
+| Mode | Engine shape | Residual suppression | Starting point |
+|------|--------------|----------------------|----------------|
+| `sr_low_cost` | Linear speech-recognition AEC | No | VA/MWW baseline. |
+| `sr_high_perf` | Higher-cost SR/FFT variant | No | Only after heap preflight and target measurement. |
+| `voip_low_cost` | Voice-communication AEC | Yes | Call-focused target without wake-word requirements. |
+| `voip_high_perf` | Higher-cost communication variant | Yes | Call-focused target with measured CPU/heap headroom. |
 
-SR modes use `esp_aec3` (pure linear adaptive filter, no non-linear processing). VOIP modes use `dios_ssp_aec` (linear + two-stage RES). Use `sr_low_cost` when wake-word preservation matters. Do not use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
+SR modes use a recognition-oriented linear path; VOIP modes add residual
+suppression. Use `sr_low_cost` when wake-word preservation matters.
+High-performance modes are not categorically forbidden on ESP32-S3: the
+component checks the largest contiguous DMA-capable block and rejects a switch
+that lacks headroom. Keep the low-cost mode when that preflight or real-time
+qualification fails.
 
 ### ES8311 Digital Feedback AEC (Recommended)
 
@@ -598,7 +615,8 @@ esp_audio_stack:
 ```
 
 **How it works:**
-- ES8311 register 0x44 is configured to output DAC+ADC on ASDOUT as stereo
+- The component's ES8311 codec configuration requests the supported stereo
+  ADC/DAC feedback route; no user register patch is required.
 - L channel = ADC microphone, R channel = DAC loopback reference when
   `no_dac_ref: false` writes the Espressif ES8311 `ADCL + DACR` setting.
   Set `reference_channel: right` for this codec loopback mode.
@@ -629,7 +647,7 @@ esp_audio_stack:
 
 **Reference health monitor**: while the speaker is actively driving samples, the audio task watches the chosen ref slot's RMS. If it stays below -60 dBFS for ~3.2 s (100 frames at 32 ms), it emits a one-shot WARN:
 
-```
+```text
 [W][audio_stack] TDM AEC reference silent for 100 frames while speaker active (ref -72.4 dBFS); check tdm_ref_slot wiring or set use_tdm_reference: false
 ```
 
@@ -654,7 +672,7 @@ at the speaker path rate.
 
 #### Signal Flow
 
-```
+```text
                     ┌─── Speaker path ──────────────────────────────→ I2S TX (48kHz)
                     │    (native rate, no resampling)
 I2S bus: 48kHz ─────┤
@@ -728,7 +746,11 @@ speaker:
     output_speaker: voip_speaker_mix
 ```
 
-The `resampler` platform uses polyphase interpolation. For 16kHz→48kHz with default settings (`filters: 16, taps: 16`), CPU overhead on ESP32-S3 is approximately 2% of Core 1 during playback. If you see `[W] component took a long time` warnings for `resampler.speaker` you can try `filters: 8, taps: 8` to reduce CPU at a minimal quality cost, or `filters: 4, taps: 4` for minimal CPU.
+The `resampler` platform uses polyphase interpolation. Lowering its filter/tap
+settings trades quality for CPU, but the cost depends on input/output rate,
+target and concurrent workload. Profile before changing them and listen/test
+the result; do not reduce quality merely to suppress a long-loop warning whose
+actual blocking source has not been identified.
 
 #### How Home Assistant Knows to Send 48kHz
 
@@ -755,6 +777,7 @@ For TTS, HA requests the TTS engine at 48kHz directly. For radio/media streams, 
 ## Pin Mapping by Codec
 
 ### ES8311 (Spotpear Ball v2, AI Voice Kits)
+
 ```yaml
 esp_audio_stack:
   i2s_lrclk_pin: GPIO45   # LRCK
@@ -768,6 +791,7 @@ esp_audio_stack:
 ```
 
 ### ES8311 + ES7210 TDM (Waveshare ESP32-S3-AUDIO-Board, Korvo-2 wiring)
+
 ```yaml
 esp_audio_stack:
   i2s_lrclk_pin: GPIO14   # LRCK (shared bus)
@@ -784,6 +808,7 @@ esp_audio_stack:
 ```
 
 ### ES8388 (LyraT, Audio Dev Boards)
+
 ```yaml
 esp_audio_stack:
   i2s_lrclk_pin: GPIO25   # LRCK
@@ -809,16 +834,25 @@ esp_audio_stack:
 
 - **Sample Format**: 16-bit signed PCM, mono TX / stereo RX (ES8311 feedback mode)
 - **DMA Buffers**: owned by Espressif's official `esp_driver_i2s` channel layer.
-  The component keeps the previous low-latency policy by setting
-  `i2s_chan_config_t.dma_desc_num = 6` and computing `dma_frame_num` for about
-  10 ms per descriptor, clamped to IDF's 4092-byte DMA descriptor limit. There
-  is still no public ESPHome YAML DMA knob; if latency needs tuning, expose the
-  relevant IDF channel fields explicitly instead of adding a fallback backend.
+  YAML exposes `dma_desc_num` (default 6) and optional `dma_frame_num`. When
+  `dma_frame_num` is omitted, the component derives roughly 10 ms descriptors
+  and clamps them to IDF limits. Change either value only from measured
+  underrun/latency evidence, then retest every active bus topology.
 - **Speaker Buffer**: the public `speaker: platform: esp_audio_stack` exposes ESPHome-compatible `buffer_duration` and `timeout` options. Default `buffer_duration: 500ms` allocates a mono PCM staging ring at the I2S bus rate, preferably in PSRAM. `timeout` defaults to `never`; set an explicit value such as `10s` only when the hardware speaker should auto-stop after an abandoned writer.
 - **Task Priority**: 19 (above lwIP at 18, below WiFi at 23). Configurable via `task_priority` YAML option.
-- **Core Affinity**: Pinned to Core 0 for the non-network realtime I2S bridge. Espressif's GMF AFE path keeps manager feed on Core 0 and manager fetch plus the GMF pipeline task on Core 1 via `esp_afe`; Core 1 remains available for GMF output, MWW inference and LVGL. Configurable via `task_core` YAML option.
+- **Core Affinity**: Pinned to Core 0 by default for the non-network realtime
+  I2S bridge. The dual-mic GMF AFE path normally keeps manager feed on Core 0
+  and manager fetch/pipeline work on Core 1. Other consumers may still run on
+  either core. `task_core` is configurable, but change it only from measured
+  contention/deadline evidence.
 - **Processor Surface**: Mono, stereo and TDM processor modes all keep callbacks on the processed surface. Mono software-reference mode zero-fills the reference when playback is idle instead of switching around the processor.
-- **Thread Safety**: All cross-thread variables use `std::atomic` with `memory_order_relaxed`. Speaker/media volume, input attenuation and mic attenuation are converted to ESPHome 2026.5 `esp-audio-libs` Q31 gain values when they change, then the audio task snapshots those fixed-point values once per frame and applies them through `esp_audio_libs::gain::apply()`. Positive user-facing mic gain uses Espressif `esp_ae_alc` instead of a local scalar boost. Ring buffer resets use atomic request flags (`request_speaker_reset_`) to avoid concurrent access between main thread and audio task.
+- **Thread Safety**: Cross-thread scalars use atomics with ordering selected for
+  their role: relaxed snapshots for independent controls/counters, and stronger
+  acquire/release ordering for lifecycle or ownership publication where
+  required. Speaker/media volume, input attenuation and mic attenuation are
+  converted to Q31 values when they change; the audio task snapshots them once
+  per frame. Ring-buffer resets use request flags so the owning audio task
+  performs the mutation.
 - **Task Structure**: `audio_task_()` is split into `process_rx_path_()`, `process_aec_and_callbacks_()`, and `process_tx_path_()`, sharing state via `AudioTaskCtx` struct. AEC buffers use 16-byte aligned allocation for ESP-SR SIMD safety.
 - **I2S hardware lifecycle**: the component creates and initializes official
   IDF `esp_driver_i2s` TX/RX channels on demand. `esp_codec_dev_open()` then
@@ -828,7 +862,7 @@ esp_audio_stack:
   matching Espressif's TX-clock-for-RX full-duplex pattern.
 - **Runtime state hooks**: the parent component exposes a minimal runtime state
   machine for YAML automation. `on_state` receives `idle`, `mic`, `speaker` or
-  `duplex`. `on_mic_start`/`on_mcall_idle` fire on microphone consumer edges.
+  `duplex`. `on_mic_start`/`on_mic_idle` fire on microphone consumer edges.
   `on_speaker_start`/`on_speaker_idle` fire on speaker playback edges and are
   the right hooks for amplifier power gating; do not use the generic audio-stack
   `on_start`/`on_idle` for speaker power if wake word or VA can keep the mic
@@ -880,29 +914,37 @@ When neither `use_stereo_aec_reference` nor `use_tdm_reference` is enabled, the 
 
 ### PSRAM and sdkconfig Requirements
 
-For reliable audio on PSRAM-based devices, these sdkconfig options are **critical** and are NOT defaults:
+These settings are starting profiles used by maintained boards, not universal
+requirements. Cache size, XIP support, display load and TLS placement differ by
+target and ESP-IDF release. Begin with the closest maintained board package,
+change one setting at a time, and compare boot headroom plus real-time worst
+case before retaining it.
 
 **ESP32-S3:**
+
 ```yaml
 sdkconfig_options:
-  CONFIG_ESP32S3_DATA_CACHE_64KB: "y"       # Default is 32KB, too small for audio+PSRAM
-  CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"   # Default is 32B; 64B reduces cache misses
-  CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"     # Move code to PSRAM, frees internal SRAM
-  CONFIG_SPIRAM_RODATA: "y"                 # Move read-only data to PSRAM
-  CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"    # TLS buffers in PSRAM (saves ~40KB internal)
+  CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+  CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+  CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+  CONFIG_SPIRAM_RODATA: "y"
+  CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
 ```
 
 **ESP32-P4:**
+
 ```yaml
 sdkconfig_options:
   CONFIG_CACHE_L2_CACHE_256KB: "y"          # Default is 128KB; 256KB for MIPI DSI+audio+LVGL
   CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
   CONFIG_SPIRAM_RODATA: "y"
-  CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"       # esp32_hosted + MIPI can block main loop
   CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
 ```
 
-Removing any of these causes audio glitch at stream startup (cache cold-start: every PSRAM access is a miss until the working set loads, ~1 second).
+Do not increase the task watchdog timeout to hide display, networking or audio
+stalls. A loop/task warning is evidence to profile the blocking component and
+its worst-case interaction; extending the watchdog does not restore scheduling
+headroom.
 
 ## Logging
 
@@ -948,14 +990,21 @@ logger:
 3. Ensure speaker amp is enabled (GPIO control if applicable)
 
 ### Audio Crackling
-1. Reduce sample_rate (try 8000 or 16000)
-2. Check for WiFi interference (pin to Core 1)
-3. Verify PSRAM is declared and available
+1. Compare I2S read/write error and underrun counters with the negotiated bus
+   format and configured DMA geometry.
+2. Correlate glitches with Wi-Fi, display and API load using bounded telemetry;
+   do not repin the audio task blindly. The maintained default is Core 0.
+3. Verify PSRAM is declared/available and inspect minimum free plus largest
+   contiguous internal block.
+4. Reduce sample rate only as an explicit product trade-off and revalidate every
+   consumer/codec contract.
 
 ### Echo During Calls
 1. Enable AEC: set `processor_id` on `esp_audio_stack`
-2. For ES8311: enable `use_stereo_aec_reference: true` + configure register 0x44
-3. Adjust `filter_length` (4 for integrated codec, 8 for separate speaker)
+2. For ES8311, enable `use_stereo_aec_reference: true`, keep the codec's
+   `no_dac_ref` settings consistent and select the documented reference channel;
+   no manual register patch is required.
+3. Adjust `filter_length` only from captured echo-tail measurements.
 
 ### TDM Mode: Audio Corruption (Whistle/Machine Gun Noise)
 1. Ensure I2S uses `I2S_SLOT_MODE_STEREO` (not MONO) for TDM. MONO only puts slot 0 in DMA
@@ -968,14 +1017,20 @@ logger:
 ### MWW Not Detecting During TTS
 1. **Use `sr_low_cost` AEC mode** (not VOIP). See [AEC Mode Comparison](#aec-mode-comparison).
 2. **MWW on `mic_aec`** (post-AEC), not on an unprocessed microphone path.
-3. **Enable `buffers_in_psram: true`** for SR mode's 512-sample frames on ESP32-S3.
-4. Do NOT use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
+3. If internal RAM pressure is measured, test `buffers_in_psram: true` and
+   compare per-frame worst case.
+4. Use a high-performance mode only when its contiguous-DMA preflight succeeds
+   and the complete workload still meets deadlines.
 
 ### Switches/Display Slow With AEC On
-With `audio_stack` on **Core 0**, AEC no longer competes with LVGL/display on Core 1. This issue is resolved by correct core assignment. If you still see display slowness, check that no other high-priority task is pinned to Core 1.
+The maintained default keeps `audio_stack` on Core 0, but Wi-Fi can preempt it
+and GMF/display/application work may occupy either core. Capture task timing and
+loop warnings under the failing composite workload before changing affinity or
+priority; a core move can simply transfer the contention.
 
 ### SPI Errors (err 101) With AEC
-1. Use `mode: sr_low_cost` or `mode: voip_low_cost`. `sr_high_perf` exhausts DMA memory on ESP32-S3
+1. Start from a low-cost mode. If a high-performance mode is rejected, inspect
+   the logged largest contiguous DMA-capable block.
 2. Enable `buffers_in_psram: true` to free internal heap
 3. Reduce display update interval (500ms+) to avoid SPI bus contention
 4. Check free heap in logs after boot
@@ -983,17 +1038,28 @@ With `audio_stack` on **Core 0**, AEC no longer competes with LVGL/display on Co
 ## Known Limitations
 
 - **Media files should match bus sample rate**: For best quality, use media files at the bus `sample_rate` (e.g. 48kHz). The `resampler` speaker handles conversion from any rate, but native rate avoids resampling artifacts.
-- **loopTask long-operation warnings during 48kHz streaming**: ESPHome reports `[W] mixer.speaker took a long time (110ms)` and similar warnings for `resampler.speaker`, `api`, `wifi` during audio playback. This is **expected and harmless**. These components run in loopTask (Core 1, prio 1) and process audio/network chunks that take >30ms. All real-time audio runs in dedicated tasks on Core 0 and is unaffected.
+- **loopTask long-operation warnings during streaming**: Do not classify these
+  as expected or harmless. Dedicated I2S processing may continue, but a stalled
+  ESPHome loop can delay API, UI, automations, buffers and lifecycle control.
+  Compare against the same firmware with audio idle, identify the component
+  consuming the interval, and reject changes that turn a normal loop cadence
+  into repeated long stalls.
 - **AEC is ESP-SR closed-source**: Cannot reset the adaptive filter without recreating the handle. When a processor is configured, this component no longer switches to raw mic audio during idle or reinit windows; unavailable processed output is silenced.
-- **Future processor bypass control**: A runtime processor on/off switch is a
-  candidate for a later release, mainly for dual-mic/BSS targets where disabling
-  AEC but keeping the AFE/BSS graph can sound metallic. The intended shape is
-  one public microphone surface: processor on = post-AEC/AFE output; processor
-  off = explicit mono raw-mic bypass with a clear log message. This is not part
-  of the 2026.7.0-dev release path.
-- **TDM analog reference vs ES8311 digital feedback**: The digital feedback path (ES8311 stereo loopback) provides a cleaner reference signal for AEC than the TDM analog path (ES7210 MIC3 capturing speaker output). Analog loopback introduces non-linear distortion from the DAC/amplifier chain that the AEC linear adaptive filter cannot fully model. Expect ~95-98% echo cancellation with analog reference vs ~99% with digital feedback. Both are adequate for voice assistant and VoIP use.
+- **Processor bypass control**: the parent `esp_audio_stack` AEC switch toggles
+  `processor_enabled`. Disabled means the single public microphone surface
+  explicitly carries the converted raw mic; enabled but temporarily unavailable
+  fails closed to silence instead of leaking raw audio during processor
+  init/rebuild/failure. Per-feature AFE switches have their own semantics.
+- **TDM analog reference vs ES8311 digital feedback**: Digital codec feedback
+  is normally more sample-aligned and excludes some analog-path distortion.
+  TDM analog feedback includes the DAC/amplifier/capture chain and can better
+  represent some physical effects while also adding nonlinearities. Neither
+  topology has a universal cancellation percentage; qualify it with captured
+  near/far speech on the final enclosure.
 - **AEC reference**: The reference signal is always the exact post-volume PCM sent to the speaker, with no additional scaling. For hardware codec setups (ES8311, TDM), the reference naturally includes hardware volume. For software reference (no codec), the reference includes software volume. Pre-AEC input gain/gain affects only the mic signal, not the reference; use it sparingly because it changes what the AEC/AFE sees.
 
 ## License
 
-MIT License
+The ESPHome wrapper code is MIT-licensed. Espressif libraries fetched for
+codec, conversion and optional processing retain their own licenses and
+product-use restrictions; see the repository `THIRD_PARTY_NOTICES.md`.

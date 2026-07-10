@@ -7,8 +7,10 @@ ESP Audio Stack Speaker
 
 The ``esp_audio_stack`` speaker platform writes playback audio into the
 full-duplex audio backend owned by :doc:`ESP Audio Stack
-</components/esp_audio_stack>`. The stack handles bus-rate conversion,
-buffering, codec output and the echo-cancellation reference.
+</components/esp_audio_stack>`. The speaker writes at the parent stack's bus
+rate; upstream ESPHome resampler/mixer speakers convert sources that use a
+different rate. The stack owns buffering, codec output and the
+echo-cancellation reference.
 
 .. code-block:: yaml
 

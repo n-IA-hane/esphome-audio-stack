@@ -30,6 +30,13 @@ Configuration variables:
 ------------------------
 
 - **id** (*Optional*, :ref:`config-id`): Manually specify the processor ID.
+- **sample_rate** (*Optional*, int): ESP-SR AEC rate. The only accepted value
+  is ``16000`` and it is the default; ``esp_audio_stack`` converts a faster bus
+  rate before processing.
+- **filter_length** (*Optional*, int): ESP-SR filter-length parameter, ``1`` to
+  ``8``. Defaults to ``4``. Its effective time span depends on the selected
+  engine/frame shape, so validate echo-tail coverage on the target rather than
+  assuming one fixed millisecond conversion.
 - **mode** (*Optional*, string): AEC engine and profile. Supported values are
   ``sr_low_cost``, ``sr_high_perf``, ``fd_low_cost``, ``fd_high_perf``,
   ``voip_low_cost`` and ``voip_high_perf``. Defaults to ``sr_low_cost``.
@@ -43,6 +50,10 @@ the actual enclosure.
 ---------------------------
 
 Switches the AEC mode at runtime.
+
+Changing mode rebuilds the ESP-SR handle and can interrupt audio. Stop the
+audio path or otherwise ensure no real-time consumer is active before changing
+mode on a product device.
 
 .. code-block:: yaml
 

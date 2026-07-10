@@ -78,21 +78,24 @@ came from a shared codec bus, a TDM frame, or two separate MEMS/amp buses.
   or a TDM hardware reference slot captured with the microphones.
 - **Pluggable processing.** `processor_id` attaches `esp_aec` or `esp_afe`
   behind the microphone surface. They are mutually exclusive by validation.
-- **The clean-mic contract.** When a processor is configured, the ESPHome
-  microphone platform exposes only the post-processor stream. Wake word, Voice
-  Assistant and call TX receive near-end speech after echo cancellation, never
-  the raw feed.
-- **On-demand lifecycle.** The audio task and I2S hardware start when the first
-  consumer appears and stop when the last one leaves. Consumers are
-  reference-counted.
+- **The clean-mic contract.** With a configured processor enabled, the ESPHome
+  microphone platform exposes the post-processor stream. If that enabled
+  processor is temporarily unavailable, output fails closed to silence. The
+  optional parent AEC switch is an explicit raw-mic bypass on the same surface;
+  there is no second parallel raw microphone.
+- **On-demand hardware lifecycle.** One resident audio task is created during
+  setup and parks without polling while idle. I2S channels, DMA and codec paths
+  start when the first consumer appears and stop when the last one leaves.
+  Consumers are reference-counted.
 - **Runtime control from Home Assistant.** Optional switch, number,
   binary_sensor and diagnostic sensor platforms expose AEC/AFE controls, mic
   gain, volume and TDM slot levels.
 - **Strict YAML validation.** Invalid topologies are refused at compile time:
   impossible rate conversion, TDM slot collisions, unsupported SoCs, invalid
   core pinning, mutually exclusive processors and more.
-- **Reproducible builds.** Espressif component-manager dependencies are pinned
-  to tested versions and documented.
+- **Controlled dependencies.** Espressif component-manager dependencies use
+  tested exact pins or compatible-version constraints and are documented; the
+  resolved build manifest/lock data identifies the concrete firmware inputs.
 
 ## 3. Scenarios It Covers
 
@@ -135,9 +138,10 @@ from: software (`aec_reference`), stereo codec feedback
 `AudioProcessor` interface. `esp_audio_stack` feeds them mic frames plus the
 reference and publishes their output as the microphone stream.
 
-**Consumers and lifecycle.** Nothing runs while nothing listens. The audio task,
-DMA channels and codec paths spin up when the first microphone listener or
-speaker stream arrives and wind down after the last one leaves.
+**Consumers and lifecycle.** While nothing listens, the pre-created audio task
+is parked and the I2S/DMA/codec path is down. Hardware spins up when the first
+microphone listener or speaker stream arrives and winds down after the last one
+leaves; the task's TCB/stack remains allocated for the device lifetime.
 
 **The real-time boundary.** The audio task runs at high priority, default 19,
 pinned to core 0 by default. Any C++ callback invoked from it must not block,
@@ -178,7 +182,8 @@ Requirements:
 - An `i2c:` bus when a hardware codec is configured.
 
 Espressif dependencies are resolved automatically by the IDF Component Manager.
-Nothing is vendored.
+Their source is not stored in this repository. The dual-mic GMF path is fetched
+from the pinned `n-IA-hane/esp-gmf` compatibility branch documented below.
 
 ## 6. Hardware Topologies
 
@@ -412,8 +417,9 @@ The mode can be switched at runtime with `esp_aec.set_mode`.
 
 ### 8.2 `esp_afe`: Full Audio Front End
 
-`esp_afe` wraps the Espressif AFE/GMF pipeline: AEC, noise suppression, VAD, AGC
-and dual-mic Speech Enhancement/BSS.
+`esp_afe` wraps Espressif AFE: the single-mic path calls ESP-SR directly, while
+the dual-mic path uses the GMF AFE element. Both expose AEC, noise suppression,
+VAD, AGC and, where supported, dual-mic Speech Enhancement/BSS.
 
 ```yaml
 esp_afe:
@@ -466,8 +472,10 @@ microphone:
 ```
 
 The platform publishes mono `s16` audio at `output_sample_rate`. When
-`processor_id` is configured, this is the post-processor stream. Feed it to
-normal ESPHome consumers:
+`processor_id` is configured and enabled, this is the post-processor stream.
+Disabling the parent stack's AEC switch explicitly bypasses the processor and
+publishes the converted raw mic on the same surface. Feed it to normal ESPHome
+consumers:
 
 ```yaml
 micro_wake_word:
@@ -585,7 +593,7 @@ All values are verified against the component schema.
 | `output_sample_rate` | `sample_rate` | 8000 to 48000 | Microphone rate exposed to consumers. Must divide `sample_rate`, ratio at most 6. |
 | `bits_per_sample` | `16` | 16, 24, 32 | Sample container on the bus. |
 | `slot_bit_width` | `auto` | auto, 16, 24, 32 | Physical slot width. |
-| `num_channels` | `1` | 1, 2 | RX channel count on standard I2S. |
+| `num_channels` | `1` | 1, 2 | Physical channel count on the standard I2S bus. |
 | `speaker_channels` | `1` | 1, 2 | Playback channels. Two channels require standard I2S and `num_channels: 2`. |
 | `mic_channel` | `left` | left, right | Which stereo slot carries the mic when RX is stereo. |
 | `rx_slot_mode` | `mono` | mono, stereo | Read one or both stereo slots on RX. |
@@ -713,15 +721,21 @@ This repository was extracted from the maintained
 [`n-IA-hane/esphome-intercom`](https://github.com/n-IA-hane/esphome-intercom)
 codebase, where this stack is the audio backend of a full SIP intercom platform
 and is exercised on real ES8311, ES7210/ES8311, ESP32-S3 and ESP32-P4 hardware.
-`SOURCE.md` records the source commit of each snapshot.
+`SOURCE.md` records the initial extraction provenance; later repository commits
+are tracked by this repository's own history.
 
 Espressif dependencies and their pins:
 
 - `esp_codec_dev` `1.5.10` for codec control;
 - `esp_audio_effects` `1.3.0~1` for rate, bit-depth and layout conversion;
-- `esp-sr` and GMF AFE components for the `esp_aec` / `esp_afe` processors.
+- `esp-dsp` `^1.8.0` and `esp-sr` `^2.4.6` for the processors;
+- dual-mic `gmf_ai_audio` from the pinned
+  `n-IA-hane/esp-gmf` ref `gmf-ai-audio-esp-sr-2.4.6`.
 
-Pins are temporary, documented and removed after board testing.
+These constraints are part of the tested build contract. Update them only with
+schema, firmware and real-device validation; they are not automatically removed
+after board bring-up.
 
 This repository is MIT-licensed. Espressif dependencies keep their own licenses
-and hardware restrictions; no Espressif source or binaries are vendored here.
+and hardware restrictions; dependency source is fetched at build time rather
+than stored in this repository.

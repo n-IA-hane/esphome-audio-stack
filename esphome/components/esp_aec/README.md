@@ -63,23 +63,31 @@ esp_audio_stack:
 |--------|------|---------|-------------|
 | `id` | ID | required | Component identifier referenced by `esp_audio_stack.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
-| `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes for a ~128 ms tail, or **8** with VOIP modes for a similar tail. Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
+| `filter_length` | int | 4 | ESP-SR filter-length parameter, range 1 to 8. The library supplies the frame shape for each engine at runtime, so do not treat one value as a universal millisecond duration. Increase only after measuring echo-tail coverage and heap headroom on the target. |
 | `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for real-time call audio. |
 
 ## AEC modes
 
-esp-sr 2.4.6 ships SR, VOIP and FD AEC modes:
+The resolved ESP-SR 2.4.x line supplies SR, VOIP and FD AEC modes:
 
-| Mode | Engine | CPU on Core 0 (S3 @ 240 MHz, 16 kHz mono) | RES | MWW on post-AEC | Recommended |
-|------|--------|--------------------------------------|-----|-----------------|-------------|
-| `sr_low_cost` | `esp_aec3` linear | **~22 %** | No | **10/10** | VA + MWW when speaker leakage is already mild |
-| `sr_high_perf` | `esp_aec3` FFT | ~25 % | No | 10/10 | Only when contiguous DMA-capable internal RAM is available |
-| `voip_low_cost` | `dios_ssp_aec` Speex | ~58 % | Yes | 2/10 | VoIP-only, mild echo, low CPU budget |
-| `voip_high_perf` | `dios_ssp_aec` | ~64 % | Yes | 2/10 | **Default for voip-only** (with `filter_length: 8` for 128 ms tail) |
-| `fd_low_cost` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Codec-backed full-duplex devices with audible speaker echo, such as Spotpear ES8311 loopback |
-| `fd_high_perf` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Same use case when contiguous DMA-capable internal RAM is available |
+| Mode | Engine shape | Non-linear suppression | Starting point |
+|------|--------------|------------------------|----------------|
+| `sr_low_cost` | Speech-recognition linear AEC | No | Voice Assistant/MWW when preserving recognition features matters. |
+| `sr_high_perf` | Higher-cost SR/FFT variant | No | SR experiments with verified contiguous DMA-capable heap. |
+| `voip_low_cost` | Voice-communication AEC | Yes | Call-focused enclosure where stronger residual suppression is useful. |
+| `voip_high_perf` | Higher-cost voice-communication variant | Yes | Call-focused target with measured CPU and heap headroom. |
+| `fd_low_cost` | Full-duplex AEC | Yes | Codec-backed two-way speech with audible speaker echo. |
+| `fd_high_perf` | Higher-cost full-duplex variant | Yes | Same use case after target qualification and heap preflight. |
 
-Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only adaptive filter that preserves the spectral features the wake-word neural model relies on. The VOIP engines add a residual echo suppressor (RES) that distorts those features and drops MWW detection rate from 10/10 to 2/10 in our hardware tests.
+Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only
+adaptive filter that better preserves spectral features used by wake-word
+models. VOIP engines add residual echo suppression that can reduce detection
+accuracy, especially during playback.
+
+The exact CPU cost, residual echo and wake-word hit rate depend on the board,
+model, enclosure, playback level and resolved ESP-SR build. Treat mode names as
+selection guidance, then record repeatable target measurements; historical
+small-sample detection counts are not product guarantees.
 
 `sr_high_perf` allocates a contiguous DMA-capable internal block at switch time. The component runs a pre-flight heap check and refuses the switch cleanly (logs a warning, keeps the previous mode active) if the block is not available.
 
@@ -92,8 +100,8 @@ Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only adaptiv
 | `FrameSpec frame_spec() const` | Frame size and channel layout that `process()` expects. |
 | `bool process(mic, ref, out, mic_channels)` | Run one AEC frame. Returns false if the handle is not ready. |
 | `FeatureControl feature_control(AudioFeature)` | `AEC` is `RESTART_REQUIRED`; everything else is `NOT_SUPPORTED`. |
-| `bool set_feature(AudioFeature, bool enabled)` | Toggle AEC (rebuilds the handle, ~70 ms gap). |
-| `ProcessorTelemetry telemetry() const` | Frame count and ring-buffer free percent for diagnostics. |
+| `bool set_feature(AudioFeature, bool enabled)` | Currently returns `false`; standalone AEC has no per-feature live toggle. Use a mode reconfigure or the parent stack's explicit processor bypass. |
+| `ProcessorTelemetry telemetry() const` | Returns the default/empty telemetry record; standalone AEC does not publish frame or ring counters. |
 | `bool reconfigure(int type, int mode)` | Switch AEC mode by numeric code. `type` selects the engine (0 = SR, 1 = VC, 2 = FD); `mode` selects the variant (0 = LOW_COST, 1 = HIGH_PERF). Prefer the YAML action `esp_aec.set_mode` for automations. |
 | `bool reinit_by_name(const std::string &name)` | Switch AEC mode by name (`"sr_low_cost"` etc.). Recommended entry point. Returns false on rejection (for example, when `sr_high_perf` cannot allocate DMA). |
 | `std::string get_mode_name() const` | Current mode as a string. Read this after `reinit_by_name` to confirm the switch was accepted. |
@@ -154,20 +162,21 @@ None. `esp_aec::process()` runs synchronously on the caller's audio task. The ca
 
 ## Memory footprint
 
-| Item | Internal RAM | PSRAM |
-|------|--------------|-------|
-| Component overhead (handle, config) | ~4 KB | n/a |
-| Working buffers (esp-sr managed, prefers PSRAM) | minimal | ~40 KB |
-| `sr_high_perf` extra DMA block | ~40 KB contiguous internal | n/a |
-
-For comparison, `esp_afe` in MR LOW_COST mode costs ~72 KB internal + ~733 KB PSRAM, and in MMR (2-mic + Speech Enhancement) ~77 KB + ~1.2 MB.
+ESP-SR owns most mode-dependent allocations, and their internal/PSRAM split can
+change with the resolved library, target and filter length. High-performance
+modes additionally require a large contiguous DMA-capable internal block; the
+component checks the largest block before rebuilding and retains the previous
+mode when the check fails. Measure free, minimum-free and largest internal
+blocks on the final composite firmware instead of budgeting from fixed totals
+quoted for another board.
 
 ## Dependencies
 
 - ESP32 only, restricted to S3 and P4 variants (enforced in `_validate_esp32_variant`).
-- Pulls `espressif/esp-sr` 2.4.6 via ESPHome's IDF component manager and wraps
-  the low-level `afe_aec` helper. This keeps standalone AEC aligned with the
-  same esp-sr generation used by the GMF-backed `esp_afe` path.
+- Resolves `espressif/esp-dsp` with `^1.8.0` and `espressif/esp-sr` with
+  `^2.4.6` through ESPHome's IDF component manager, then wraps the low-level
+  `afe_aec` helper. The constraints allow a newer compatible release, so the
+  lockfile/build manifest is the authority for an individual firmware.
 - Implements [`AudioProcessor`](../esp_audio_stack/README.md), so it can be referenced by any component that accepts that interface.
 
 ## Logging
@@ -175,7 +184,7 @@ For comparison, `esp_afe` in MR LOW_COST mode costs ~72 KB internal + ~733 KB PS
 The component logs under the tag `esp_aec`.
 
 - `WARN` - `sr_high_perf` pre-flight rejected (contiguous DMA-capable internal RAM unavailable), handle rebuild failed mid-call
-- `INFO` - `Reinitializing AEC: mode X -> Y`, `AEC reinitialized: mode=N, frame=M` (mode-switch lifecycle, ~70 ms audio gap)
+- `INFO` - `Reinitializing AEC: mode X -> Y`, `AEC reinitialized: mode=N, frame=M` (mode-switch lifecycle)
 - `DEBUG` - frame-level processor_->process() trace (rare, mostly for esp-sr binding development)
 
 To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INFO`.
@@ -184,7 +193,9 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 
 - Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must rate-convert; `esp_audio_stack` does this with Espressif's `esp_ae_rate_cvt`.
 - Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while real-time audio is streaming.
-- `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
+- `filter_length` is configured from YAML and retained across runtime mode
+  rebuilds. Longer filters may improve echo-tail coverage at the cost of CPU
+  and memory.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.
 
 ## Troubleshooting
@@ -207,3 +218,9 @@ The pre-flight check on contiguous DMA-capable internal RAM rejected the switch.
 
 **AEC mode select in Home Assistant shows the wrong value after a switch attempt.**
 You are missing `optimistic: false` on the template select. Without it, the template auto-publishes the user-selected value over the live mode the device actually applied.
+
+## License
+
+The ESPHome wrapper code is MIT-licensed. ESP-SR, ESP-DSP and other fetched
+Espressif dependencies retain their own licenses and product-use restrictions;
+see the repository `THIRD_PARTY_NOTICES.md`.
