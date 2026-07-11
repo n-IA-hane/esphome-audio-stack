@@ -549,6 +549,11 @@ class ESPAudioStack : public Component {
 #endif
     size_t speaker_got{0};  // bytes actually read from speaker ring buffer
     bool mic_running{false};
+#ifdef USE_ESP_AUDIO_STACK_RING_REF
+    // Audio-task-owned edge state. Ring reference data is meaningful only
+    // within one continuous microphone-consumer session.
+    bool aec_ref_mic_active{false};
+#endif
     uint32_t now_ms{0};
   };
 

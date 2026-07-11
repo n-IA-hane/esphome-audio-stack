@@ -797,6 +797,16 @@ void ESPAudioStack::audio_session_() {
     ctx.speaker_running = this->speaker_running_.load(std::memory_order_relaxed);
     ctx.speaker_paused = this->speaker_paused_.load(std::memory_order_relaxed);
     ctx.mic_running = this->has_mic_consumers_.load(std::memory_order_relaxed);
+#ifdef USE_ESP_AUDIO_STACK_RING_REF
+    // Never carry playback history into a new capture session. In TYPE2-style
+    // software-reference mode the speaker may run long before a mic consumer
+    // appears; retaining that FIFO backlog permanently misaligns AEC because
+    // producer and consumer subsequently advance at the same rate.
+    if (this->aec_ref_ring_buffer_ && ctx.mic_running != ctx.aec_ref_mic_active) {
+      this->aec_ref_ring_buffer_->reset();
+      ctx.aec_ref_mic_active = ctx.mic_running;
+    }
+#endif
     this->update_runtime_audio_flags_(ctx);
 
     ctx.processor_enabled = this->processor_enabled_.load(std::memory_order_relaxed);
@@ -1750,7 +1760,7 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
   }
 #endif
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
-  if (this->aec_ref_ring_buffer_ && ctx.processor_enabled) {
+  if (this->aec_ref_ring_buffer_ && ctx.processor_enabled && ctx.mic_running) {
     if (full_frame && this->direct_aec_ref_ != nullptr) {
       // Decimate TX -> processor rate into direct_aec_ref_ scratch, then push
       // the converted frame into the ring. direct_aec_ref_ is sized for
