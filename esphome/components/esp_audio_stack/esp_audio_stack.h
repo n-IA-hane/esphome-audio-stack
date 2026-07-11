@@ -746,7 +746,6 @@ class ESPAudioStack : public Component {
   size_t tx_completion_queue_size_{0};
   size_t tx_completion_dma_buffer_bytes_{0};
   uint32_t tx_completion_dma_frames_{0};
-  uint32_t tx_completion_bytes_per_frame_{0};
   volatile bool tx_completion_desync_{false};
   std::atomic<uint32_t> tx_completion_pending_real_records_{0};
 
@@ -801,10 +800,6 @@ class ESPAudioStack : public Component {
   std::atomic<bool> any_tdm_slot_level_sensor_enabled_{false};
   std::atomic<float> tdm_slot_level_dbfs_[8] = {};
   uint8_t tdm_slot_level_divider_{0};
-
-  // AEC gating: only run echo canceller while speaker has recent real audio.
-  std::atomic<uint32_t> last_speaker_audio_ms_{0};
-  static constexpr uint32_t AEC_ACTIVE_TIMEOUT_MS{250};
 
   // Task configuration (defaults match ESP-IDF audio best practices)
   uint8_t task_priority_{19};  // Above lwIP(18), below WiFi(23)

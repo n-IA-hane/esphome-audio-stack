@@ -967,7 +967,6 @@ bool ESPAudioStack::prepare_i2s_channels_() {
 
   this->set_i2s_hardware_state_(I2SHardwareState::READY);
   this->tx_completion_dma_frames_ = need_tx ? dma_frame_num : 0;
-  this->tx_completion_bytes_per_frame_ = need_tx ? tx_bytes_per_frame : 0;
   this->tx_completion_dma_buffer_bytes_ =
       need_tx ? static_cast<size_t>(dma_frame_num) * static_cast<size_t>(tx_bytes_per_frame) : 0;
   this->tx_completion_queue_size_ = need_tx ? static_cast<size_t>(dma_desc_num) * 2U : 0;
@@ -1628,9 +1627,6 @@ size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_
   }
   size_t written = this->speaker_buffer_->write_without_replacement((void *) data, aligned_len, ticks_to_wait, false);
 
-  if (written > 0) {
-    this->last_speaker_audio_ms_.store(millis(), std::memory_order_relaxed);
-  }
   return written;
 }
 
