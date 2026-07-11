@@ -446,6 +446,8 @@ class EspAfe : public Component, public AudioProcessor {
   int warmup_remaining_{3};
   // Feed/fetch diagnostics.
   std::atomic<uint32_t> input_ring_drop_{0};   // process() could not enqueue (NOSPLIT full)
+  std::atomic<uint32_t> process_frame_count_{0};  // process() calls while the AFE is active
+  std::atomic<uint32_t> process_output_miss_{0};  // process() found no complete processed output frame
   std::atomic<uint32_t> feed_ok_{0};           // GMF input port accepted a frame
   std::atomic<uint32_t> feed_rejected_{0};     // GMF input port timed out or saw a bad frame
   std::atomic<uint32_t> fetch_ok_{0};          // GMF output port drained a frame

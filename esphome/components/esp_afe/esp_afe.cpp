@@ -1382,6 +1382,8 @@ bool EspAfe::set_feature(AudioFeature feature, bool enabled) {
 
 ProcessorTelemetry EspAfe::telemetry() const {
   ProcessorTelemetry t;
+  t.frame_count = this->process_frame_count_.load(std::memory_order_relaxed);
+  t.glitch_count = this->process_output_miss_.load(std::memory_order_relaxed);
   t.voice_present = this->voice_present_.load(std::memory_order_relaxed);
   t.input_volume_dbfs = this->input_volume_dbfs_.load(std::memory_order_relaxed);
   t.output_rms_dbfs = this->output_rms_dbfs_.load(std::memory_order_relaxed);
@@ -1469,6 +1471,8 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     silence_frame(out, os);
     return false;
   }
+
+  diag_add(this->process_frame_count_);
 
   const int64_t process_start_us = ESP_AFE_TIMING_TELEMETRY ? esp_timer_get_time() : 0;
   auto finish_process_timing = [this, process_start_us]() {
@@ -1620,6 +1624,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     }
   }
   if (!processed) {
+    diag_add(this->process_output_miss_);
     silence_frame(out, os);
   }
 
