@@ -54,3 +54,19 @@ def test_realtime_audio_loop_has_no_tick_delay_or_effect_allocator() -> None:
     assert "esp_ae_bit_cvt_open" in cold_allocate
     assert "frame_interval_avg_us" in cpp
     assert "t_frame_interval_max_us" in cpp
+
+
+def test_idle_tx_completion_overflow_preserves_full_duplex_capture() -> None:
+    """Clock-only DMA callbacks may outpace the audio task during Wi-Fi startup."""
+    cpp = read("esp_audio_stack.cpp")
+    header = read("esp_audio_stack.h")
+    callback = cpp[
+        cpp.index("bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback") :
+        cpp.index("bool ESPAudioStack::prepare_tx_completion_tracking_")
+    ]
+
+    assert "tx_completion_idle_event_drops_" in header
+    assert "tx_completion_pending_real_records_.load" in callback
+    assert "self->tx_completion_desync_ = true" in callback
+    assert "self->tx_completion_idle_event_drops_.fetch_add" in callback
+    assert "Discarded %u idle TX completion events" in cpp

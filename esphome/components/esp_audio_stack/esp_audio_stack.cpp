@@ -1179,7 +1179,24 @@ bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_
   if (xQueueIsQueueFullFromISR(self->tx_completion_event_queue_)) {
     int64_t dummy = 0;
     xQueueReceiveFromISR(self->tx_completion_event_queue_, &dummy, &need_yield1);
-    self->tx_completion_desync_ = true;
+    // A full-duplex codec keeps the TX DMA ring clocking even when the audio
+    // task has not submitted another buffer. IDF consequently emits on_sent
+    // callbacks for recycled silence descriptors with no matching application
+    // write record. A short task stall (Wi-Fi association is a common one) can
+    // fill this timestamp queue while the speaker is idle. Dropping one of
+    // those clock-only timestamps is harmless: drain_tx_completion_events_()
+    // already ignores unmatched events while no real speaker record is
+    // pending. It must not turn the independent RX/microphone path into an I2S
+    // error.
+    //
+    // Once real speaker data is pending, losing a timestamp may lose its
+    // completion boundary. Preserve the fail-closed behaviour in that case so
+    // output callbacks (notably AEC reference tracking) cannot silently drift.
+    if (self->tx_completion_pending_real_records_.load(std::memory_order_relaxed) > 0) {
+      self->tx_completion_desync_ = true;
+    } else {
+      self->tx_completion_idle_event_drops_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
   xQueueSendToBackFromISR(self->tx_completion_event_queue_, &now, &need_yield2);
   (void) handle;
@@ -1229,6 +1246,7 @@ bool ESPAudioStack::prepare_tx_completion_tracking_() {
   }
   this->tx_completion_desync_ = false;
   this->tx_completion_pending_real_records_.store(0, std::memory_order_release);
+  this->tx_completion_idle_event_drops_.store(0, std::memory_order_release);
   return true;
 }
 
@@ -1260,6 +1278,7 @@ bool ESPAudioStack::prime_tx_completion_records_(bool preload_dma) {
 void ESPAudioStack::reset_tx_completion_tracking_() {
   this->tx_completion_desync_ = false;
   this->tx_completion_pending_real_records_.store(0, std::memory_order_release);
+  this->tx_completion_idle_event_drops_.store(0, std::memory_order_release);
   if (this->tx_completion_event_queue_ != nullptr) {
     xQueueReset(this->tx_completion_event_queue_);
   }
@@ -1286,6 +1305,10 @@ void ESPAudioStack::drain_tx_completion_events_() {
     this->has_i2s_error_.store(true, std::memory_order_relaxed);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
     return;
+  }
+  const uint32_t idle_drops = this->tx_completion_idle_event_drops_.exchange(0, std::memory_order_acq_rel);
+  if (idle_drops > 0) {
+    ESP_LOGW(TAG, "Discarded %u idle TX completion events while the audio task was delayed", (unsigned) idle_drops);
   }
   int64_t timestamp = 0;
   while (xQueueReceive(this->tx_completion_event_queue_, &timestamp, 0) == pdTRUE) {

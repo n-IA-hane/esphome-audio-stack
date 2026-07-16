@@ -753,6 +753,7 @@ class ESPAudioStack : public Component {
   uint32_t tx_completion_dma_frames_{0};
   volatile bool tx_completion_desync_{false};
   std::atomic<uint32_t> tx_completion_pending_real_records_{0};
+  std::atomic<uint32_t> tx_completion_idle_event_drops_{0};
 
   // Speaker ring buffer: stores data at bus rate (sample_rate_)
   RingBufferPtr speaker_buffer_;
