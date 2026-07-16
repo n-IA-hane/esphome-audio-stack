@@ -1907,8 +1907,12 @@ void EspAfe::direct_fetch_task_loop_() {
     const int feed_ms = (this->feed_chunksize_ > 0) ? (this->feed_chunksize_ / 16) : 32;
     const TickType_t fetch_timeout = pdMS_TO_TICKS(feed_ms + 10);
     while (this->direct_fetch_running_.load(std::memory_order_acquire)) {
-      if (this->direct_feed_signal_ == nullptr || xSemaphoreTake(this->direct_feed_signal_, fetch_timeout) != pdTRUE) {
-        continue;
+      // A feed completion owns the cadence of this worker. Do not wake on a
+      // timer merely to discover that no frame arrived: stop() gives the same
+      // semaphore explicitly, so both data and lifecycle changes are events.
+      if (this->direct_feed_signal_ == nullptr ||
+          xSemaphoreTake(this->direct_feed_signal_, portMAX_DELAY) != pdTRUE) {
+        break;
       }
       if (!this->direct_fetch_running_.load(std::memory_order_acquire) || this->direct_iface_ == nullptr ||
           this->direct_data_ == nullptr) {

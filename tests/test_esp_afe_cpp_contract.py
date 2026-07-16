@@ -97,10 +97,15 @@ def test_direct_fetch_worker_is_persistent_event_driven_and_atomic() -> None:
 
     assert "while (true)" in worker
     assert "ulTaskNotifyTake(pdTRUE, portMAX_DELAY);" in worker
+    assert "xSemaphoreTake(this->direct_feed_signal_, portMAX_DELAY)" in worker
+    assert "xSemaphoreTake(this->direct_feed_signal_, fetch_timeout)" not in worker
     assert "direct_fetch_running_.load(std::memory_order_acquire)" in worker
     assert "std::atomic<bool> direct_fetch_running_{false};" in header
     assert "std::atomic<bool> direct_fetch_quiesced_{true};" in header
     assert "vTaskDelay(" not in cpp
+    # A finite timeout is retained only for ESP-SR fetch_with_delay() after a
+    # real feed event; it is a fault watchdog, never the worker cadence.
+    assert "fetch_with_delay(this->direct_data_, fetch_timeout)" in worker
     stop = cpp[cpp.index("bool EspAfe::stop_direct_fetch_task_()") : cpp.index("\nvoid EspAfe::destroy_direct_fetch_task_()")]
     assert stop.count("direct_fetch_quiesced_.load(std::memory_order_acquire)") >= 3
 
