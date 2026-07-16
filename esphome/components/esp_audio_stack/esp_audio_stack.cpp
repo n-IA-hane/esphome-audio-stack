@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cinttypes>
 #include <cstring>
 
 #include "esphome/core/defines.h"
@@ -190,7 +191,8 @@ void ESPAudioStack::update_hot_output_volume_() {
   }
 #endif
   if (previous != combined_q31) {
-    ESP_LOGD(TAG, "Master volume: output_q31=%d master_q31=%d hot_q31=%d linear=%.3f hw_master=%s previous_q31=%d",
+    ESP_LOGD(TAG, "Master volume: output_q31=%" PRId32 " master_q31=%" PRId32 " hot_q31=%" PRId32
+                  " linear=%.3f hw_master=%s previous_q31=%" PRId32,
              output_q31, master_q31, combined_q31, linear, hardware_master ? "yes" : "no", previous);
   }
 }
