@@ -155,7 +155,7 @@ Full-duplex audio only:
 
 ```yaml
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
+  - source: github://n-IA-hane/esphome-audio-stack@v2026.7.0
     components: [esp_audio_stack]
 ```
 
@@ -163,7 +163,7 @@ With standalone AEC:
 
 ```yaml
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
+  - source: github://n-IA-hane/esphome-audio-stack@v2026.7.0
     components: [esp_audio_stack, esp_aec]
 ```
 
@@ -171,7 +171,7 @@ With full AFE:
 
 ```yaml
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
+  - source: github://n-IA-hane/esphome-audio-stack@v2026.7.0
     components: [esp_audio_stack, esp_afe]
 ```
 
