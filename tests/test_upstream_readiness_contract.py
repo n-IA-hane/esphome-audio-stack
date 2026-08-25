@@ -174,3 +174,12 @@ def test_upstream_yaml_tests_cover_maintained_targets() -> None:
     gmf_text = read(ROOT / "tests" / "components" / "esp_afe" / "test.esp32-p4-gmf-idf.yaml")
     assert "mic_num: 2" in gmf_text
     assert "se_enabled: true" in gmf_text
+
+    std_dual = read(
+        ROOT / "tests" / "components" / "esp_audio_stack" / "test.esp32-s3-std-dual-mic-idf.yaml"
+    )
+    assert "rx_slot_mode: stereo" in std_dual
+    assert "rx_mic_slots: [left, right]" in std_dual
+    assert "mic_num: 2" in std_dual
+    assert "se_enabled: true" in std_dual
+    assert "use_stereo_aec_reference" not in std_dual

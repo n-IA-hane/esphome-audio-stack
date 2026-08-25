@@ -1,0 +1,52 @@
+# Codec-less STD I2S dual-mic: two MEMS on one Philips data line.
+# Single-mic remains rx_slot_mode: stereo + mic_channel without rx_mic_slots.
+esphome:
+  name: test-esp-audio-stack-std-dual-mic
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+esp_afe:
+  id: afe_processor
+  type: sr
+  mode: low_cost
+  mic_num: 2
+  se_enabled: true
+  aec_enabled: true
+  ns_enabled: false
+  vad_enabled: false
+  agc_enabled: false
+
+esp_audio_stack:
+  id: audio_stack
+  processor_id: afe_processor
+  sample_rate: 48000
+  output_sample_rate: 16000
+  bits_per_sample: 32
+  slot_bit_width: 32
+  correct_dc_offset: true
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  aec_reference: ring_buffer
+  buffers_in_psram: true
+  i2s_lrclk_pin: GPIO7
+  i2s_bclk_pin: GPIO6
+  i2s_din_pin: GPIO4
+  i2s_dout_pin: GPIO8
+
+microphone:
+  - platform: esp_audio_stack
+    id: stack_mic
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: stack_speaker
+    esp_audio_stack_id: audio_stack

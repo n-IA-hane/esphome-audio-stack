@@ -84,6 +84,9 @@ Core audio:
   ``left`` or ``right``. Defaults to ``left``.
 - **rx_slot_mode** (*Optional*, string): Read one or both stereo slots on RX, ``mono`` or ``stereo``.
   Defaults to ``mono``.
+- **rx_mic_slots** (*Optional*, list): Two STD Philips slots as microphones, ``left`` and/or ``right``.
+  Requires ``rx_slot_mode: stereo``. Omit it to keep single-mic capture via ``mic_channel``.
+  Not an ES8311 DAC-feedback mode; use ``tdm_mic_slots`` on TDM.
 - **tx_channel** (*Optional*, string): TX slot placement in mono-on-stereo layouts, ``left`` or ``right``.
   Defaults to ``left``.
 - **correct_dc_offset** (*Optional*, boolean): Remove DC bias from the capture path. Defaults to ``false``.

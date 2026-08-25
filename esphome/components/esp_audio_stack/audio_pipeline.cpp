@@ -141,11 +141,11 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   const uint32_t buf_caps =
       this->buffers_in_psram_ ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
-  // Worst-case processor mic channels: 2 if dual-mic TDM is available, else 1.
-  // Allocating for 2ch unconditionally when dual-mic is possible lets the task
-  // flip between MR (1 mic) and MMR (2 mic) without reallocating on
-  // reconfigure.
-  const uint8_t worst_mic_ch = (this->tdm_second_mic_slot_ >= 0) ? 2 : 1;
+  // Worst-case processor mic channels: 2 if dual-mic TDM or STD stereo slots
+  // are configured, else 1. Allocating for 2ch unconditionally when dual-mic
+  // is possible lets the task flip between MR (1 mic) and MMR (2 mic) without
+  // reallocating on reconfigure.
+  const uint8_t worst_mic_ch = (this->tdm_second_mic_slot_ >= 0 || this->std_second_mic_slot_ >= 0) ? 2 : 1;
   bool processor_buffers_needed = false;
 #ifdef USE_AUDIO_PROCESSOR
   // Allocate for the processor once its frame shape is known, even if AFE
@@ -187,7 +187,7 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     bool ready = true;
     bool rx_prepared = false;
 #ifdef USE_ESP_AUDIO_STACK_MULTI_RX
-    if (ctx.use_tdm_bus || ctx.use_stereo_aec_ref) {
+    if (ctx.use_tdm_bus || ctx.use_stereo_aec_ref || ctx.rx_slot_mode_stereo) {
       ready = this->rx_rate_converter_.prepare(ctx.bus_frame_size, ctx.input_frame_size, ctx.rx_rate_converter_channels,
                                                ctx.use_tdm_bus ? ctx.tdm_total_slots : 2, ctx.i2s_bps == 4);
       rx_prepared = true;
@@ -553,6 +553,8 @@ bool ESPAudioStack::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proce
   ctx.speaker_channels = this->get_speaker_channels();
   ctx.use_stereo_aec_ref = this->use_stereo_aec_ref_;
   ctx.rx_slot_mode_stereo = this->rx_slot_mode_stereo_;
+  ctx.std_primary_mic_slot = this->std_primary_mic_slot_;
+  ctx.std_second_mic_slot = this->std_second_mic_slot_;
   ctx.use_tdm_bus = this->use_tdm_bus_;
   ctx.use_tdm_ref = this->use_tdm_ref_;
   ctx.ref_channel_right = this->ref_channel_right_;
@@ -599,9 +601,16 @@ bool ESPAudioStack::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proce
 #ifdef USE_ESP_AUDIO_STACK_MULTI_RX
   // Init multi-channel RX rate converter now that we know channel count
   if (ctx.use_tdm_bus || ctx.use_stereo_aec_ref || ctx.rx_slot_mode_stereo) {
-    ctx.rx_rate_converter_channels =
-        ctx.use_tdm_bus ? (ctx.processor_mic_channels > 1 ? 2 : 1) + (ctx.use_tdm_ref ? 1 : 0)
-                        : (ctx.use_stereo_aec_ref ? 2 : 1);  // stereo ref: mic + ref; stereo mic: selected mic only
+    if (ctx.use_tdm_bus) {
+      ctx.rx_rate_converter_channels =
+          (ctx.processor_mic_channels > 1 ? 2 : 1) + (ctx.use_tdm_ref ? 1 : 0);
+    } else if (ctx.use_stereo_aec_ref) {
+      ctx.rx_rate_converter_channels = 2;  // mic + DAC feedback ref
+    } else if (ctx.processor_mic_channels > 1 && ctx.std_second_mic_slot >= 0) {
+      ctx.rx_rate_converter_channels = 2;  // both STD Philips slots as mics
+    } else {
+      ctx.rx_rate_converter_channels = 1;  // stereo frame, one selected mic
+    }
     this->rx_rate_converter_.init(ctx.ratio, ctx.rx_rate_converter_channels, this->sample_rate_,
                                   this->get_output_sample_rate(), this->rate_cvt_complexity_,
                                   this->rate_cvt_perf_type_);
@@ -706,13 +715,10 @@ void ESPAudioStack::audio_session_() {
     ESP_LOGD(TAG, "Audio session ended");
     return;
   }
-  if (ctx.processor_mic_channels > 1 && !ctx.use_tdm_bus) {
-    alloc_fail("dual-mic processor requires TDM microphone slots");
-    ESP_LOGD(TAG, "Audio session ended");
-    return;
-  }
-  if (ctx.processor_mic_channels > 1 && ctx.tdm_second_mic_slot < 0) {
-    alloc_fail("dual-mic processor requires tdm_mic_slots with two slots");
+  const bool have_tdm_dual_mic = ctx.use_tdm_bus && ctx.tdm_second_mic_slot >= 0;
+  const bool have_std_dual_mic = ctx.rx_slot_mode_stereo && ctx.std_second_mic_slot >= 0;
+  if (ctx.processor_mic_channels > 1 && !have_tdm_dual_mic && !have_std_dual_mic) {
+    alloc_fail("dual-mic processor requires TDM microphone slots or STD rx_mic_slots");
     ESP_LOGD(TAG, "Audio session ended");
     return;
   }
@@ -1111,6 +1117,31 @@ bool ESPAudioStack::process_rx_stereo_ref_(AudioTaskCtx &ctx) {
 
 #ifdef USE_ESP_AUDIO_STACK_MULTI_RX
 bool ESPAudioStack::process_rx_stereo_slot_(AudioTaskCtx &ctx) {
+  // SPH0645 (and similar MEMS) emit 32-bit Philips I2S slots. Dual-mic keeps
+  // per-channel DC (dc_primary_ / dc_secondary_) after deinterleave -- never
+  // one HPF across interleaved L,R,L,R (that becomes an L-R canceller).
+  const bool dual_mic = ctx.processor_mic_channels > 1 && ctx.std_second_mic_slot >= 0;
+  if (dual_mic) {
+    uint8_t ch_offsets[2] = {ctx.std_primary_mic_slot, static_cast<uint8_t>(ctx.std_second_mic_slot)};
+    if (ctx.rx_rate_converter_channels != 2) {
+      this->fail_audio_session_("stereo dual-mic RX channel map");
+      return false;
+    }
+    const bool ok = ctx.i2s_bps == 4
+                        ? this->rx_rate_converter_.process_multi_32(
+                              reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, 2, ch_offsets,
+                              ctx.processor_mic_buffer, ctx.mic_buffer, nullptr, 2)
+                        : this->rx_rate_converter_.process_multi(ctx.rx_buffer, ctx.input_frame_size, 2, ch_offsets,
+                                                                 ctx.processor_mic_buffer, ctx.mic_buffer, nullptr, 2);
+    if (!ok) {
+      this->fail_audio_session_(ctx.i2s_bps == 4 ? "stereo dual-mic RX 32-bit audio-effects conversion"
+                                                 : "stereo dual-mic RX audio-effects conversion");
+      return false;
+    }
+    ctx.processor_input = ctx.processor_mic_buffer;
+    return true;
+  }
+
   const uint8_t mic_offset = this->mic_channel_right_ ? 1 : 0;
   uint8_t ch_offsets[1] = {mic_offset};
   const bool ok = ctx.i2s_bps == 4
@@ -1162,7 +1193,9 @@ void ESPAudioStack::apply_input_conditioning_(AudioTaskCtx &ctx) {
   // boost is needed. Pure input attenuation uses esp-audio-libs Q31 below.
   // For dual-mic: mic1 is in mic_buffer, mic2 is in processor_mic_buffer[i*2+1]
   // (both filled by the multi-channel rate converter). Apply DC+input gain on
-  // both, update in-place. When neither DC nor input gain is needed,
+  // both, update in-place. SPH0645 32-bit slots must use these per-channel
+  // HPFs (dc_primary_ / dc_secondary_); a single delay line over interleaved
+  // L,R,L,R becomes an L-R canceller. When neither DC nor input gain is needed,
   // processor_mic_buffer (dual_mic case) is left as-is: the multi-channel rate
   // converter has already produced correct values for both mics.
   const bool do_dc = ctx.correct_dc_offset;
