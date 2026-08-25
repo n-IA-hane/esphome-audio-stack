@@ -70,3 +70,69 @@ def test_idle_tx_completion_overflow_preserves_full_duplex_capture() -> None:
     assert "self->tx_completion_desync_ = true" in callback
     assert "self->tx_completion_idle_event_drops_.fetch_add" in callback
     assert "Discarded %u idle TX completion events" in cpp
+
+
+def _dual_mic_slots_ok(
+    processor_mic_channels: int,
+    use_tdm_bus: bool,
+    tdm_second_mic_slot: int,
+    rx_slot_mode_stereo: bool,
+    std_second_mic_slot: int,
+) -> bool:
+    """Mirror audio_session_ dual-mic slot gating (must stay in lockstep with C++)."""
+    if processor_mic_channels <= 1:
+        return True
+    have_tdm_dual_mic = use_tdm_bus and tdm_second_mic_slot >= 0
+    have_std_dual_mic = rx_slot_mode_stereo and std_second_mic_slot >= 0
+    return have_tdm_dual_mic or have_std_dual_mic
+
+
+def test_std_stereo_dual_mic_does_not_require_tdm() -> None:
+    cpp = read("audio_pipeline.cpp")
+    header = read("esp_audio_stack.h")
+    init = (AUDIO_STACK / "__init__.py").read_text(encoding="utf-8")
+
+    assert "dual-mic processor requires TDM microphone slots or STD rx_mic_slots" in cpp
+    assert 'alloc_fail("dual-mic processor requires TDM microphone slots")' not in cpp
+    assert "have_std_dual_mic = ctx.rx_slot_mode_stereo && ctx.std_second_mic_slot >= 0" in cpp
+    assert "have_tdm_dual_mic = ctx.use_tdm_bus && ctx.tdm_second_mic_slot >= 0" in cpp
+
+    stereo = cpp[
+        cpp.index("bool ESPAudioStack::process_rx_stereo_slot_(") : cpp.index(
+            "bool ESPAudioStack::process_rx_mono_effects_("
+        )
+    ]
+    assert "SPH0645" in stereo
+    assert "dc_primary_" in stereo
+    assert "dc_secondary_" in stereo
+    assert "L-R canceller" in stereo
+    assert "ctx.processor_input = ctx.processor_mic_buffer" in stereo
+    assert "process_multi_32" in stereo
+    assert "num_mic_ch" not in stereo or ", 2)" in stereo
+    assert "const uint8_t mic_offset = this->mic_channel_right_ ? 1 : 0;" in stereo
+    assert "uint8_t ch_offsets[1] = {mic_offset};" in stereo
+    assert "uint8_t ch_offsets[2] = {ctx.std_primary_mic_slot, static_cast<uint8_t>(ctx.std_second_mic_slot)};" in stereo
+
+    dc = cpp[
+        cpp.index("void ESPAudioStack::apply_input_conditioning_(") : cpp.index(
+            "void ESPAudioStack::update_tdm_slot_levels_"
+        )
+    ]
+    assert "dc_primary_.process" in dc
+    assert "dc_secondary_.process" in dc
+    assert "L-R canceller" in dc
+
+    assert "void set_std_mic_slots" in header
+    assert "std_second_mic_slot_{-1}" in header
+    assert "CONF_RX_MIC_SLOTS = \"rx_mic_slots\"" in init
+    assert "rx_mic_slots requires rx_slot_mode: stereo" in init
+    assert "use_stereo_aec_reference is" in init
+
+    # Single-mic stereo-slot still allocates; dual-mic STD does not trip the
+    # old TDM-only fail; TDM dual-mic still requires two TDM slots.
+    assert _dual_mic_slots_ok(1, False, -1, True, -1)
+    assert _dual_mic_slots_ok(2, False, -1, True, 1)
+    assert not _dual_mic_slots_ok(2, False, -1, True, -1)
+    assert not _dual_mic_slots_ok(2, False, -1, False, 1)
+    assert _dual_mic_slots_ok(2, True, 2, False, -1)
+    assert not _dual_mic_slots_ok(2, True, -1, False, -1)

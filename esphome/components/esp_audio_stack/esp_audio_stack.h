@@ -222,6 +222,12 @@ class ESPAudioStack : public Component {
   void set_i2s_comm_fmt(uint8_t fmt) { this->i2s_comm_fmt_ = fmt; }
   void set_mic_channel_right(bool right) { this->mic_channel_right_ = right; }
   void set_rx_slot_mode_stereo(bool stereo) { this->rx_slot_mode_stereo_ = stereo; }
+  // STD Philips dual-mic: primary/secondary slot indices (0=left, 1=right).
+  // secondary < 0 keeps single-mic stereo-slot mode (mic_channel picks one).
+  void set_std_mic_slots(uint8_t primary, int8_t secondary) {
+    this->std_primary_mic_slot_ = primary;
+    this->std_second_mic_slot_ = secondary;
+  }
   void set_tx_slot_right(bool right) { this->tx_slot_right_ = right; }
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
@@ -462,6 +468,8 @@ class ESPAudioStack : public Component {
     uint8_t num_ch{1};   // TX channels
     bool use_stereo_aec_ref{false};
     bool rx_slot_mode_stereo{false};
+    uint8_t std_primary_mic_slot{0};
+    int8_t std_second_mic_slot{-1};
     bool use_tdm_bus{false};
     bool use_tdm_ref{false};
     bool ref_channel_right{false};
@@ -641,6 +649,8 @@ class ESPAudioStack : public Component {
   uint8_t i2s_comm_fmt_{0};            // 0=philips, 1=msb, 2=pcm_short, 3=pcm_long
   bool mic_channel_right_{false};      // RX mono slot: false=LEFT, true=RIGHT
   bool rx_slot_mode_stereo_{false};    // STD RX reads both slots; mic_channel selects one in software
+  uint8_t std_primary_mic_slot_{0};    // STD dual-mic primary slot (0=left, 1=right)
+  int8_t std_second_mic_slot_{-1};     // STD dual-mic secondary slot; -1 = single mic
   bool tx_slot_right_{false};          // TX mono slot: false=LEFT (default), true=RIGHT
   uint8_t slot_bit_width_{0};          // 0 = auto (match bits_per_sample), or 16/24/32
   uint32_t output_sample_rate_{0};     // 0 = use sample_rate_ (no rate conversion)
