@@ -136,3 +136,18 @@ def test_std_stereo_dual_mic_does_not_require_tdm() -> None:
     assert not _dual_mic_slots_ok(2, False, -1, False, 1)
     assert _dual_mic_slots_ok(2, True, 2, False, -1)
     assert not _dual_mic_slots_ok(2, True, -1, False, -1)
+
+
+def test_idle_teardown_false_does_not_queue_i2s_delete() -> None:
+    """Voice satellites restart MWW immediately; deleting I2S DMA then fails RX alloc."""
+    cpp = read("esp_audio_stack.cpp")
+    header = read("esp_audio_stack.h")
+    init = (AUDIO_STACK / "__init__.py").read_text(encoding="utf-8")
+    stop = cpp[cpp.index("void ESPAudioStack::stop()") : cpp.index("bool ESPAudioStack::stop_and_wait")]
+
+    assert "void set_idle_teardown" in header
+    assert "bool idle_teardown_{true}" in header
+    assert "CONF_IDLE_TEARDOWN = \"idle_teardown\"" in init
+    assert "Stopping audio stack (keeping I2S)" in stop
+    assert "this->idle_teardown_" in stop
+    assert stop.index("if (this->idle_teardown_)") < stop.index("teardown_pending_.store(true")

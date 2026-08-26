@@ -557,7 +557,8 @@ void ESPAudioStack::dump_config() {
   ESP_LOGCONFIG(TAG, "  AEC: %s", this->processor_ != nullptr ? "enabled" : "disabled");
   ESP_LOGCONFIG(TAG, "  Task: priority=%u, core=%d, stack=%u", this->task_priority_, this->task_core_,
                 (unsigned) this->task_stack_size_);
-  ESP_LOGCONFIG(TAG, "  I2S Lifecycle: esp_driver_i2s create on start, delete on idle stop");
+  ESP_LOGCONFIG(TAG, "  I2S Lifecycle: esp_driver_i2s create on start, %s",
+                this->idle_teardown_ ? "delete on idle stop" : "keep allocated on idle");
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev direct read/write (input=%s, output=%s)",
                 this->codec_backend_.input_codec_name(), this->codec_backend_.output_codec_name());
@@ -1456,8 +1457,6 @@ void ESPAudioStack::stop() {
     return;
   }
 
-  ESP_LOGI(TAG, "Stopping audio stack (deferred)");
-
   // Consumers stay registered across stop()/start() so the mic path is
   // reconnected automatically after an internal restart (frame_spec change).
   if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
@@ -1472,10 +1471,14 @@ void ESPAudioStack::stop() {
   this->audio_stack_running_.store(false, std::memory_order_relaxed);
   this->idle_trigger_.trigger();
 
-  // Defer I2S deletion to loop(): polling audio_task_idle_ here would block
-  // the main task for up to 600 ms (often >60 ms), starving network/UI/LVGL.
-  // loop() picks this up on the next tick once the audio task has parked.
-  this->teardown_pending_.store(true, std::memory_order_relaxed);
+  if (this->idle_teardown_) {
+    ESP_LOGI(TAG, "Stopping audio stack (deferred)");
+    // Defer I2S deletion to loop(): polling audio_task_idle_ here would block
+    // the main task for up to 600 ms (often >60 ms), starving network/UI/LVGL.
+    this->teardown_pending_.store(true, std::memory_order_relaxed);
+  } else {
+    ESP_LOGI(TAG, "Stopping audio stack (keeping I2S)");
+  }
 }
 
 bool ESPAudioStack::stop_and_wait(uint32_t timeout_ms) {
@@ -1486,7 +1489,8 @@ bool ESPAudioStack::stop_and_wait(uint32_t timeout_ms) {
     return false;
   }
 
-  if (this->teardown_pending_.load(std::memory_order_relaxed)) {
+  if (this->teardown_pending_.load(std::memory_order_relaxed) || this->tx_handle_ != nullptr ||
+      this->rx_handle_ != nullptr) {
     this->deinit_i2s_();
     this->teardown_pending_.store(false, std::memory_order_relaxed);
     ESP_LOGI(TAG, "Audio stack stopped synchronously");

@@ -417,6 +417,7 @@ class ESPAudioStack : public Component {
   void set_task_core(int8_t core) { this->task_core_ = core; }
   void set_task_stack_size(uint32_t size) { this->task_stack_size_ = size; }
   void set_dma_desc_num(uint32_t desc_num) { this->dma_desc_num_ = desc_num; }
+  void set_idle_teardown(bool teardown) { this->idle_teardown_ = teardown; }
   void set_dma_frame_num(uint32_t frame_num) {
     this->dma_frame_num_ = frame_num;
     this->dma_frame_num_configured_ = true;
@@ -824,6 +825,7 @@ class ESPAudioStack : public Component {
   uint32_t dma_desc_num_{6};
   uint32_t dma_frame_num_{0};
   bool dma_frame_num_configured_{false};
+  bool idle_teardown_{true};  // false: park the audio task but keep I2S/DMA
   bool buffers_in_psram_{false};           // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)
   bool audio_task_stack_in_psram_{false};  // Audio task stack in PSRAM (saves ~8KB internal RAM)
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
