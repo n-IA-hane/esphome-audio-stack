@@ -258,9 +258,13 @@ class AudioEffectsRateConverterImpl {
     this->dest_rate_ = dest_rate;
     this->rate_cvt_.init(ratio, src_rate, dest_rate, 1, complexity, perf_type);
     this->bit_cvt_.init(src_rate, 1, 32, 16);
+    this->warmed_ = false;
   }
 
-  void reset() { this->rate_cvt_.reset(); }
+  void reset() {
+    this->rate_cvt_.reset();
+    this->warmed_ = false;
+  }
 
   bool prepare(size_t in_count, bool source_32bit) {
     if (source_32bit) {
@@ -270,7 +274,27 @@ class AudioEffectsRateConverterImpl {
     }
     if (this->ratio_ <= 1)
       return true;
-    return ensure_buffer(this->scratch_, this->scratch_cap_, in_count, "RateCvt") && this->rate_cvt_.ready();
+    if (!ensure_buffer(this->scratch_, this->scratch_cap_, in_count, "RateCvt") || !this->rate_cvt_.ready())
+      return false;
+    // esp_ae_rate_cvt allocates its FIR putbuf on first process(), from
+    // internal heap. Do that at session start — first duplex TX is too late
+    // (media decoder rings have already eaten the heap).
+    if (!this->warmed_) {
+      const size_t out_count = in_count / this->ratio_;
+      int16_t *out = static_cast<int16_t *>(
+          heap_caps_malloc(out_count * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+      if (out == nullptr)
+        out = alloc_internal(out_count, TAG);
+      if (out != nullptr) {
+        memset(this->scratch_, 0, in_count * sizeof(int16_t));
+        this->warmed_ = this->rate_cvt_.process(this->scratch_, in_count, out, out_count, "warmup");
+        heap_caps_free(out);
+        if (!this->warmed_) {
+          ESP_LOGW(TAG, "rate converter warmup failed; AEC ref may drop under heap pressure");
+        }
+      }
+    }
+    return true;
   }
 
   bool process(const int16_t *in, int16_t *out, size_t in_count) {
@@ -317,6 +341,7 @@ class AudioEffectsRateConverterImpl {
   BitCvtHandle bit_cvt_;
   int16_t *scratch_{nullptr};
   size_t scratch_cap_{0};
+  bool warmed_{false};
 };
 #endif
 

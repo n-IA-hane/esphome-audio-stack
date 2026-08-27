@@ -186,9 +186,13 @@ void ESPAudioStackSpeaker::set_pause_state(bool pause_state) {
 
 void ESPAudioStackSpeaker::loop() {
   // Propagate I2S errors from parent audio task
-  if (this->parent_->has_i2s_error() && !this->status_has_error()) {
-    ESP_LOGE(TAG, "I2S error detected in audio task");
-    this->status_set_error(LOG_STR("I2S write error in audio task"));
+  if (this->parent_->has_i2s_error()) {
+    if (!this->status_has_error()) {
+      ESP_LOGE(TAG, "I2S error detected in audio task");
+      this->status_set_error(LOG_STR("I2S write error in audio task"));
+    }
+  } else if (this->status_has_error()) {
+    this->status_clear_error();
   }
 
   UBaseType_t count = uxSemaphoreGetCount(this->active_listeners_semaphore_);

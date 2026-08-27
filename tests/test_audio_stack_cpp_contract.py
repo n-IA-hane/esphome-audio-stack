@@ -151,3 +151,14 @@ def test_idle_teardown_false_does_not_queue_i2s_delete() -> None:
     assert "Stopping audio stack (keeping I2S)" in stop
     assert "this->idle_teardown_" in stop
     assert stop.index("if (this->idle_teardown_)") < stop.index("teardown_pending_.store(true")
+
+
+def test_tx_aec_ref_conversion_failure_does_not_stop_session() -> None:
+    """First duplex TX used to kill I2S when esp_ae FIR putbuf alloc failed."""
+    cpp = read("audio_pipeline.cpp")
+    fx = read("audio_effects_rate_converter.cpp")
+    assert "dropping this frame's AEC ref" in cpp
+    assert "TX AEC reference rate conversion failed; stopping audio session" not in cpp
+    impl = fx[fx.index("class AudioEffectsRateConverterImpl") : fx.index("class MultiChannelAudioEffectsRateConverterImpl")]
+    assert '"warmup"' in impl
+    assert "this->warmed_" in impl

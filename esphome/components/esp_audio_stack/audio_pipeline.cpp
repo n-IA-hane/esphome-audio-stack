@@ -1800,16 +1800,14 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
       // input_frame_bytes by allocate_audio_buffers_() (the converter writes
       // bus_frame_size / ratio = input_frame_size samples).
       if (!this->play_ref_rate_converter_.process(ref_source, this->direct_aec_ref_, ctx.bus_frame_size)) {
-        ESP_LOGE(TAG, "TX AEC reference rate conversion failed; stopping audio session");
-        this->has_i2s_error_.store(true, std::memory_order_relaxed);
-        this->audio_stack_running_.store(false, std::memory_order_relaxed);
-        return;
+        ESP_LOGW(TAG, "TX AEC reference rate conversion failed; dropping this frame's AEC ref");
+      } else {
+        const size_t ref_bytes = ctx.input_frame_bytes;
+        // ESPHome RingBuffer::write() already drops oldest data on overflow
+        // (discard_bytes_ + write_without_replacement), which is the right
+        // backpressure here: keep the most recent reference window for AEC.
+        this->aec_ref_ring_buffer_->write((void *) this->direct_aec_ref_, ref_bytes);
       }
-      const size_t ref_bytes = ctx.input_frame_bytes;
-      // ESPHome RingBuffer::write() already drops oldest data on overflow
-      // (discard_bytes_ + write_without_replacement), which is the right
-      // backpressure here: keep the most recent reference window for AEC.
-      this->aec_ref_ring_buffer_->write((void *) this->direct_aec_ref_, ref_bytes);
     }
   }
 #endif
@@ -1820,12 +1818,10 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
     // direct_aec_ref_ to avoid feeding a zero-padded reference.
     if (full_frame) {
       if (!this->play_ref_rate_converter_.process(ref_source, this->direct_aec_ref_, ctx.bus_frame_size)) {
-        ESP_LOGE(TAG, "TX AEC reference rate conversion failed; stopping audio session");
-        this->has_i2s_error_.store(true, std::memory_order_relaxed);
-        this->audio_stack_running_.store(false, std::memory_order_relaxed);
-        return;
+        ESP_LOGW(TAG, "TX AEC reference rate conversion failed; dropping this frame's AEC ref");
+      } else {
+        this->direct_aec_ref_valid_ = true;
       }
-      this->direct_aec_ref_valid_ = true;
     }
   }
 #endif
