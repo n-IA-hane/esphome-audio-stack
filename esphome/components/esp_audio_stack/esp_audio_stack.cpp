@@ -521,8 +521,8 @@ void ESPAudioStack::dump_config() {
   ESP_LOGCONFIG(TAG, "  RX Mic Channel: %s", this->mic_channel_right_ ? "RIGHT" : "LEFT");
   ESP_LOGCONFIG(TAG, "  RX Slot Mode: %s", this->rx_slot_mode_stereo_ ? "stereo" : "mono");
   if (this->std_second_mic_slot_ >= 0) {
-    ESP_LOGCONFIG(TAG, "  RX Mic Slots: [%u,%d] (STD dual-mic)", this->std_primary_mic_slot_,
-                  this->std_second_mic_slot_);
+    ESP_LOGCONFIG(TAG, "  RX Mic Slots: [%u,%d] (STD dual-mic)", (unsigned) this->std_primary_mic_slot_,
+                  (int) this->std_second_mic_slot_);
   }
   static const char *const FMT_NAMES[] = {"Philips", "MSB", "PCM Short", "PCM Long"};
   ESP_LOGCONFIG(TAG, "  Comm Format: %s", FMT_NAMES[this->i2s_comm_fmt_ & 3]);
