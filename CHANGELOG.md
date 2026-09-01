@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The IRAM-safe I2S completion callback no longer calls `std::atomic` member
+  functions, which GCC could place in flash. With `CONFIG_I2S_ISR_IRAM_SAFE`
+  the callback runs during flash writes; on ESP32-P4 the resulting flash fetch
+  deadlocked the chip at the first flash write after boot (typically the OTA
+  validation write at 60 s), so the update was rolled back silently.
+
 ## 2026.9.0, 2026-08-29
 
 This release keeps the existing YAML contract compatible with the 2026.8.0
