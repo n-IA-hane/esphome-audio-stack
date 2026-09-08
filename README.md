@@ -313,7 +313,7 @@ esp_afe:
   input_format: mmr
   aec_enabled: true
   ns_enabled: false
-  agc_enabled: false
+  agc_enabled: true  # post-AFE WebRTC AGC; ESP-SR 2.5.3 omits it from the 2MIC graph
 
 esp_audio_stack:
   id: audio_stack

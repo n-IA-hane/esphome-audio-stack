@@ -86,6 +86,57 @@ def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> 
     assert "vRingbufferGetInfo(this->handle_" in ring
 
 
+def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:
+    cpp = read("esp_afe.cpp")
+    header = read("esp_afe.h")
+
+    assert "esp_agc_open(AGC_MODE_2, 16000)" in cpp
+    assert "set_agc_config(this->post_afe_agc_" in cpp
+    assert "esp_agc_process(this->post_afe_agc_" in cpp
+    assert "kPostAfeAgcQuantumSamples = 160" in header
+    assert "latency=10ms" in cpp
+
+    config = cpp[cpp.index("const bool use_post_afe_agc") : cpp.index("cfg->afe_perferred_core")]
+    assert "afe_mic_channels >= 2" in config
+    assert "&& !use_post_afe_agc" in config
+
+    process = cpp[cpp.index("bool EspAfe::process(") : cpp.index("\nbool EspAfe::reinit_by_name")]
+    read_pos = process.index("fetch_output_ring_->read")
+    complete = process.index("if (got == output_bytes)", read_pos)
+    agc = process.index("process_post_afe_agc_frame_", complete)
+    assert read_pos < complete < agc
+
+    output_start = cpp.index("esp_gmf_err_io_t EspAfe::gmf_output_release_(")
+    output = cpp[output_start : cpp.index("\n#endif", output_start)]
+    assert "process_post_afe_agc_frame_" not in output
+    assert "write_without_replacement(load->buf, load->valid_size" in output
+
+
+def test_gmf_initial_vad_off_is_applied_only_after_element_open() -> None:
+    cpp = read("esp_afe.cpp")
+    header = read("esp_afe.h")
+
+    assert "cfg->vad_init = true;" in cpp
+    assert "std::atomic<bool> gmf_vad_state_pending_{false};" in header
+
+    start = cpp[cpp.index("bool EspAfe::start_pipeline_()") : cpp.index("\nbool EspAfe::pause_pipeline_()")]
+    assert start.index("ESP_AFE_FEATURE_VAD, true") < start.index("esp_gmf_pipeline_run")
+    assert "gmf_vad_state_pending_.store(!this->vad_enabled_" in start
+
+    output_start = cpp.index("esp_gmf_err_io_t EspAfe::gmf_output_release_(")
+    output = cpp[output_start : cpp.index("\n#endif", output_start)]
+    assert "apply_pending_gmf_vad_state_();" in output
+
+    apply_start = cpp.index("bool EspAfe::apply_pending_gmf_vad_state_()")
+    apply = cpp[apply_start : cpp.index("\nvoid EspAfe::gmf_event_cb_", apply_start)]
+    assert "ESP_AFE_FEATURE_VAD, false" in apply
+    assert "Initial GMF VAD state applied: OFF" in apply
+
+    callback_start = cpp.index("void EspAfe::gmf_event_cb_(")
+    callback = cpp[callback_start : cpp.index("\n#endif", callback_start)]
+    assert callback.index("!self->vad_enabled_.load") < callback.index("GMF AFE voice transition")
+
+
 def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:
     init = read("__init__.py")
     aec_init = read_aec("__init__.py")

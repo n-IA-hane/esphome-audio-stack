@@ -15,18 +15,22 @@ def test_cold_start_waits_for_gmf_callback_owner(tmp_path):
 #include <cassert>
 #define USE_ESP_AFE_GMF_PATH
 #define ESP_LOGW(...)
-using esp_gmf_err_t=int;constexpr int ESP_GMF_ERR_OK=0;
+using esp_gmf_err_t=int;constexpr int ESP_GMF_ERR_OK=0,ESP_AFE_FEATURE_VAD=1;
 bool opened=false;int resumes=0,runs=0,run_result=0;
 int esp_gmf_pipeline_run(void*){++runs;return run_result;}
 int esp_gmf_pipeline_resume(void*){assert(opened);return 0;}
 void esp_gmf_afe_manager_suspend(void*,bool pause){if(!pause){assert(opened);++resumes;}}
+int esp_gmf_afe_manager_enable_features(void*,int feature,bool enabled){
+ assert(feature==ESP_AFE_FEATURE_VAD && enabled);return 0;
+}
 struct Ring{void reset(){}} ring;
 struct EspAfe {
  void *afe_pipeline_=&ring,*afe_manager_=&ring;
  bool afe_pipeline_running_=false,afe_pipeline_paused_=false;
  int staged_input_samples_=0;Ring* fetch_output_ring_=&ring;
  std::atomic<unsigned> feed_queue_frames_{0},fetch_queue_frames_{0};
- void drain_feed_input_ring_(){} void reset_output_prebuffer_(){}
+ std::atomic<bool> vad_enabled_{false},gmf_vad_state_pending_{false};
+ void drain_feed_input_ring_(){} void reset_output_prebuffer_(){} void reset_post_afe_agc_(){}
  bool start_pipeline_();
 };
 """

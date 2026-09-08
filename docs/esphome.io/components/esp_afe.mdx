@@ -45,7 +45,10 @@ boards that need those features.
   (*Optional*): VAD aggressiveness and transition timing.
 - **vad_mute_playback**, **vad_enable_channel_trigger**, **continuous_vad**
   (*Optional*, boolean): Optional playback, per-channel and standby behavior.
-- **agc_enabled** (*Optional*, boolean): Enable automatic gain control.
+- **agc_enabled** (*Optional*, boolean): Enable automatic gain control. ESP-SR
+  supplies the WebRTC stage for one mic; because ESP-SR 2.5.3 omits it from
+  the effective dual-mic graph, two-mic profiles use an explicit post-AFE
+  WebRTC stage with 10 ms of causal delay.
 - **agc_compression_gain**, **agc_target_level** (*Optional*, int): AGC level
   controls. NS/AGC changes rebuild the AFE.
 - **mic_num** (*Optional*, int): Number of microphone channels, `1` or `2`.

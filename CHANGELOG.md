@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Dual-microphone AGC uses Espressif's public WebRTC processor on complete
+  post-AFE mono frames. The 160-sample processing cadence adds 10 ms of fixed
+  causal latency, and AGC setting changes still rebuild the AFE.
+
+### Fixed
+
+- Dual-microphone profiles no longer silently lose AGC when ESP-SR 2.5.3
+  accepts `agc_init` but omits the stage from its effective AEC/BSS/VAD graph.
+- A configured initial `vad_enabled: false` is now applied after the GMF
+  element creates its wake-state lock. Disabled VAD events are ignored, so
+  they no longer publish misleading speech/silence transitions.
+
 ## 2026.9.0, 2026-08-29
 
 This release keeps the existing YAML contract compatible with the 2026.8.0
