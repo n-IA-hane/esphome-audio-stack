@@ -133,7 +133,7 @@ and gain. These are the knobs users most often need when building a new target:
 | `codec.i2c_id` | Select a native I2C controller. Multiplexer channels are not supported by the codec device identity contract. |
 | `rx_bus` / `tx_bus` | Use separate I2S controllers for discrete mic and amplifier. |
 | `bits_per_sample` / `slot_bit_width` | Required for 24/32-bit codecs and 32-bit MEMS microphones. |
-| `mic_channel` / `rx_slot_mode` | Select the actual MEMS mic slot. `rx_slot_mode: stereo` reads both STD slots and then selects `mic_channel` in software. |
+| `mic_channel` / `rx_slot_mode` / `rx_mic_slots` | Select the actual MEMS mic slot. `rx_slot_mode: stereo` reads both STD slots and then selects `mic_channel` in software. `rx_mic_slots: [left, right]` keeps both slots as mics for dual-mic AFE. |
 | `num_channels` / `speaker_channels` / `tx_channel` | Separate physical TX bus layout from public mono/stereo speaker behavior. |
 | `processor_id` | Attach `esp_aec` or `esp_afe`. Omit it for raw full-duplex audio. |
 | `aec_reference` / `aec_reference_buffer_ms` | Tune software AEC reference storage for no-codec boards. |
@@ -163,6 +163,23 @@ esp_audio_stack:
   mic_channel: right   # or left
   rx_slot_mode: stereo # read both STD slots, then pick mic_channel
 ```
+
+Two MEMS on one Philips data line (SEL strapped L/R, no codec, no TDM) keep
+`rx_slot_mode: stereo` and add `rx_mic_slots`. Default remains one mic:
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]  # order = AFE ch0/ch1; first is also the mono mic
+  correct_dc_offset: true      # per-channel HPFs, not one filter across L/R
+  processor_id: afe            # esp_afe mic_num: 2, se_enabled: true
+```
+
+Do not set `use_stereo_aec_reference` for a second MEMS; that flag is ES8311
+DAC feedback. `esp_aec` stays mono-reference. Dual-mic BSS uses `esp_afe`,
+which consumes the same interleaved `processor_mic_buffer` layout as TDM
+`tdm_mic_slots`. The public `microphone:` surface stays 16-bit mono
+(post-AFE).
 
 This is intentionally different from `use_stereo_aec_reference`: stereo slot
 mode is only for mic slot selection; the AEC reference still comes from the
@@ -374,6 +391,7 @@ First-version limits:
 | `correct_dc_offset` | bool | false | Enable DC offset removal. Required for MEMS mics without built-in HPF (MSM261, SPH0645). |
 | `mic_channel` | string | `left` | Which STD slot carries the microphone: `left` or `right`. In mono RX mode this becomes the IDF slot mask. With `rx_slot_mode: stereo`, both STD slots are read and this selects the slot in software. |
 | `rx_slot_mode` | string | `mono` | `mono` reads only `mic_channel`. `stereo` reads both STD RX slots and then selects `mic_channel`; useful for MEMS mics strapped to L/R where the wire behaves better as a full stereo frame. This is not an AEC reference mode. |
+| `rx_mic_slots` | list | - | STD dual-mic: exactly two distinct `left`/`right` values. Order is AFE channel order (first = primary/mono mic, second = secondary). Requires `rx_slot_mode: stereo`. Omit it to keep single-mic (`mic_channel` picks one slot). Mutually exclusive with TDM slots and `use_stereo_aec_reference`. Pair with `esp_afe` `mic_num: 2`. |
 | `use_stereo_aec_reference` | bool | false | ES8311 digital feedback mode (see below) |
 | `reference_channel` | string | left | Which stereo channel carries AEC reference: `left` or `right` |
 | `use_tdm_reference` | bool | false | TDM hardware reference mode (ES7210, see below) |

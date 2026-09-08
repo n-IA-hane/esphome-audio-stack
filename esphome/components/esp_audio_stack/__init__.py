@@ -55,6 +55,7 @@ CONF_SLOT_BIT_WIDTH = "slot_bit_width"
 CONF_CORRECT_DC_OFFSET = "correct_dc_offset"
 CONF_MIC_CHANNEL = "mic_channel"
 CONF_RX_SLOT_MODE = "rx_slot_mode"
+CONF_RX_MIC_SLOTS = "rx_mic_slots"
 CONF_I2S_MODE = "i2s_mode"
 CONF_USE_APLL = "use_apll"
 CONF_I2S_NUM = "i2s_num"
@@ -310,6 +311,25 @@ def _validate_tdm_config(config):
     return config
 
 
+def _validate_rx_mic_slots(config):
+    """STD I2S dual-mic: two Philips slots, not TDM and not ES8311 DAC feedback."""
+    if CONF_RX_MIC_SLOTS not in config:
+        return config
+    if config.get(CONF_RX_SLOT_MODE, "mono") != "stereo":
+        raise cv.Invalid("rx_mic_slots requires rx_slot_mode: stereo")
+    if config.get(CONF_USE_STEREO_AEC_REFERENCE, False):
+        raise cv.Invalid(
+            "rx_mic_slots is two MEMS on STD I2S; use_stereo_aec_reference is "
+            "ES8311 DAC feedback, not a second microphone"
+        )
+    if config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config:
+        raise cv.Invalid("rx_mic_slots is STD I2S only; use tdm_mic_slots on TDM")
+    slots = config[CONF_RX_MIC_SLOTS]
+    if slots[0] == slots[1]:
+        raise cv.Invalid("rx_mic_slots must not contain duplicates")
+    return config
+
+
 def _validate_pcm_format(config):
     """Validate that PCM short/long formats require TDM mode."""
     fmt = config.get(CONF_I2S_COMM_FMT, "philips")
@@ -398,6 +418,12 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_RX_SLOT_MODE, default="mono"): cv.one_of(
                 "mono", "stereo", lower=True
+            ),
+            # Two STD Philips slots as mics (e.g. dual SPH0645 on one data line).
+            # Default remains single-mic: omit this and keep mic_channel.
+            cv.Optional(CONF_RX_MIC_SLOTS): cv.All(
+                cv.ensure_list(cv.one_of("left", "right", lower=True)),
+                cv.Length(min=2, max=2),
             ),
             cv.Optional(CONF_TX_CHANNEL, default="left"): cv.one_of(
                 "left", "right", lower=True
@@ -532,6 +558,7 @@ CONFIG_SCHEMA = cv.All(
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_sample_rates,
     _validate_tdm_config,
+    _validate_rx_mic_slots,
     _validate_pcm_format,
     _validate_dual_bus_config,
 )
@@ -594,6 +621,21 @@ def _final_validate(config):
             "Use esp_afe (full AFE pipeline with AEC+NS+AGC+Speech Enhancement) "
             "or esp_aec (standalone echo cancellation), not both."
         )
+
+    afe_conf = full_config.get("esp_afe")
+    if isinstance(afe_conf, list):
+        afe_conf = afe_conf[0] if afe_conf else {}
+    afe_mics = afe_conf.get("mic_num", 1) if isinstance(afe_conf, dict) else 1
+    if afe_mics >= 2:
+        tdm_dual = (
+            config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config
+        ) and len(config.get(CONF_TDM_MIC_SLOTS, [])) >= 2
+        std_dual = len(config.get(CONF_RX_MIC_SLOTS, [])) >= 2
+        if not tdm_dual and not std_dual:
+            raise cv.Invalid(
+                "esp_afe mic_num: 2 requires tdm_mic_slots with two slots, "
+                "or rx_slot_mode: stereo plus rx_mic_slots: [left, right]"
+            )
 
     return config
 
@@ -728,6 +770,11 @@ async def to_code(config):
     # Mic channel selection (for mono RX: which I2S slot to capture)
     cg.add(var.set_mic_channel_right(config[CONF_MIC_CHANNEL] == "right"))
     cg.add(var.set_rx_slot_mode_stereo(config[CONF_RX_SLOT_MODE] == "stereo"))
+    if CONF_RX_MIC_SLOTS in config:
+        slot_index = {"left": 0, "right": 1}
+        slots = [slot_index[name] for name in config[CONF_RX_MIC_SLOTS]]
+        cg.add(var.set_std_mic_slots(slots[0], slots[1]))
+        cg.add(var.set_mic_channel_right(slots[0] == 1))
 
     # TX channel selection (for mono TX: which I2S slot to output)
     cg.add(var.set_tx_slot_right(config[CONF_TX_CHANNEL] == "right"))
