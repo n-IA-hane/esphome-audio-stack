@@ -1189,9 +1189,29 @@ void ESPAudioStack::deinit_i2s_() {
   ESP_LOGI(TAG, "I2S deinitialized");
 }
 
+// This callback runs from the I2S/GDMA interrupt with CONFIG_I2S_ISR_IRAM_SAFE, i.e. it also runs
+// while the flash cache is suspended for a flash write (NVS commit, OTA validation). Nothing it
+// executes may live in flash. std::atomic<T> member functions are ordinary inline functions and at
+// -Os GCC is free to emit them out of line, into .flash.text; on the ESP32-P4 that fetch deadlocks
+// the core silently (watchdog reset, no panic output). Use the compiler builtins instead: they are
+// always expanded inline.
+static_assert(sizeof(std::atomic<bool>) == sizeof(bool) && std::atomic<bool>::is_always_lock_free,
+              "ISR helpers assume std::atomic<bool> is a plain lock-free bool");
+static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t) && std::atomic<uint32_t>::is_always_lock_free,
+              "ISR helpers assume std::atomic<uint32_t> is a plain lock-free uint32_t");
+static inline bool IRAM_ATTR isr_load_flag(const std::atomic<bool> &flag) {
+  return __atomic_load_n(reinterpret_cast<const bool *>(&flag), __ATOMIC_ACQUIRE);
+}
+static inline uint32_t IRAM_ATTR isr_load_u32(const std::atomic<uint32_t> &value) {
+  return __atomic_load_n(reinterpret_cast<const uint32_t *>(&value), __ATOMIC_RELAXED);
+}
+static inline void IRAM_ATTR isr_increment_u32(std::atomic<uint32_t> &value) {
+  __atomic_fetch_add(reinterpret_cast<uint32_t *>(&value), 1U, __ATOMIC_RELAXED);
+}
+
 bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
   auto *self = static_cast<ESPAudioStack *>(user_ctx);
-  if (self == nullptr || !self->tx_completion_tracking_active_.load(std::memory_order_acquire) ||
+  if (self == nullptr || !isr_load_flag(self->tx_completion_tracking_active_) ||
       self->tx_completion_event_queue_ == nullptr) {
     return false;
   }
@@ -1214,10 +1234,10 @@ bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_
     // Once real speaker data is pending, losing a timestamp may lose its
     // completion boundary. Preserve the fail-closed behaviour in that case so
     // output callbacks (notably AEC reference tracking) cannot silently drift.
-    if (self->tx_completion_pending_real_records_.load(std::memory_order_relaxed) > 0) {
+    if (isr_load_u32(self->tx_completion_pending_real_records_) > 0) {
       self->tx_completion_desync_ = true;
     } else {
-      self->tx_completion_idle_event_drops_.fetch_add(1, std::memory_order_relaxed);
+      isr_increment_u32(self->tx_completion_idle_event_drops_);
     }
   }
   xQueueSendToBackFromISR(self->tx_completion_event_queue_, &now, &need_yield2);

@@ -66,9 +66,9 @@ def test_idle_tx_completion_overflow_preserves_full_duplex_capture() -> None:
     ]
 
     assert "tx_completion_idle_event_drops_" in header
-    assert "tx_completion_pending_real_records_.load" in callback
+    assert "isr_load_u32(self->tx_completion_pending_real_records_)" in callback
     assert "self->tx_completion_desync_ = true" in callback
-    assert "self->tx_completion_idle_event_drops_.fetch_add" in callback
+    assert "isr_increment_u32(self->tx_completion_idle_event_drops_)" in callback
     assert "Discarded %u idle TX completion events" in cpp
 
 
@@ -84,7 +84,7 @@ def test_tx_completion_tracking_is_session_scoped() -> None:
     enable = cpp[cpp.index("bool ESPAudioStack::enable_i2s_channels_()") : cpp.index("void ESPAudioStack::close_audio_io_")]
 
     assert "std::atomic<bool> tx_completion_tracking_active_{false}" in header
-    assert "tx_completion_tracking_active_.load(std::memory_order_acquire)" in callback
+    assert "isr_load_flag(self->tx_completion_tracking_active_)" in callback
     assert stop.index("tx_completion_tracking_active_.store(false") < stop.index(
         "audio_stack_running_.store(false"
     )
@@ -101,6 +101,32 @@ def test_tx_completion_tracking_is_session_scoped() -> None:
     assert "has_i2s_error_.store(true" in failure
     assert "audio_stack_running_.store(false" in failure
     assert "teardown_pending_.store(true" in failure
+
+
+def test_tx_completion_isr_never_calls_into_flash() -> None:
+    """The IRAM-safe I2S callback runs while the flash cache is suspended.
+
+    std::atomic<T> member functions are ordinary inline functions; at -Os GCC may
+    emit them out of line in .flash.text, and an IRAM ISR calling into flash during
+    a flash write deadlocks the ESP32-P4 silently (watchdog reset, no panic). The
+    callback must therefore use the compiler builtins, which always expand inline.
+    """
+    cpp = read("esp_audio_stack.cpp")
+    helpers = cpp[
+        cpp.index("static inline bool IRAM_ATTR isr_load_flag(") :
+        cpp.index("bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback")
+    ]
+    callback = cpp[
+        cpp.index("bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback") :
+        cpp.index("bool ESPAudioStack::prepare_tx_completion_tracking_")
+    ]
+
+    assert "__atomic_load_n(" in helpers
+    assert "__ATOMIC_ACQUIRE" in helpers
+    assert "__atomic_fetch_add(" in helpers
+    assert "static_assert(sizeof(std::atomic<bool>) == sizeof(bool)" in cpp
+    for forbidden in (".load(", ".store(", ".fetch_add(", ".exchange(", "std::memory_order"):
+        assert forbidden not in callback, forbidden
 
 
 def test_children_can_restart_after_parent_i2s_recovery() -> None:
