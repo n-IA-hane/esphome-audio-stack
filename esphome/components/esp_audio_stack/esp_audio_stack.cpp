@@ -329,6 +329,30 @@ static i2s_tdm_slot_config_t get_tdm_slot_config(uint8_t fmt, i2s_data_bit_width
 }
 #endif  // SOC_I2S_SUPPORTS_TDM
 
+#if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
+uint16_t ESPAudioStack::tdm_rx_slot_mask_() const {
+  uint16_t mask = static_cast<uint16_t>(1U << this->tdm_mic_slot_);
+  if (this->tdm_second_mic_slot_ >= 0) {
+    mask |= static_cast<uint16_t>(1U << this->tdm_second_mic_slot_);
+  }
+  if (this->use_tdm_ref_) {
+    mask |= static_cast<uint16_t>(1U << this->tdm_ref_slot_);
+  }
+  return mask;
+}
+
+uint16_t ESPAudioStack::tdm_tx_slot_mask_() const { return static_cast<uint16_t>(1U << this->tdm_tx_slot_); }
+
+uint8_t ESPAudioStack::tdm_active_slot_count_(uint16_t mask) {
+  return static_cast<uint8_t>(__builtin_popcount(static_cast<unsigned>(mask)));
+}
+
+uint8_t ESPAudioStack::tdm_packed_slot_index_(uint16_t mask, uint8_t physical_slot) {
+  const uint16_t lower_slots = physical_slot == 0 ? 0 : static_cast<uint16_t>(mask & ((1U << physical_slot) - 1U));
+  return tdm_active_slot_count_(lower_slots);
+}
+#endif
+
 void ESPAudioStack::setup() {
   ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack (ESP-IDF I2S + esp_codec_dev backend)...");
 
@@ -691,9 +715,8 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   }
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
-    const uint32_t tdm_frame = this->tdm_total_slots_ * bytes_per_sample;
-    tx_bytes_per_frame = tdm_frame;
-    rx_bytes_per_frame = tdm_frame;
+    tx_bytes_per_frame = this->tdm_active_slot_count_(this->tdm_tx_slot_mask_()) * bytes_per_sample;
+    rx_bytes_per_frame = this->tdm_active_slot_count_(this->tdm_rx_slot_mask_()) * bytes_per_sample;
   }
 #endif
   const uint32_t max_bytes_per_frame = std::max(tx_bytes_per_frame, rx_bytes_per_frame);
@@ -747,12 +770,14 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     if (processor_bus_frames > 0) {
       auto ceil_div_u32 = [](uint32_t num, uint32_t den) -> uint32_t { return den == 0 ? 0 : (num + den - 1) / den; };
       // The audio task reads/writes one processor frame per loop. Keep enough
-      // DMA headroom for that full TDM frame plus margin; otherwise a 1024-sample
-      // AFE quantum can underflow a short DMA queue even though the YAML compiles.
+      // DMA headroom for that full TDM frame and, unless explicitly disabled,
+      // an additional 25% margin.
       // Do not change dma_frame_num here: it has already been selected as a
       // divisor of the logical TX frame so playback completion records stay in
       // lockstep with the I2S DMA callbacks.
-      const uint32_t target_total_frames = ceil_div_u32(processor_bus_frames * 5U, 4U);
+      const uint32_t target_total_frames = this->processor_dma_margin_
+                                               ? ceil_div_u32(processor_bus_frames * 5U, 4U)
+                                               : processor_bus_frames;
       if (target_total_frames > dma_desc_num * dma_frame_num) {
         const uint32_t old_desc = dma_desc_num;
         dma_desc_num = std::max(dma_desc_num, ceil_div_u32(target_total_frames, dma_frame_num));
@@ -825,17 +850,13 @@ bool ESPAudioStack::prepare_i2s_channels_() {
 
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
-    // ── TDM MODE: ES7210 multi-slot RX + ES8311 slot-0 TX ──
-    // STEREO with 4 slots: DMA contains all 4 interleaved slots, BCLK/FS = 64.
-    // ESP-IDF MONO only puts slot 0 in DMA; STEREO gives all active slots.
-    // total_slot is derived from slot_mask (not slot_mode), so BCLK doesn't change.
-    // ES8311 reads/writes slot 0 as standard I2S (first 16 bits after LRCLK edge).
-    // DMA frame = tdm_total_slots × 2 bytes. At 4 slots, 256 frames = 2048 bytes/desc (< 4092 limit).
-    i2s_tdm_slot_mask_t tdm_mask = I2S_TDM_SLOT0;
-    for (int i = 1; i < this->tdm_total_slots_; i++)
-      tdm_mask = static_cast<i2s_tdm_slot_mask_t>(tdm_mask | (I2S_TDM_SLOT0 << i));
+    // Keep the complete physical TDM frame for BCLK/WS while moving only the
+    // slots consumed by each direction through DMA. ESP-IDF packs enabled
+    // slots in ascending physical-slot order.
+    const auto tx_tdm_mask = static_cast<i2s_tdm_slot_mask_t>(this->tdm_tx_slot_mask_());
+    const auto rx_tdm_mask = static_cast<i2s_tdm_slot_mask_t>(this->tdm_rx_slot_mask_());
 
-    i2s_tdm_config_t tdm_cfg = {
+    i2s_tdm_config_t base_tdm_cfg = {
         .clk_cfg =
             {
                 .sample_rate_hz = this->sample_rate_,
@@ -843,7 +864,7 @@ bool ESPAudioStack::prepare_i2s_channels_() {
                 .ext_clk_freq_hz = 0,
                 .mclk_multiple = mclk_mult,
             },
-        .slot_cfg = get_tdm_slot_config(this->i2s_comm_fmt_, bit_width, I2S_SLOT_MODE_STEREO, tdm_mask),
+        .slot_cfg = get_tdm_slot_config(this->i2s_comm_fmt_, bit_width, I2S_SLOT_MODE_STEREO, tx_tdm_mask),
         .gpio_cfg =
             {
                 .mclk = pin_or_nc(this->mclk_pin_),
@@ -860,13 +881,16 @@ bool ESPAudioStack::prepare_i2s_channels_() {
             },
     };
 
-    // Apply slot_bit_width override BEFORE init
+    // Preserve physical frame geometry independently of the sparse masks.
     if (slot_bw != I2S_SLOT_BIT_WIDTH_AUTO) {
-      tdm_cfg.slot_cfg.slot_bit_width = slot_bw;
+      base_tdm_cfg.slot_cfg.slot_bit_width = slot_bw;
     }
+    base_tdm_cfg.slot_cfg.total_slot = this->tdm_total_slots_;
 
     if (this->tx_handle_) {
-      err = i2s_channel_init_tdm_mode(this->tx_handle_, &tdm_cfg);
+      auto tx_tdm_cfg = base_tdm_cfg;
+      tx_tdm_cfg.slot_cfg.slot_mask = tx_tdm_mask;
+      err = i2s_channel_init_tdm_mode(this->tx_handle_, &tx_tdm_cfg);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init TX TDM channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
@@ -876,7 +900,9 @@ bool ESPAudioStack::prepare_i2s_channels_() {
       ESP_LOGD(TAG, "TX TDM channel initialized");
     }
     if (this->rx_handle_) {
-      err = i2s_channel_init_tdm_mode(this->rx_handle_, &tdm_cfg);
+      auto rx_tdm_cfg = base_tdm_cfg;
+      rx_tdm_cfg.slot_cfg.slot_mask = rx_tdm_mask;
+      err = i2s_channel_init_tdm_mode(this->rx_handle_, &rx_tdm_cfg);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init RX TDM channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
@@ -887,11 +913,13 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     }
 
     if (this->tdm_second_mic_slot_ >= 0) {
-      ESP_LOGD(TAG, "TDM mode: %d slots, mic_slots=[%d,%d], ref_slot=%d, mask=0x%x", this->tdm_total_slots_,
-               this->tdm_mic_slot_, this->tdm_second_mic_slot_, this->tdm_ref_slot_, (unsigned) tdm_mask);
+      ESP_LOGD(TAG, "TDM mode: %d physical slots, mic_slots=[%d,%d], ref_slot=%d, rx_mask=0x%x, tx_mask=0x%x",
+               this->tdm_total_slots_, this->tdm_mic_slot_, this->tdm_second_mic_slot_, this->tdm_ref_slot_,
+               (unsigned) rx_tdm_mask, (unsigned) tx_tdm_mask);
     } else {
-      ESP_LOGD(TAG, "TDM mode: %d slots, mic_slot=%d, ref_slot=%d, mask=0x%x", this->tdm_total_slots_,
-               this->tdm_mic_slot_, this->tdm_ref_slot_, (unsigned) tdm_mask);
+      ESP_LOGD(TAG, "TDM mode: %d physical slots, mic_slot=%d, ref_slot=%d, rx_mask=0x%x, tx_mask=0x%x",
+               this->tdm_total_slots_, this->tdm_mic_slot_, this->tdm_ref_slot_, (unsigned) rx_tdm_mask,
+               (unsigned) tx_tdm_mask);
     }
   } else
 #endif  // SOC_I2S_SUPPORTS_TDM
@@ -1003,10 +1031,7 @@ CodecDevBackend::SampleConfig ESPAudioStack::make_tx_sample_config_() const {
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
     cfg.channels = this->tdm_total_slots_;
-    cfg.channel_mask = 0;
-    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
-      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
-    }
+    cfg.channel_mask = this->tdm_tx_slot_mask_();
     return cfg;
   }
 #endif
@@ -1028,10 +1053,7 @@ CodecDevBackend::SampleConfig ESPAudioStack::make_rx_sample_config_() const {
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
     cfg.channels = this->tdm_total_slots_;
-    cfg.channel_mask = 0;
-    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
-      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
-    }
+    cfg.channel_mask = this->tdm_rx_slot_mask_();
     return cfg;
   }
 #endif

@@ -80,8 +80,9 @@ board requires values different from the defaults.
 - **i2s_comm_fmt** (*Optional*, string): Frame format. One of `philips`, `msb`, `pcm_short`, `pcm_long`. Defaults to `philips`.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio. One of `128`, `256`, `384`, `512`. Defaults to `256`.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. In the maintained target set, only ESP32-P4 supports it. Defaults to `false`.
-- **dma_desc_num** (*Optional*, int): DMA descriptor count, from `2` to `16`. Defaults to `6`.
+- **dma_desc_num** (*Optional*, int): Initial DMA descriptor count, from `2` to `16`. Defaults to `6`. A TDM processor may raise the effective count to cover its processor-frame target.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, from `64` to `4092`.
+- **processor_dma_margin** (*Optional*, boolean): Add 25% DMA headroom above one complete TDM processor frame. Defaults to `true`. If disabled, the queue still expands to at least one complete frame.
 
 ### Dual-bus I2S
 
@@ -104,6 +105,10 @@ Dual-bus mode does not support TDM.
 - **tdm_mic_slots** (*Optional*, list): One or two microphone slots for multi-microphone layouts.
 - **tdm_ref_slot** (*Optional*, int): Slot carrying the speaker reference, from `0` to `7`. Defaults to `1`.
 - **tdm_tx_slot** (*Optional*, int): Playback slot, from `0` to `7`. Defaults to `0`.
+
+The physical TDM frame always retains `tdm_total_slots` for its BCLK/WS timing.
+Only the configured microphone/reference slots are transferred through RX DMA,
+and only `tdm_tx_slot` is transferred through TX DMA.
 
 ### Codec
 

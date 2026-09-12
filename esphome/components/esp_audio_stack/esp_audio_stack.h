@@ -433,6 +433,7 @@ class ESPAudioStack final : public Component {
   void set_task_core(int8_t core) { this->task_core_ = core; }
   void set_task_stack_size(uint32_t size) { this->task_stack_size_ = size; }
   void set_dma_desc_num(uint32_t desc_num) { this->dma_desc_num_ = desc_num; }
+  void set_processor_dma_margin(bool enabled) { this->processor_dma_margin_ = enabled; }
   void set_dma_frame_num(uint32_t frame_num) {
     this->dma_frame_num_ = frame_num;
     this->dma_frame_num_configured_ = true;
@@ -459,6 +460,12 @@ class ESPAudioStack final : public Component {
   bool enable_i2s_channels_();
   void close_audio_io_();
   void deinit_i2s_();
+#if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
+  uint16_t tdm_rx_slot_mask_() const;
+  uint16_t tdm_tx_slot_mask_() const;
+  static uint8_t tdm_active_slot_count_(uint16_t mask);
+  static uint8_t tdm_packed_slot_index_(uint16_t mask, uint8_t physical_slot);
+#endif
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   bool setup_codec_backend_(i2s_clock_src_t clk_src);
   CodecDevBackend::SampleConfig make_tx_sample_config_() const;
@@ -493,10 +500,16 @@ class ESPAudioStack final : public Component {
     bool ref_channel_right{false};
     bool correct_dc_offset{false};
     uint8_t tdm_total_slots{0};
+    uint8_t tdm_rx_active_slots{0};
+    uint8_t tdm_tx_active_slots{0};
     uint8_t tdm_mic_slot{0};
     int8_t tdm_second_mic_slot{-1};
     uint8_t tdm_ref_slot{0};
     uint8_t tdm_tx_slot{0};
+    uint8_t tdm_mic_dma_slot{0};
+    int8_t tdm_second_mic_dma_slot{-1};
+    uint8_t tdm_ref_dma_slot{0};
+    uint8_t tdm_tx_dma_slot{0};
     uint8_t speaker_channels{1};
     uint8_t processor_mic_channels{1};
     uint32_t processor_spec_revision{0};
@@ -848,6 +861,7 @@ class ESPAudioStack final : public Component {
   int8_t task_core_{0};        // Core 0: canonical Espressif AEC pattern; -1 = unpinned
   uint32_t task_stack_size_{8192};
   uint32_t dma_desc_num_{6};
+  bool processor_dma_margin_{true};
   uint32_t dma_frame_num_{0};
   bool dma_frame_num_configured_{false};
   bool buffers_in_psram_{false};           // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)

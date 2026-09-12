@@ -119,9 +119,13 @@ I2S bus (single-bus mode):
   ``512``. Defaults to ``256``.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. Among the
   supported targets, this is available on ESP32-P4. Defaults to ``false``.
-- **dma_desc_num** (*Optional*, int): DMA descriptor count, ``2`` to ``16``. Defaults to ``6``.
+- **dma_desc_num** (*Optional*, int): Initial DMA descriptor count, ``2`` to ``16``. Defaults to
+  ``6``. A TDM processor may raise the effective count to cover its processor-frame target.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, ``64`` to ``4092``. When omitted, the
   component sizes descriptors at approximately 10 ms each.
+- **processor_dma_margin** (*Optional*, boolean): Add 25% DMA headroom above one complete TDM
+  processor frame. Defaults to ``true``. If disabled, the queue still expands to at least one
+  complete frame.
 
 Dual-bus mode (separate microphone and speaker peripherals):
 
@@ -157,6 +161,9 @@ Processor and echo-cancellation reference:
   Must not contain duplicates or the reference slot.
 - **tdm_ref_slot** (*Optional*, int): Slot carrying the speaker reference, ``0`` to ``7``. Defaults to ``1``.
 - **tdm_tx_slot** (*Optional*, int): Playback slot, ``0`` to ``7``. Defaults to ``0``.
+
+The physical TDM frame retains ``tdm_total_slots`` for BCLK/WS timing. RX DMA transfers only the
+configured microphone/reference slots, while TX DMA transfers only ``tdm_tx_slot``.
 
 Hardware codec (``codec:`` block):
 

@@ -403,8 +403,9 @@ First-version limits:
 | `task_priority` | int | 19 | FreeRTOS priority of the audio task (1-24). Default 19 is above lwIP (18), below WiFi (23). |
 | `task_core` | int | 0 | Core affinity: 0 or 1 for pinned, -1 for unpinned. Default 0 keeps the non-network realtime I2S bridge below Wi-Fi and above lwIP on the ESP-IDF protocol core. |
 | `task_stack_size` | int | 8192 | Audio task stack size in bytes (4096-32768). Increase if you see stack overflow warnings. |
-| `dma_desc_num` | int | 6 | I2S DMA descriptor count (2-16). Tune only from measured latency/underrun evidence. |
+| `dma_desc_num` | int | 6 | Initial I2S DMA descriptor count (2-16). TDM processor configurations may raise it automatically to cover the required processor-frame target. Tune only from measured memory/latency/underrun evidence. |
 | `dma_frame_num` | int | auto | Frames per DMA descriptor (64-4092). Omitted means a rate/layout-derived value near 10 ms, clamped to IDF limits. |
+| `processor_dma_margin` | bool | true | Add 25% DMA headroom above one complete TDM processor frame. Disable only on measured memory-constrained configurations; the queue still expands to at least one complete frame. |
 | `buffers_in_psram` | bool | false | Move component-owned frame buffers (RX scratch, speaker frame scratch, processor interleave, mic/ref/output buffers) to PSRAM where possible. DMA descriptors and I2S driver buffers remain internal. Saves internal heap on full builds at the cost of PSRAM traffic. |
 | `audio_task_stack_in_psram` | bool | false | Place the audio task's configured stack in PSRAM through ESPHome's PSRAM task-stack helper. This recovers approximately `task_stack_size` bytes of internal allocation at the cost of slower accesses. Enable only after measuring internal pressure and per-frame worst case. Requires `psram`; keep `false` when the target already has headroom. |
 | `aec_reference` | string | `ring_buffer` | Mono-mode AEC reference source for no-codec setups. `ring_buffer` is the Espressif/ADF TYPE2-style software reference: speaker TX is staged in a delay-tunable ring before being fed to the processor. `previous_frame` is a lighter custom mode that reuses the prior TX frame, with no ring buffer and no delay tuning. Ignored when `use_stereo_aec_reference` or `use_tdm_reference` is true. |
@@ -855,8 +856,13 @@ esp_audio_stack:
 - **DMA Buffers**: owned by Espressif's official `esp_driver_i2s` channel layer.
   YAML exposes `dma_desc_num` (default 6) and optional `dma_frame_num`. When
   `dma_frame_num` is omitted, the component derives roughly 10 ms descriptors
-  and clamps them to IDF limits. Change either value only from measured
-  underrun/latency evidence, then retest every active bus topology.
+  and clamps them to IDF limits. TDM transfers retain `tdm_total_slots` as the
+  physical BCLK/WS frame but move only the configured RX and TX slots through
+  their respective DMA paths. For a TDM processor, `dma_desc_num` is raised as
+  needed for one processor frame plus 25% headroom. Set
+  `processor_dma_margin: false` to omit only that extra margin; the queue still
+  expands to one full processor frame. Change these values only from measured
+  memory, underrun and latency evidence, then retest every active bus topology.
 - **Speaker Buffer**: the public `speaker: platform: esp_audio_stack` exposes ESPHome-compatible `buffer_duration` and `timeout` options. Default `buffer_duration: 500ms` allocates a mono PCM staging ring at the I2S bus rate, preferably in PSRAM. `timeout` defaults to `never`; set an explicit value such as `10s` only when the hardware speaker should auto-stop after an abandoned writer.
 - **Task Priority**: 19 (above lwIP at 18, below WiFi at 23). Configurable via `task_priority` YAML option.
 - **Core Affinity**: Pinned to Core 0 by default for the non-network realtime

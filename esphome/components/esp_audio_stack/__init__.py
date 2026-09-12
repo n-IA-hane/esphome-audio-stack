@@ -76,6 +76,7 @@ CONF_TASK_CORE = "task_core"
 CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_DMA_DESC_NUM = "dma_desc_num"
 CONF_DMA_FRAME_NUM = "dma_frame_num"
+CONF_PROCESSOR_DMA_MARGIN = "processor_dma_margin"
 CONF_TX_CHANNEL = "tx_channel"
 CONF_SPEAKER_CHANNELS = "speaker_channels"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
@@ -487,6 +488,7 @@ CONFIG_SCHEMA = cv.All(
             # the component keeps the historical ~10 ms/descriptor auto sizing.
             cv.Optional(CONF_DMA_DESC_NUM, default=6): cv.int_range(min=2, max=16),
             cv.Optional(CONF_DMA_FRAME_NUM): cv.int_range(min=64, max=4092),
+            cv.Optional(CONF_PROCESSOR_DMA_MARGIN, default=True): cv.boolean,
             # Use PSRAM for non-DMA audio buffers (saves ~15KB internal RAM).
             # Requires PSRAM. DMA buffers (I2S RX/TX) always use internal RAM.
             cv.Optional(CONF_BUFFERS_IN_PSRAM, default=False): cv.boolean,
@@ -885,6 +887,7 @@ async def to_code(config):
             (CONF_TASK_CORE, var.set_task_core),
             (CONF_TASK_STACK_SIZE, var.set_task_stack_size),
             (CONF_DMA_DESC_NUM, var.set_dma_desc_num),
+            (CONF_PROCESSOR_DMA_MARGIN, var.set_processor_dma_margin),
             (CONF_BUFFERS_IN_PSRAM, var.set_buffers_in_psram),
             (CONF_AUDIO_TASK_STACK_IN_PSRAM, var.set_audio_task_stack_in_psram),
         ),
