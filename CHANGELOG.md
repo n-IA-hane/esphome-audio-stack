@@ -1,5 +1,23 @@
 # Changelog
 
+## Development
+
+- Automatic sparse TDM DMA sizing preserves the previous physical-frame
+  geometry when it fits the descriptor limit, separating slot-packing memory
+  savings from descriptor timing changes. This avoids reproducible S3 playback
+  clicks in the tested 48 kHz, 16-bit profile; the underlying mechanism remains
+  unresolved. Profiles requiring larger sparse-derived frames retain a fallback.
+
+- TDM RX and TX now transfer only their configured active slots through DMA
+  while retaining the complete physical slot count for BCLK/WS timing. This
+  reduces internal DMA memory on sparse layouts such as dual microphones plus
+  an echo-reference input and a single playback slot.
+- The new `processor_dma_margin` option can disable the automatic 25% TDM
+  processor-frame headroom on memory-constrained targets. It defaults to
+  enabled, preserving existing configurations.
+
+---
+
 ## ESPHome Audio Stack 2026.9.2
 
 More reliable audio startup and firmware updates, with optional dual-microphone features.

@@ -30,6 +30,38 @@ def test_tdm_16bit_rx_extracts_only_selected_channels() -> None:
     assert "out[i] = in[i * stride + offset];" in extract
 
 
+def test_tdm_dma_uses_direction_specific_sparse_slot_masks() -> None:
+    cpp = read("esp_audio_stack.cpp")
+    pipeline = read("audio_pipeline.cpp")
+    header = read("esp_audio_stack.h")
+
+    assert "tdm_rx_slot_mask_() const" in header
+    assert "tdm_tx_slot_mask_() const" in header
+    assert "base_tdm_cfg.slot_cfg.total_slot = this->tdm_total_slots_" in cpp
+    assert "tx_tdm_cfg.slot_cfg.slot_mask = tx_tdm_mask" in cpp
+    assert "rx_tdm_cfg.slot_cfg.slot_mask = rx_tdm_mask" in cpp
+    assert "cfg.channel_mask = this->tdm_tx_slot_mask_()" in cpp
+    assert "cfg.channel_mask = this->tdm_rx_slot_mask_()" in cpp
+    assert "ctx.tdm_rx_active_slots" in pipeline
+    assert "ctx.tdm_tx_active_slots" in pipeline
+    assert "ctx.tdm_packed_slot_index_" not in pipeline
+    assert "this->tdm_packed_slot_index_" in pipeline
+
+
+def test_processor_dma_margin_is_an_explicit_backward_compatible_option() -> None:
+    cpp = read("esp_audio_stack.cpp")
+    header = read("esp_audio_stack.h")
+    init = read("__init__.py")
+
+    assert "bool processor_dma_margin_{true}" in header
+    assert "set_processor_dma_margin(bool enabled)" in header
+    assert "this->processor_dma_margin_" in cpp
+    assert "ceil_div_u32(processor_bus_frames * 5U, 4U)" in cpp
+    assert 'CONF_PROCESSOR_DMA_MARGIN = "processor_dma_margin"' in init
+    assert "cv.Optional(CONF_PROCESSOR_DMA_MARGIN, default=True)" in init
+    assert "cv.Optional(CONF_DMA_DESC_NUM, default=6)" in init
+
+
 def test_realtime_audio_loop_has_no_tick_delay_or_effect_allocator() -> None:
     cpp = read("audio_pipeline.cpp")
     alc = cpp[
