@@ -720,6 +720,14 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   }
 #endif
   const uint32_t max_bytes_per_frame = std::max(tx_bytes_per_frame, rx_bytes_per_frame);
+  // Preserve the pre-sparse TDM timing geometry. Slot packing should reduce
+  // allocation/transfer bytes, not change descriptor duration and queue depth.
+  uint32_t geometry_bytes_per_frame = max_bytes_per_frame;
+#if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
+  if (this->use_tdm_bus_) {
+    geometry_bytes_per_frame = this->tdm_total_slots_ * bytes_per_sample;
+  }
+#endif
   uint32_t dma_desc_num = this->dma_desc_num_;
   uint32_t dma_frame_num = this->dma_frame_num_configured_
                                ? this->dma_frame_num_
@@ -746,6 +754,18 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     }
   }
 #endif
+  if (!this->dma_frame_num_configured_ && logical_tx_frames > 0 && geometry_bytes_per_frame > 0) {
+    const uint32_t legacy_limit = 4092 / geometry_bytes_per_frame;
+    const uint32_t legacy_frames = largest_divisor_at_most(logical_tx_frames, legacy_limit, 64);
+    const uint32_t target_frames = this->processor_dma_margin_
+                                       ? (logical_tx_frames * 5U + 3U) / 4U : logical_tx_frames;
+    // Preserve legacy geometry where feasible, without rejecting profiles
+    // that require sparse-derived frame sizes to fit the 16-descriptor limit.
+    if (legacy_frames > 0 && (target_frames + legacy_frames - 1U) / legacy_frames <= 16U) {
+      max_frames = std::min(max_frames, legacy_limit);
+      dma_frame_num = std::min(dma_frame_num, max_frames);
+    }
+  }
   if (logical_tx_frames > 0 && max_frames > 0) {
     const uint32_t aligned_frames = largest_divisor_at_most(logical_tx_frames, max_frames, 64);
     if (aligned_frames > 0 && aligned_frames != dma_frame_num) {

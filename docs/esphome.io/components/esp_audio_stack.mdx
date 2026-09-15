@@ -81,7 +81,7 @@ board requires values different from the defaults.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio. One of `128`, `256`, `384`, `512`. Defaults to `256`.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. In the maintained target set, only ESP32-P4 supports it. Defaults to `false`.
 - **dma_desc_num** (*Optional*, int): Initial DMA descriptor count, from `2` to `16`. Defaults to `6`. A TDM processor may raise the effective count to cover its processor-frame target.
-- **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, from `64` to `4092`.
+- **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, from `64` to `4092`. Automatic sizing preserves pre-sparse physical TDM geometry when it fits the 16-descriptor limit, otherwise falling back to active-slot sizing. DMA allocation still uses only the configured active slots in each direction.
 - **processor_dma_margin** (*Optional*, boolean): Add 25% DMA headroom above one complete TDM processor frame. Defaults to `true`. If disabled, the queue still expands to at least one complete frame.
 
 ### Dual-bus I2S

@@ -859,6 +859,14 @@ esp_audio_stack:
   and clamps them to IDF limits. TDM transfers retain `tdm_total_slots` as the
   physical BCLK/WS frame but move only the configured RX and TX slots through
   their respective DMA paths. For a TDM processor, `dma_desc_num` is raised as
+  needed. Automatic sizing preserves the pre-sparse physical-frame geometry
+  when it fits the 16-descriptor limit, falling back to active-slot sizing when
+  needed. Sparse packing reduces buffer bytes without otherwise changing that
+  validated timing geometry. For a 48 kHz, 16-bit, four-slot processor profile
+  with 3072 bus frames per processing block, this selects 384 frames and ten
+  descriptors: three RX slots plus one TX slot use 30 KiB of DMA payload
+  storage, versus 60 KiB with four slots in both directions. Descriptor and
+  queue overhead is not included in those figures. The queue expands as
   needed for one processor frame plus 25% headroom. Set
   `processor_dma_margin: false` to omit only that extra margin; the queue still
   expands to one full processor frame. Change these values only from measured

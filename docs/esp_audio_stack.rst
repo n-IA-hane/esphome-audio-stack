@@ -122,7 +122,10 @@ I2S bus (single-bus mode):
 - **dma_desc_num** (*Optional*, int): Initial DMA descriptor count, ``2`` to ``16``. Defaults to
   ``6``. A TDM processor may raise the effective count to cover its processor-frame target.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, ``64`` to ``4092``. When omitted, the
-  component sizes descriptors at approximately 10 ms each.
+  component derives descriptors from approximately 10 ms, aligns them to the processing
+  frame, and preserves pre-sparse physical TDM geometry when it fits the 16-descriptor
+  limit. Otherwise it falls back to active-slot sizing. DMA allocation still uses only
+  the configured active slots in each direction.
 - **processor_dma_margin** (*Optional*, boolean): Add 25% DMA headroom above one complete TDM
   processor frame. Defaults to ``true``. If disabled, the queue still expands to at least one
   complete frame.
