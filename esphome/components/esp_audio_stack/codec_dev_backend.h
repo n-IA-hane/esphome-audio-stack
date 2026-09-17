@@ -57,6 +57,12 @@ class CodecDevBackend {
     uint32_t mclk_multiple{256};
   };
 
+  struct StreamLayout {
+    esp_codec_dev_bus_info_t bus{};
+    esp_codec_dev_channel_map_t memory{};
+    bool valid{false};
+  };
+
   CodecDevBackend() = default;
   ~CodecDevBackend();
 
@@ -69,7 +75,7 @@ class CodecDevBackend {
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
 
   bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
-             i2s_clock_src_t clk_src, uint32_t mclk_multiple);
+             i2s_clock_src_t clk_src);
   bool open(const SampleConfig *tx_config, const SampleConfig *rx_config);
   void close();
   void teardown();
@@ -86,6 +92,8 @@ class CodecDevBackend {
   bool has_tx() const { return this->tx_dev_ != nullptr; }
   bool has_rx() const { return this->rx_dev_ != nullptr; }
   bool is_open() const { return this->open_; }
+  const StreamLayout &rx_layout() const { return this->rx_layout_; }
+  const StreamLayout &tx_layout() const { return this->tx_layout_; }
   bool has_output_codec() const { return this->output_codec_.enabled; }
   bool has_input_codec() const { return this->es7210_.enabled || this->input_codec_.enabled; }
   const char *input_codec_name() const;
@@ -97,12 +105,17 @@ class CodecDevBackend {
 
   const audio_codec_ctrl_if_t *new_i2c_ctrl_(uint8_t address);
   void apply_output_volume_curve_();
-  const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config, bool input, uint16_t mclk_div,
+  bool read_layout_(esp_codec_dev_type_t direction, const SampleConfig &requested, StreamLayout &layout);
+  bool make_tx_sample_info_(const SampleConfig &config, esp_codec_dev_sample_info_t &fs);
+  const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config,
                                              const audio_codec_ctrl_if_t **ctrl);
   void destroy_codecs_();
 
   i2c::InternalI2CBus *i2c_bus_{nullptr};
   Es7210Config es7210_{};
+#ifdef USE_ESP_AUDIO_STACK_CODEC_ES7210
+  char es7210_adc_labels_[12]{};
+#endif
   GenericCodecConfig input_codec_{};
   GenericCodecConfig output_codec_{};
 
@@ -119,6 +132,8 @@ class CodecDevBackend {
   const audio_codec_if_t *tx_codec_if_{nullptr};
   esp_codec_dev_handle_t rx_dev_{nullptr};
   esp_codec_dev_handle_t tx_dev_{nullptr};
+  StreamLayout rx_layout_{};
+  StreamLayout tx_layout_{};
   bool output_volume_curve_configured_{false};
   float output_volume_min_db_{-49.0f};
 

@@ -12,9 +12,26 @@ AEC, Speech Enhancement on dual-mic targets, optional NS/VAD/AGC stages,
 runtime controls and diagnostic sensors.
 Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 
+The default input format follows `mic_num`: `MR` for one microphone and `MMR`
+for two. `M` is a microphone, `R` is the playback reference, and `N` is an
+unused position filled with zero. Optional `input_format: MMNR` adds that
+padding inside the AFE input frame. It does not enable another microphone or
+require an unused I2S slot to be captured.
+
+Channel placement follows the microphone and reference indices returned by
+Espressif's AFE configuration. Physical wiring belongs in `esp_audio_stack`
+(`tdm_mic_slots`, `tdm_ref_slot`, or `rx_mic_slots` for standard I2S). When
+changing from two microphones to one, update both the hardware microphone list
+and `mic_num`, disable `se_enabled`, and remove a dual-mic `input_format`
+override. Set `output_prebuffer_frames: 0` for the single-mic configuration.
+
 DSP feed work runs outside the hardware audio task. The input staging adapts
 ESP-SR feed blocks to the frame cadence established at setup, and the existing
-output byte stream preserves partial results. This keeps live I2S/DMA sizing
+output byte stream preserves partial results. Hardware processing uses at most
+256 samples per iteration (16 ms at the AFE's 16 kHz rate); larger native AFE
+blocks are assembled in the existing staging buffer. `output_prebuffer_frames`
+continues to count native AFE frames, so this smaller processing step does not
+silently reduce the configured reserve. This keeps live I2S/DMA sizing
 stable when changing AEC, NS or AGC. Rebuilding an AFE feature briefly pauses
 microphone processing while the graph restarts; it does not end the call.
 

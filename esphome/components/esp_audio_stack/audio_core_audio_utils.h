@@ -6,6 +6,10 @@
 
 namespace esphome::esp_audio_stack {
 
+// Keep transport work bounded independently of DSP batch sizes (16 ms at
+// 16 kHz). Processors assemble larger native frames through their staging.
+inline constexpr size_t DEFAULT_AUDIO_FRAME_SAMPLES = 256;
+
 #ifndef ESPHOME_AUDIO_STACK_SCALE_SAMPLE_DEFINED
 #define ESPHOME_AUDIO_STACK_SCALE_SAMPLE_DEFINED
 // Scale a 16-bit PCM sample by a float gain with saturation clamping.

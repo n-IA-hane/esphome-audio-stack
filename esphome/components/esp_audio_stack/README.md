@@ -151,6 +151,42 @@ and gain. These are the knobs users most often need when building a new target:
 
 Use one I2S bus when the codec owns ADC and DAC on the same pins. The stack
 creates official IDF TX/RX channels and opens codec-dev data devices on top.
+CodecDev owns format negotiation and channel activation. The audio task starts
+consuming samples after both directions have opened successfully.
+
+TDM slot numbers in YAML always refer to physical positions on the wire.
+The stack selects only the microphone slots, the enabled reference slot and
+any additional slots requested by diagnostic sensors. IDF packs those selected
+slots into DMA memory; the stack translates their positions before processing.
+The speaker uses only `tdm_tx_slot`, without building silence samples for the
+other slots. `tdm_total_slots` still sets the physical frame width and clock.
+
+For example, these fields select two microphones and one reference in a
+four-slot frame (retain the pins, codecs and rates from your board profile):
+
+```yaml
+esp_audio_stack:
+  processor_id: afe
+  use_tdm_reference: true
+  tdm_total_slots: 4
+  tdm_mic_slots: [0, 2]
+  tdm_ref_slot: 1
+  tdm_tx_slot: 0
+
+esp_afe:
+  id: afe
+  mic_num: 2
+  se_enabled: true
+  # input_format: MMNR  # Optional AFE padding; the default is MMR.
+```
+
+This configuration captures three slots and transmits one, while retaining the
+four-slot bus. Requesting a level sensor for slot 3 also includes slot 3 in
+capture. Sensor numbers remain physical slot numbers even when DMA is packed.
+
+Playback completion uses the DMA allocation reported by IDF, including cache
+alignment. Those completed sample counts propagate through the ESPHome speaker,
+mixer and resampler callbacks used for synchronized playback.
 
 ### Dual I2S Bus
 

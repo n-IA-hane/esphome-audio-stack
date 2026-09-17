@@ -728,7 +728,7 @@ are tracked by this repository's own history.
 
 Espressif dependencies and their pins:
 
-- `esp_codec_dev` `^1.6.2` for codec control;
+- `esp_codec_dev` `2.0.0-beta5` for codec control and explicit stream-layout queries;
 - `esp_audio_effects` `^1.4.2` for rate, bit-depth and layout conversion,
   or `~1.3` on pre-v3 ESP32-P4 silicon, which cannot execute the newer binaries;
 - `esp-dsp` `^1.8.0` and `esp-sr` `^2.5.3` for the processors;

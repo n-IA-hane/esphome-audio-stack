@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esphome/core/defines.h"
+#include "audio_slot_layout.h"
 
 #ifdef USE_ESP32
 
@@ -455,6 +456,9 @@ class ESPAudioStack final : public Component {
 
  protected:
   bool init_audio_stack_();
+#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
+  AudioSlotLayout make_tdm_rx_layout_() const;
+#endif
   bool prepare_i2s_channels_();
   bool enable_i2s_channels_();
   void close_audio_io_();
@@ -493,6 +497,10 @@ class ESPAudioStack final : public Component {
     bool ref_channel_right{false};
     bool correct_dc_offset{false};
     uint8_t tdm_total_slots{0};
+    uint8_t rx_slot_count{0};
+#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
+    AudioSlotLayout tdm_rx_layout{};
+#endif
     uint8_t tdm_mic_slot{0};
     int8_t tdm_second_mic_slot{-1};
     uint8_t tdm_ref_slot{0};
@@ -527,9 +535,7 @@ class ESPAudioStack final : public Component {
     int16_t *spk_buffer{nullptr};
     int16_t *spk_ref_buffer{nullptr};
     int16_t *tx_ref_mono_buffer{nullptr};
-    int16_t *tdm_tx_buffer{nullptr};
     int16_t *tx_interleave_buffer{nullptr};
-    int16_t *tx_silence_buffer{nullptr};
     int16_t *tx_clock_buffer{nullptr};
     int16_t *tx_32_buffer{nullptr};
     int16_t *aec_output{nullptr};
@@ -876,10 +882,6 @@ class ESPAudioStack final : public Component {
   int16_t *prealloc_spk_ref_buffer_{nullptr};
   int16_t *prealloc_tx_ref_mono_buffer_{nullptr};
   int16_t *prealloc_aec_output_{nullptr};
-#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
-  int16_t *prealloc_tdm_tx_buffer_{nullptr};
-  int16_t *prealloc_tx_silence_buffer_{nullptr};
-#endif
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
   int16_t *prealloc_tx_interleave_buffer_{nullptr};
 #endif
@@ -894,10 +896,6 @@ class ESPAudioStack final : public Component {
   size_t prealloc_spk_ref_buffer_bytes_{0};
   size_t prealloc_tx_ref_mono_buffer_bytes_{0};
   size_t prealloc_aec_output_bytes_{0};
-#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
-  size_t prealloc_tdm_tx_buffer_bytes_{0};
-  size_t prealloc_tx_silence_buffer_bytes_{0};
-#endif
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
   size_t prealloc_tx_interleave_buffer_bytes_{0};
 #endif

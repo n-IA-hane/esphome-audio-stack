@@ -26,6 +26,7 @@
 #include <freertos/FreeRTOS.h>
 
 #ifdef USE_I2C
+#include <driver/i2c_master.h>
 #include "esphome/components/i2c/i2c_bus.h"
 #endif
 #include "esphome/core/log.h"
@@ -128,7 +129,11 @@ static int ctrl_get_info(const audio_codec_ctrl_if_t *ctrl, audio_codec_ctrl_inf
   // codec_dev identifies I2C controls by the 8-bit write address; ESPHome
   // transactions use the 7-bit address stored in this adapter.
   info->i2c.addr = static_cast<uint16_t>(self->address) << 1;
-  info->i2c.port = static_cast<uint8_t>(self->bus->get_port());
+  i2c_master_bus_handle_t bus = nullptr;
+  if (i2c_master_get_bus_handle(static_cast<i2c_port_num_t>(self->bus->get_port()), &bus) != ESP_OK) {
+    return ESP_CODEC_DEV_WRONG_STATE;
+  }
+  info->i2c.bus_handle = bus;
   return ESP_CODEC_DEV_OK;
 }
 
@@ -214,8 +219,8 @@ const char *CodecDevBackend::output_codec_name() const {
   return this->output_codec_.enabled ? codec_kind_name_(this->output_codec_.kind) : "none";
 }
 
-const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecConfig &config, bool input,
-                                                            uint16_t mclk_div, const audio_codec_ctrl_if_t **ctrl) {
+const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecConfig &config,
+                                                          const audio_codec_ctrl_if_t **ctrl) {
   if (!config.enabled || ctrl == nullptr) {
     return nullptr;
   }
@@ -223,19 +228,16 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
   if (*ctrl == nullptr) {
     return nullptr;
   }
-  const auto mode = input ? ESP_CODEC_DEV_WORK_MODE_ADC : ESP_CODEC_DEV_WORK_MODE_DAC;
   switch (config.kind) {
 #ifdef USE_ESP_AUDIO_STACK_CODEC_ES8311
     case CodecKind::ES8311: {
       es8311_codec_cfg_t cfg = {};
       cfg.ctrl_if = *ctrl;
       cfg.gpio_if = nullptr;
-      cfg.codec_mode = mode;
-      cfg.pa_pin = -1;
-      cfg.master_mode = false;
-      cfg.use_mclk = config.use_mclk;
-      cfg.no_dac_ref = config.no_dac_ref;
-      cfg.mclk_div = mclk_div;
+      cfg.pa_cfg.pa_pin = -1;
+      cfg.sys_cfg.is_master = false;
+      cfg.sys_cfg.no_mclk = !config.use_mclk;
+      cfg.dac_cfg.ref_enable = !config.no_dac_ref;
       return es8311_codec_new(&cfg);
     }
 #endif
@@ -244,9 +246,8 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
       es8388_codec_cfg_t cfg = {};
       cfg.ctrl_if = *ctrl;
       cfg.gpio_if = nullptr;
-      cfg.codec_mode = mode;
-      cfg.pa_pin = -1;
-      cfg.master_mode = false;
+      cfg.pa_cfg.pa_pin = -1;
+      cfg.sys_cfg.is_master = false;
       return es8388_codec_new(&cfg);
     }
 #endif
@@ -255,9 +256,8 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
       es8374_codec_cfg_t cfg = {};
       cfg.ctrl_if = *ctrl;
       cfg.gpio_if = nullptr;
-      cfg.codec_mode = mode;
-      cfg.pa_pin = -1;
-      cfg.master_mode = false;
+      cfg.pa_cfg.pa_pin = -1;
+      cfg.sys_cfg.is_master = false;
       return es8374_codec_new(&cfg);
     }
 #endif
@@ -266,15 +266,11 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
       es8389_codec_cfg_t cfg = {};
       cfg.ctrl_if = *ctrl;
       cfg.gpio_if = nullptr;
-      cfg.codec_mode = mode;
-      cfg.pa_pin = -1;
-      cfg.master_mode = false;
-      cfg.use_mclk = config.use_mclk;
-      cfg.digital_mic = false;
-      cfg.invert_mclk = false;
-      cfg.invert_sclk = false;
-      cfg.no_dac_ref = config.no_dac_ref;
-      cfg.mclk_div = mclk_div;
+      cfg.pa_cfg.pa_pin = -1;
+      cfg.sys_cfg.is_master = false;
+      cfg.sys_cfg.no_mclk = !config.use_mclk;
+      cfg.adc_cfg.digital_mic = false;
+      cfg.dac_cfg.ref_enable = !config.no_dac_ref;
       return es8389_codec_new(&cfg);
     }
 #endif
@@ -285,9 +281,8 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
 }
 
 bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle,
-                            i2s_chan_handle_t rx_handle, i2s_clock_src_t clk_src, uint32_t mclk_multiple) {
+                            i2s_chan_handle_t rx_handle, i2s_clock_src_t clk_src) {
   this->teardown();
-  const uint16_t codec_mclk_div = mclk_multiple == 0 ? 256 : static_cast<uint16_t>(mclk_multiple);
 
 #ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const bool shared_i2s_data = tx_i2s_port == rx_i2s_port;
@@ -354,9 +349,18 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_h
     }
     es7210_codec_cfg_t cfg = {};
     cfg.ctrl_if = this->es7210_ctrl_;
-    cfg.master_mode = false;
-    cfg.mic_selected = this->es7210_.mic_selected;
-    cfg.mclk_div = codec_mclk_div;
+    cfg.sys_cfg.is_master = false;
+    // v2 declares enabled ADCs through labels. Preserve the configured ADC
+    // mask independently of the slots subsequently selected for DMA.
+    size_t offset = 0;
+    for (uint8_t channel = 0; channel < 4; ++channel) {
+      if (channel != 0) this->es7210_adc_labels_[offset++] = ',';
+      const char *label = (this->es7210_.mic_selected & (1U << channel)) ? "FC" : "NA";
+      memcpy(this->es7210_adc_labels_ + offset, label, 2);
+      offset += 2;
+    }
+    this->es7210_adc_labels_[offset] = '\0';
+    cfg.adc_cfg.label = this->es7210_adc_labels_;
     this->rx_codec_if_ = es7210_codec_new(&cfg);
     if (this->rx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create ES7210 codec interface");
@@ -367,7 +371,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_h
     return false;
 #endif
   } else if (rx_handle != nullptr && this->input_codec_.enabled) {
-    this->rx_codec_if_ = this->new_generic_codec_(this->input_codec_, true, codec_mclk_div, &this->input_codec_ctrl_);
+    this->rx_codec_if_ = this->new_generic_codec_(this->input_codec_, &this->input_codec_ctrl_);
     if (this->rx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create %s ADC codec interface", this->input_codec_name());
       return false;
@@ -376,7 +380,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_h
 
   if (tx_handle != nullptr && this->output_codec_.enabled) {
     this->tx_codec_if_ =
-        this->new_generic_codec_(this->output_codec_, false, codec_mclk_div, &this->output_codec_ctrl_);
+        this->new_generic_codec_(this->output_codec_, &this->output_codec_ctrl_);
     if (this->tx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create %s DAC codec interface", this->output_codec_name());
       return false;
@@ -428,6 +432,73 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_h
   return true;
 }
 
+bool CodecDevBackend::make_tx_sample_info_(const SampleConfig &config, esp_codec_dev_sample_info_t &fs) {
+  fs = make_sample_info_(config);
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
+  const auto *data_if = this->tx_data_if_;
+#else
+  const auto *data_if = this->data_if_;
+#endif
+  esp_codec_dev_i2s_mode_t input_mode{}, output_mode{};
+  if (data_if == nullptr || data_if->get_mode == nullptr ||
+      data_if->get_mode(data_if, &input_mode, &output_mode) != ESP_CODEC_DEV_OK) return false;
+  if (output_mode != ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS || this->tx_codec_if_ == nullptr) return true;
+
+  // YAML selects a physical slot. CodecDev 2 TX selects a logical codec
+  // channel instead; use the codec's own map rather than a board-specific order.
+  const auto &hw = this->tx_codec_if_->hw_base;
+  const esp_codec_dev_device_map_info_t *maps = nullptr;
+  int count = 0;
+  if (hw.get_order_list == nullptr || hw.get_order_list(&hw, &maps, &count) != ESP_CODEC_DEV_OK) return false;
+  for (int i = 0; i < count; ++i) {
+    if (maps[i].mode != output_mode || maps[i].channels != config.channels) continue;
+    uint16_t logical_mask = 0;
+    for (uint8_t slot = 0; slot < config.channels; ++slot) {
+      if ((config.channel_mask & (1U << slot)) == 0) continue;
+      const uint8_t channel = (maps[i].map.value >> (4U * slot)) & 0x0fU;
+      if (channel == 0 || channel > ESP_CODEC_DEV_MAX_MAP_CHANNELS) return false;
+      logical_mask |= 1U << (channel - 1U);
+    }
+    fs.channel_mask = logical_mask;
+    return logical_mask != 0;
+  }
+  ESP_LOGE(TAG, "Output codec has no mapping for the configured TDM frame");
+  return false;
+}
+
+bool CodecDevBackend::read_layout_(esp_codec_dev_type_t direction, const SampleConfig &requested,
+                                 StreamLayout &layout) {
+  const bool output = direction == ESP_CODEC_DEV_TYPE_OUT;
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
+  const auto *data_if = output ? this->tx_data_if_ : this->rx_data_if_;
+#else
+  const auto *data_if = this->data_if_;
+#endif
+  const auto dev = output ? this->tx_dev_ : this->rx_dev_;
+  layout = {};
+  if (data_if == nullptr || data_if->get_bus_info == nullptr ||
+      data_if->get_bus_info(data_if, direction, &layout.bus) != ESP_CODEC_DEV_OK ||
+      esp_codec_dev_get_data_layout(dev, &layout.memory) != ESP_CODEC_DEV_OK) {
+    ESP_LOGE(TAG, "Cannot query effective %s codec layout", output ? "TX" : "RX");
+    return false;
+  }
+  if (layout.bus.sample_rate != requested.sample_rate || layout.bus.data_bit != requested.bits_per_sample) {
+    ESP_LOGE(TAG, "%s codec format differs from requested audio format", output ? "TX" : "RX");
+    return false;
+  }
+  if (layout.bus.mode == ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS &&
+      (layout.bus.total_slot != requested.channels || layout.bus.slot_mask != requested.channel_mask)) {
+    ESP_LOGE(TAG, "%s codec changed the configured TDM slot layout", output ? "TX" : "RX");
+    return false;
+  }
+  layout.valid = true;
+  ESP_LOGI(TAG, "%s layout: rate=%u slots=%u data=%u slot=%u mask=0x%x memory=0x%08lx",
+           output ? "TX" : "RX", (unsigned) layout.bus.sample_rate, (unsigned) layout.bus.total_slot,
+           (unsigned) layout.bus.data_bit, (unsigned) layout.bus.slot_bit, (unsigned) layout.bus.slot_mask,
+           (unsigned long) layout.memory.value);
+  return true;
+}
+
 bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx_config) {
   if (!this->prepared_) {
     return false;
@@ -439,7 +510,8 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
   // Match Espressif's TDM codec-dev tests: bring up playback first, then record,
   // so the TX side has configured the shared clock before RX starts consuming it.
   if (this->tx_dev_ != nullptr && tx_config != nullptr) {
-    auto fs = make_sample_info_(*tx_config);
+    esp_codec_dev_sample_info_t fs{};
+    if (!this->make_tx_sample_info_(*tx_config, fs)) return false;
     int ret = esp_codec_dev_open(this->tx_dev_, &fs);
     if (ret != ESP_CODEC_DEV_OK) {
       ESP_LOGE(TAG, "Failed to open TX codec device: %d", ret);
@@ -465,6 +537,16 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
     } else if (this->input_codec_.enabled) {
       this->set_input_gain(this->input_codec_.input_gain_db);
     }
+  }
+  if ((tx_config != nullptr && this->tx_dev_ != nullptr &&
+       !this->read_layout_(ESP_CODEC_DEV_TYPE_OUT, *tx_config, this->tx_layout_)) ||
+      (rx_config != nullptr && this->rx_dev_ != nullptr &&
+       !this->read_layout_(ESP_CODEC_DEV_TYPE_IN, *rx_config, this->rx_layout_))) {
+    if (this->rx_dev_ != nullptr) esp_codec_dev_close(this->rx_dev_);
+    if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
+    this->rx_layout_ = {};
+    this->tx_layout_ = {};
+    return false;
   }
   this->open_ = true;
   return true;
@@ -619,6 +701,8 @@ void CodecDevBackend::teardown() {
 #endif
   this->prepared_ = false;
   this->open_ = false;
+  this->rx_layout_ = {};
+  this->tx_layout_ = {};
 }
 
 }  // namespace esphome::esp_audio_stack

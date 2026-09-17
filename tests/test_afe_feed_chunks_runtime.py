@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_feed_chunks_preserve_samples_and_allocation_bounds(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     helper = source[
-        source.index("static inline int16_t afe_ref_sample") : source.index(
+        source.index("static inline void stage_afe_input_frame") : source.index(
             "\naec_mode_t EspAfe::derive_aec_mode_"
         )
     ]
@@ -28,6 +28,9 @@ def test_feed_chunks_preserve_samples_and_allocation_bounds(tmp_path):
 #include <vector>
 #define USE_ESP_AFE_GMF_PATH
 using V=std::vector<int16_t>;
+struct afe_pcm_config_t {int total_ch_num;int mic_num;uint8_t *mic_ids;int ref_num;uint8_t *ref_ids;};
+struct afe_config_t {afe_pcm_config_t pcm_config;};
+uint8_t mic_ids[]={0},ref_ids[]={1};
 size_t feed_values;
 void diag_add(std::atomic<uint32_t>& x){++x;}
 uint32_t diag_increment_and_get(std::atomic<uint32_t>& x){return ++x;}
@@ -39,6 +42,8 @@ int xRingbufferSend(void* h,const void* p,size_t bytes,int){
 """
     cls = r"""
 struct EspAfe {
+ afe_config_t config{{2,1,mic_ids,1,ref_ids}};
+ afe_config_t *afe_config_=&config;
  V observed,slot;int feed_chunksize_,total_channels_,staged_input_samples_=0,warmup_remaining_=0;
  int16_t* feed_buf_;void* feed_input_ring_;
  std::atomic<uint32_t> input_ring_drop_{0},feed_ok_{0},feed_rejected_{0},feed_queue_frames_{0},feed_queue_peak_{0};
@@ -52,7 +57,8 @@ struct EspAfe {
  }
 };
 int main(){
- for(auto shape:{std::pair{512,160},std::pair{160,512},std::pair{512,512},std::pair{1024,512}}){
+ for(auto shape:{std::pair{512,160},std::pair{160,512},std::pair{512,512},std::pair{1024,512},
+                 std::pair{256,1024},std::pair{256,512},std::pair{256,160}}){
   int qs=shape.first,fs=shape.second;feed_values=fs*2;
   V storage(feed_values+8,0x5a5a);EspAfe afe;
   afe.feed_chunksize_=fs;afe.total_channels_=2;afe.feed_buf_=storage.data();

@@ -191,88 +191,30 @@ bool EspAfe::process_post_afe_agc_frame_(const int16_t *input, int16_t *output, 
 }
 #endif
 
-static inline int16_t afe_ref_sample(const int16_t *in_ref, int i) { return in_ref != nullptr ? in_ref[i] : 0; }
-
+// The AFE configuration owns the channel roles; transport microphones are
+// interleaved independently of the AFE layout. Unknown channels carry silence.
 static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic, const int16_t *in_ref, int samples,
-                                         int transport_mic_channels, int afe_mic_channels, int total_channels) {
-  if (dst == nullptr || in_mic == nullptr || samples <= 0 || total_channels <= 0) {
-    return;
-  }
-  const int mic_stride = std::max(1, transport_mic_channels);
-
-  if (afe_mic_channels == 1) {
-    if (total_channels == 2) {
-      for (int i = 0; i < samples; i++) {
-        dst[0] = in_mic[i * mic_stride];
-        dst[1] = afe_ref_sample(in_ref, i);
-        dst += 2;
+                                         int transport_mic_channels, const afe_pcm_config_t &layout) {
+  if (dst == nullptr || in_mic == nullptr || samples <= 0 || transport_mic_channels <= 0) return;
+  for (int channel = 0; channel < layout.total_ch_num; ++channel) {
+    const int16_t *source = nullptr;
+    int stride = 1;
+    for (int mic = 0; mic < layout.mic_num; ++mic) {
+      if (layout.mic_ids[mic] == channel && mic < transport_mic_channels) {
+        source = in_mic + mic;
+        stride = transport_mic_channels;
+        break;
       }
-      return;
     }
-    if (total_channels == 3) {
-      for (int i = 0; i < samples; i++) {
-        dst[0] = in_mic[i * mic_stride];
-        dst[1] = 0;
-        dst[2] = afe_ref_sample(in_ref, i);
-        dst += 3;
-      }
-      return;
+    for (int ref = 0; ref < layout.ref_num; ++ref) {
+      if (layout.ref_ids[ref] == channel) source = in_ref;
     }
-  } else if (transport_mic_channels >= 2) {
-    if (total_channels == 3) {
-      for (int i = 0; i < samples; i++) {
-        const int base = i * mic_stride;
-        dst[0] = in_mic[base];
-        dst[1] = in_mic[base + 1];
-        dst[2] = afe_ref_sample(in_ref, i);
-        dst += 3;
-      }
-      return;
+    int16_t *output = dst + channel;
+    if (source == nullptr) {
+      for (int i = 0; i < samples; ++i, output += layout.total_ch_num) *output = 0;
+    } else {
+      for (int i = 0; i < samples; ++i, output += layout.total_ch_num, source += stride) *output = *source;
     }
-    if (total_channels == 4) {
-      for (int i = 0; i < samples; i++) {
-        const int base = i * mic_stride;
-        dst[0] = in_mic[base];
-        dst[1] = in_mic[base + 1];
-        dst[2] = 0;
-        dst[3] = afe_ref_sample(in_ref, i);
-        dst += 4;
-      }
-      return;
-    }
-  } else {
-    if (total_channels == 3) {
-      for (int i = 0; i < samples; i++) {
-        dst[0] = in_mic[i];
-        dst[1] = 0;
-        dst[2] = afe_ref_sample(in_ref, i);
-        dst += 3;
-      }
-      return;
-    }
-    if (total_channels == 4) {
-      for (int i = 0; i < samples; i++) {
-        dst[0] = in_mic[i];
-        dst[1] = 0;
-        dst[2] = 0;
-        dst[3] = afe_ref_sample(in_ref, i);
-        dst += 4;
-      }
-      return;
-    }
-  }
-
-  for (int i = 0; i < samples; i++) {
-    memset(dst, 0, static_cast<size_t>(total_channels) * sizeof(int16_t));
-    dst[0] = in_mic[i * mic_stride];
-    if (afe_mic_channels >= 2 && total_channels >= 2) {
-      dst[1] = transport_mic_channels >= 2 ? in_mic[i * mic_stride + 1] : 0;
-    }
-    const int ref_index = (afe_mic_channels >= 2) ? (total_channels >= 4 ? 3 : 2) : (total_channels >= 3 ? 2 : 1);
-    if (ref_index < total_channels) {
-      dst[ref_index] = afe_ref_sample(in_ref, i);
-    }
-    dst += total_channels;
   }
 }
 
@@ -504,7 +446,9 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   uint8_t total_channels_u8 = 0;
   if (esp_gmf_afe_manager_get_chunk_size(manager, &feed_chunk_size) != ESP_GMF_ERR_OK ||
       esp_gmf_afe_manager_get_input_ch_num(manager, &total_channels_u8) != ESP_GMF_ERR_OK || feed_chunk_size == 0 ||
-      total_channels_u8 == 0) {
+      total_channels_u8 == 0 || total_channels_u8 != cfg->pcm_config.total_ch_num ||
+      cfg->pcm_config.mic_num != afe_mic_channels || cfg->pcm_config.ref_num != 1 ||
+      cfg->pcm_config.mic_ids == nullptr || cfg->pcm_config.ref_ids == nullptr) {
     ESP_LOGE(TAG, "Failed to query GMF AFE manager frame shape");
     esp_gmf_task_deinit(task);
     esp_gmf_pipeline_destroy(pipeline);
@@ -514,11 +458,14 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   }
 
   int feed_chunksize = static_cast<int>(feed_chunk_size);
-  // Feature changes may switch ESP-SR feed granularity (for example 512 to
-  // 160 samples). Keep the published audio/DMA quantum established at setup;
-  // the existing input staging and output byte stream adapt the DSP blocks.
+  // DSP feed granularity must not make the full-duplex I/O task wait for a
+  // whole algorithm frame before servicing playback. Reuse the transport
+  // quantum and existing staging/byte stream for larger native AFE blocks.
+  // Keep this public quantum stable when features are reconfigured later.
   const int published_quantum = this->last_spec_process_size_.load(std::memory_order_acquire);
-  int process_chunksize = published_quantum > 0 ? published_quantum : feed_chunksize;
+  int process_chunksize = published_quantum > 0
+                             ? published_quantum
+                             : std::min(feed_chunksize, static_cast<int>(esp_audio_stack::DEFAULT_AUDIO_FRAME_SAMPLES));
   int fetch_chunksize = process_chunksize;
   // Use official API for feed channel count instead of config struct (more
   // robust if esp-sr changes internal channel mapping in future versions).
@@ -1407,7 +1354,6 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     }
   };
 
-  const int afe_mic_channels = this->afe_mic_channels_();
   int fs = this->feed_chunksize_;
   bool gmf_path = false;
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -1474,14 +1420,14 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
         staged = false;
       } else {
         stage_afe_input_frame(static_cast<int16_t *>(gmf_slot), mic_chunk, ref_chunk, stage_samples,
-                              transport_mic_channels, afe_mic_channels, tc);
+                              transport_mic_channels, this->afe_config_->pcm_config);
         offset = fs;
       }
     } else
 #endif
         if (this->feed_buf_ != nullptr) {
       int16_t *dst = this->feed_buf_ + offset * tc;
-      stage_afe_input_frame(dst, mic_chunk, ref_chunk, stage_samples, transport_mic_channels, afe_mic_channels, tc);
+      stage_afe_input_frame(dst, mic_chunk, ref_chunk, stage_samples, transport_mic_channels, this->afe_config_->pcm_config);
       offset += stage_samples;
     } else {
       diag_add(this->input_ring_drop_);
@@ -1534,7 +1480,10 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   if (this->fetch_output_ring_) {
     if (!this->output_prebuffer_ready_) {
       const size_t required_frames = static_cast<size_t>(this->output_prebuffer_frames_) + 1U;
-      const size_t queued_frames = gmf_path ? this->fetch_output_ring_->available() / output_bytes
+      // Preserve the native DSP prebuffer duration when transport slices are
+      // smaller. The same output FIFO serves both frame sizes.
+      const size_t native_frame_bytes = std::max(output_bytes, static_cast<size_t>(this->feed_chunksize_) * sizeof(int16_t));
+      const size_t queued_frames = gmf_path ? this->fetch_output_ring_->available() / native_frame_bytes
                                             : this->fetch_output_ring_->nosplit_items_waiting();
       this->output_prebuffer_ready_ = queued_frames >= required_frames;
     }
@@ -1766,6 +1715,7 @@ esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wa
     const int64_t feed_start_us = ESP_AFE_TIMING_TELEMETRY ? esp_timer_get_time() : 0;
     memcpy(load->buf, item, item_size);
     load->valid_size = item_size;
+
     if constexpr (ESP_AFE_TIMING_TELEMETRY) {
       uint32_t feed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - feed_start_us));
       this->feed_us_last_.store(feed_us, std::memory_order_relaxed);
@@ -1806,6 +1756,7 @@ esp_gmf_err_io_t EspAfe::gmf_output_release_(esp_gmf_payload_t *load, int wait_t
 
   // GMF drains a byte stream, not necessarily whole fetch frames. Preserve
   // every sample in the single bridge; process() consumes complete frames.
+
   const size_t pending_bytes = this->fetch_output_ring_->available() % frame_bytes;
   const size_t wrote = this->fetch_output_ring_->write_without_replacement(load->buf, load->valid_size, 0, false);
   if (wrote != load->valid_size) {
@@ -2225,7 +2176,7 @@ bool EspAfe::prepare_fetch_output_ring_() {
   }
 
   if (!this->fetch_output_ring_) {
-    const size_t frame_bytes = static_cast<size_t>(this->fetch_chunksize_) * sizeof(int16_t);
+    const size_t frame_bytes = static_cast<size_t>(std::max(this->feed_chunksize_, this->fetch_chunksize_)) * sizeof(int16_t);
     const size_t ring_bytes = (frame_bytes + RINGBUFFER_ITEM_HEADER_BYTES) * BRIDGE_RING_FRAMES;
 #ifdef USE_ESP_AFE_GMF_PATH
     if (this->afe_manager_ != nullptr) {

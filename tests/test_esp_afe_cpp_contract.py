@@ -73,7 +73,8 @@ def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> 
     assert "set_output_prebuffer_frames" in header
 
     process = cpp[cpp.index("bool EspAfe::process(") : cpp.index("\nbool EspAfe::reinit_by_name")]
-    assert "this->fetch_output_ring_->available() / output_bytes" in process
+    # Native DSP prebuffer duration is exercised by test_afe_prebuffer_runtime;
+    # it must not shrink to the smaller transport slice.
     assert "this->fetch_output_ring_->available() >= output_bytes" in process
     assert "static_cast<size_t>(this->output_prebuffer_frames_) + 1U" in process
     assert "this->fetch_output_ring_->read(reinterpret_cast<uint8_t *>(out), output_bytes, 0)" in process

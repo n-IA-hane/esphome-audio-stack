@@ -575,6 +575,20 @@ void ESPAudioStack::dump_config() {
 #endif
 }
 
+#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
+AudioSlotLayout ESPAudioStack::make_tdm_rx_layout_() const {
+  uint16_t mask = 1U << this->tdm_mic_slot_;
+  if (this->tdm_second_mic_slot_ >= 0) mask |= 1U << this->tdm_second_mic_slot_;
+  if (this->use_tdm_ref_) mask |= 1U << this->tdm_ref_slot_;
+#ifdef USE_ESP_AUDIO_STACK_SLOT_LEVELS
+  for (uint8_t slot = 0; slot < this->tdm_total_slots_; ++slot) {
+    if (this->tdm_slot_level_sensor_enabled_[slot]) mask |= 1U << slot;
+  }
+#endif
+  return AudioSlotLayout{mask};
+}
+#endif
+
 bool ESPAudioStack::prepare_i2s_channels_() {
   if (this->tx_handle_ != nullptr || this->rx_handle_ != nullptr) {
     return true;
@@ -691,9 +705,8 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   }
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
-    const uint32_t tdm_frame = this->tdm_total_slots_ * bytes_per_sample;
-    tx_bytes_per_frame = tdm_frame;
-    rx_bytes_per_frame = tdm_frame;
+    tx_bytes_per_frame = bytes_per_sample;
+    rx_bytes_per_frame = this->make_tdm_rx_layout_().count() * bytes_per_sample;
   }
 #endif
   const uint32_t max_bytes_per_frame = std::max(tx_bytes_per_frame, rx_bytes_per_frame);
@@ -724,7 +737,12 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   }
 #endif
   if (logical_tx_frames > 0 && max_frames > 0) {
-    const uint32_t aligned_frames = largest_divisor_at_most(logical_tx_frames, max_frames, 64);
+    // Sparse DMA saves memory without changing the established automatic
+    // descriptor cadence. Explicit geometry still uses the actual slot count.
+    const uint32_t alignment_limit = this->use_tdm_bus_ && !this->dma_frame_num_configured_
+                                         ? std::min(max_frames, 4092U / (this->tdm_total_slots_ * bytes_per_sample))
+                                         : max_frames;
+    const uint32_t aligned_frames = largest_divisor_at_most(logical_tx_frames, alignment_limit, 64);
     if (aligned_frames > 0 && aligned_frames != dma_frame_num) {
       if (this->dma_frame_num_configured_) {
         ESP_LOGW(TAG,
@@ -825,15 +843,10 @@ bool ESPAudioStack::prepare_i2s_channels_() {
 
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
-    // ── TDM MODE: ES7210 multi-slot RX + ES8311 slot-0 TX ──
-    // STEREO with 4 slots: DMA contains all 4 interleaved slots, BCLK/FS = 64.
-    // ESP-IDF MONO only puts slot 0 in DMA; STEREO gives all active slots.
-    // total_slot is derived from slot_mask (not slot_mode), so BCLK doesn't change.
-    // ES8311 reads/writes slot 0 as standard I2S (first 16 bits after LRCLK edge).
-    // DMA frame = tdm_total_slots × 2 bytes. At 4 slots, 256 frames = 2048 bytes/desc (< 4092 limit).
-    i2s_tdm_slot_mask_t tdm_mask = I2S_TDM_SLOT0;
-    for (int i = 1; i < this->tdm_total_slots_; i++)
-      tdm_mask = static_cast<i2s_tdm_slot_mask_t>(tdm_mask | (I2S_TDM_SLOT0 << i));
+    // Preserve the physical frame width while TX DMA carries only the
+    // selected speaker slot. RX includes microphones, reference and diagnostics.
+    const auto rx_layout = this->make_tdm_rx_layout_();
+    const auto tdm_mask = static_cast<i2s_tdm_slot_mask_t>(rx_layout.mask);
 
     i2s_tdm_config_t tdm_cfg = {
         .clk_cfg =
@@ -865,8 +878,11 @@ bool ESPAudioStack::prepare_i2s_channels_() {
       tdm_cfg.slot_cfg.slot_bit_width = slot_bw;
     }
 
+    tdm_cfg.slot_cfg.total_slot = this->tdm_total_slots_;
     if (this->tx_handle_) {
-      err = i2s_channel_init_tdm_mode(this->tx_handle_, &tdm_cfg);
+      auto tx_cfg = tdm_cfg;
+      tx_cfg.slot_cfg.slot_mask = static_cast<i2s_tdm_slot_mask_t>(1U << this->tdm_tx_slot_);
+      err = i2s_channel_init_tdm_mode(this->tx_handle_, &tx_cfg);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init TX TDM channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
@@ -979,6 +995,26 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   this->tx_completion_dma_buffer_bytes_ =
       need_tx ? static_cast<size_t>(dma_frame_num) * static_cast<size_t>(tx_bytes_per_frame) : 0;
   this->tx_completion_queue_size_ = need_tx ? static_cast<size_t>(dma_desc_num) * 2U : 0;
+  if (this->tx_handle_ != nullptr) {
+    // IDF can round descriptors to cache-line boundaries. Playback completion
+    // must count the frames actually allocated, not the requested geometry.
+    i2s_chan_info_t info{};
+    if (i2s_channel_get_info(this->tx_handle_, &info) != ESP_OK || info.total_dma_buf_size == 0 ||
+        info.total_dma_buf_size % dma_desc_num != 0 || tx_bytes_per_frame == 0 ||
+        (info.total_dma_buf_size / dma_desc_num) % tx_bytes_per_frame != 0) {
+      ESP_LOGE(TAG, "Cannot determine actual I2S TX DMA frame geometry");
+      this->deinit_i2s_();
+      return false;
+    }
+    this->tx_completion_dma_buffer_bytes_ = info.total_dma_buf_size / dma_desc_num;
+    this->tx_completion_dma_frames_ = this->tx_completion_dma_buffer_bytes_ / tx_bytes_per_frame;
+    if (logical_tx_frames % this->tx_completion_dma_frames_ != 0) {
+      ESP_LOGE(TAG, "Actual I2S DMA block (%u frames) does not divide the audio frame (%u)",
+               (unsigned) this->tx_completion_dma_frames_, (unsigned) logical_tx_frames);
+      this->deinit_i2s_();
+      return false;
+    }
+  }
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   if (!this->setup_codec_backend_(clk_src)) {
     ESP_LOGE(TAG, "Failed to prepare esp_codec_dev backend");
@@ -1003,10 +1039,7 @@ CodecDevBackend::SampleConfig ESPAudioStack::make_tx_sample_config_() const {
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
     cfg.channels = this->tdm_total_slots_;
-    cfg.channel_mask = 0;
-    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
-      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
-    }
+    cfg.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(this->tdm_tx_slot_);
     return cfg;
   }
 #endif
@@ -1028,10 +1061,7 @@ CodecDevBackend::SampleConfig ESPAudioStack::make_rx_sample_config_() const {
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
   if (this->use_tdm_bus_) {
     cfg.channels = this->tdm_total_slots_;
-    cfg.channel_mask = 0;
-    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
-      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
-    }
+    cfg.channel_mask = this->make_tdm_rx_layout_().mask;
     return cfg;
   }
 #endif
@@ -1053,8 +1083,7 @@ bool ESPAudioStack::setup_codec_backend_(i2s_clock_src_t clk_src) {
   const uint8_t tx_i2s_num = this->i2s_num_;
   const uint8_t rx_i2s_num = this->i2s_num_;
 #endif
-  return this->codec_backend_.setup(tx_i2s_num, rx_i2s_num, this->tx_handle_, this->rx_handle_, clk_src,
-                                    this->mclk_multiple_);
+  return this->codec_backend_.setup(tx_i2s_num, rx_i2s_num, this->tx_handle_, this->rx_handle_, clk_src);
 }
 #endif
 
@@ -1076,7 +1105,9 @@ bool ESPAudioStack::enable_i2s_channels_() {
       this->deinit_i2s_();
       return false;
     }
-    const i2s_event_callbacks_t callbacks = {.on_sent = ESPAudioStack::tx_on_sent_callback};
+    const i2s_event_callbacks_t callbacks = {
+        .on_sent = ESPAudioStack::tx_on_sent_callback,
+    };
     const esp_err_t cb_err = i2s_channel_register_event_callback(this->tx_handle_, &callbacks, this);
     if (cb_err != ESP_OK) {
       ESP_LOGE(TAG, "Failed to register TX completion callback: %s", esp_err_to_name(cb_err));
@@ -1085,34 +1116,31 @@ bool ESPAudioStack::enable_i2s_channels_() {
     }
   }
 
+
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   if (!this->prime_tx_completion_records_(false)) {
     this->deinit_i2s_();
     return false;
   }
-  if (this->tx_handle_ != nullptr) {
-    this->tx_completion_tracking_active_.store(true, std::memory_order_release);
-    const esp_err_t err = i2s_channel_enable(this->tx_handle_);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Failed to enable TX I2S before codec open: %s", esp_err_to_name(err));
-      this->deinit_i2s_();
-      return false;
-    }
-  }
-  if (this->rx_handle_ != nullptr) {
-    const esp_err_t err = i2s_channel_enable(this->rx_handle_);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Failed to enable RX I2S before codec open: %s", esp_err_to_name(err));
-      this->deinit_i2s_();
-      return false;
-    }
-  }
+  // CodecDev owns format negotiation and channel enablement. Starting the
+  // channels before open would capture samples while the codec and shared bus
+  // are still being configured.
+  this->tx_completion_tracking_active_.store(this->tx_handle_ != nullptr, std::memory_order_release);
   auto tx_cfg = this->make_tx_sample_config_();
   auto rx_cfg = this->make_rx_sample_config_();
   if (!this->codec_backend_.open(this->tx_handle_ ? &tx_cfg : nullptr, this->rx_handle_ ? &rx_cfg : nullptr)) {
     ESP_LOGE(TAG, "Failed to open esp_codec_dev backend");
     this->deinit_i2s_();
     return false;
+  }
+  if (this->tx_handle_ != nullptr) {
+    i2s_chan_info_t info{};
+    if (i2s_channel_get_info(this->tx_handle_, &info) != ESP_OK ||
+        info.total_dma_buf_size != this->tx_completion_dma_buffer_bytes_ * (this->tx_completion_queue_size_ / 2U)) {
+      ESP_LOGE(TAG, "Codec negotiation changed the prepared TX DMA geometry");
+      this->deinit_i2s_();
+      return false;
+    }
   }
   this->codec_backend_.set_output_volume(this->master_volume_linear_.load(std::memory_order_relaxed));
   this->codec_backend_.set_output_mute(false);
@@ -1183,13 +1211,27 @@ void ESPAudioStack::deinit_i2s_() {
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   this->codec_backend_.teardown();
 #endif
-  if (this->tx_handle_) {
-    i2s_del_channel(this->tx_handle_);
-    this->tx_handle_ = nullptr;
-  }
-  if (this->rx_handle_) {
-    i2s_del_channel(this->rx_handle_);
-    this->rx_handle_ = nullptr;
+  // An open failure can leave a channel running before our RUNNING state is
+  // committed. Query the driver, which owns the actual channel state, and keep
+  // the handle if release fails so it cannot become an unreachable allocation.
+  auto release_channel = [](i2s_chan_handle_t &handle) -> bool {
+    if (handle == nullptr) return true;
+    i2s_chan_info_t info{};
+    esp_err_t err = i2s_channel_get_info(handle, &info);
+    if (err == ESP_OK && info.is_enabled) err = i2s_channel_disable(handle);
+    if (err == ESP_OK) err = i2s_del_channel(handle);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to release I2S channel: %s", esp_err_to_name(err));
+      return false;
+    }
+    handle = nullptr;
+    return true;
+  };
+  const bool tx_released = release_channel(this->tx_handle_);
+  const bool rx_released = release_channel(this->rx_handle_);
+  if (!tx_released || !rx_released) {
+    this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+    return;
   }
   this->set_i2s_hardware_state_(I2SHardwareState::UNPREPARED);
   ESP_LOGI(TAG, "I2S deinitialized");
