@@ -35,7 +35,8 @@ int main() {
  assert(wide[0]==123*65536&&wide[1]==-456*65536&&wide[2]==789*65536);
 }
 '''
-    cpp=tmp_path/'witness.cpp';cpp.write_text(code)
+    cpp = tmp_path / 'witness.cpp'
+    cpp.write_text(code)
     exe=tmp_path/'witness'
     subprocess.run(['c++','-std=c++17',str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
@@ -64,6 +65,8 @@ int main(){
  failure.fail_delete=false;assert(release_channel(c));assert(c==nullptr);assert(failure.disabled==1&&failure.deleted==1);
 }
 '''
-    cpp=tmp_path/'cleanup.cpp';cpp.write_text(code);exe=tmp_path/'cleanup'
+    cpp = tmp_path / 'cleanup.cpp'
+    cpp.write_text(code)
+    exe = tmp_path / 'cleanup'
     subprocess.run(['c++','-std=c++17',str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

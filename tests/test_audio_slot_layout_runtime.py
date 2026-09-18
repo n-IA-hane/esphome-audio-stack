@@ -34,6 +34,8 @@ int main(){
  assert(s.make_tdm_rx_layout_().index(3)==1);
 }
 '''
-    cpp=tmp_path/'slots.cpp';cpp.write_text(program);exe=tmp_path/'slots'
+    cpp = tmp_path / 'slots.cpp'
+    cpp.write_text(program)
+    exe = tmp_path / 'slots'
     subprocess.run(['c++','-std=c++17','-I',str(ROOT),str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
