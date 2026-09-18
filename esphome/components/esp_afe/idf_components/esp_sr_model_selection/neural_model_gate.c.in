@@ -1,0 +1,9 @@
+#include <stddef.h>
+#include "esp_nsn_models.h"
+
+// A WebRTC-only firmware has no neural suppression model to resolve. Returning
+// no handle preserves the model lookup contract without linking unused weights.
+const esp_nsn_iface_t *__wrap_esp_nsnet_handle_from_name(char *model_name) {
+  (void) model_name;
+  return NULL;
+}

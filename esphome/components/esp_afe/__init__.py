@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from esphome import automation
 import esphome.codegen as cg
 from esphome.components import psram
@@ -302,6 +304,10 @@ async def to_code(config):
         path="elements/gmf_ai_audio",
     )
     add_idf_component(name="espressif/esp-sr", ref="^2.5.3")
+    add_idf_component(
+        name="esp_sr_model_selection",
+        path=str(Path(__file__).parent / "idf_components" / "esp_sr_model_selection"),
+    )
 
 
 @automation.register_action(

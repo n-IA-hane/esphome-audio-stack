@@ -706,3 +706,14 @@ suppression path exceeds the generic GMF 3072-byte feed default. Larger explicit
 `feed_task_stack_size` values are retained; SR/FD and AEC-disabled graphs keep
 the configured value. The configuration log reports the effective feed size.
 This changes only task stack capacity, not audio buffers, packet time or latency.
+
+### WebRTC-only noise suppression builds
+
+ESP-SR 2.5.4's prebuilt neural-model dispatcher links NSNet3's initialized
+weights into internal RAM even when `CONFIG_SR_NSN_WEBRTC` selects WebRTC.
+The AFE component includes a small IDF link adapter for that configuration:
+neural-model lookup returns no handle, and the unused neural archives are not
+pulled into the application. The active WebRTC processing path is unchanged.
+Selecting NSNet2 or NSNet3 in SDK configuration leaves Espressif's original
+model dispatcher in place. The adapter does not modify downloaded libraries,
+move weights between memory regions, or add audio tasks or buffers.
