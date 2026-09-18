@@ -697,3 +697,12 @@ esp_afe:
   agc_enabled: false
   post_afe_agc_support: true  # Needed only if a lambda enables AGC later.
 ```
+
+### Voice-communication AEC task stack
+
+When the effective AEC mode is `VOIP_LOW_COST` or `VOIP_HIGH_PERF` and AEC is
+initialized, the feed task uses at least 8192 bytes of stack. ESP-SR's VoIP echo
+suppression path exceeds the generic GMF 3072-byte feed default. Larger explicit
+`feed_task_stack_size` values are retained; SR/FD and AEC-disabled graphs keep
+the configured value. The configuration log reports the effective feed size.
+This changes only task stack capacity, not audio buffers, packet time or latency.

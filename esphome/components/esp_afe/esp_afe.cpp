@@ -218,6 +218,18 @@ static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic, co
   }
 }
 
+// ESP-SR's VOIP echo suppressor exceeds 4 KiB on the feed task. GMF's
+// generic 3 KiB default is suitable for other graphs, not this AEC path.
+// Keep the larger allocation local to the algorithm that requires it and
+// preserve explicitly configured larger stacks.
+static int effective_feed_task_stack_size(int requested, const afe_config_t *config) {
+  if (config != nullptr && config->aec_init &&
+      (config->aec_mode == AEC_MODE_VOIP_LOW_COST || config->aec_mode == AEC_MODE_VOIP_HIGH_PERF)) {
+    return std::max(requested, 8192);
+  }
+  return requested;
+}
+
 aec_mode_t EspAfe::derive_aec_mode_() const {
   const bool high = (this->afe_mode_ == AFE_MODE_HIGH_PERF);
   switch (this->afe_type_) {
@@ -357,7 +369,11 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   manager_cfg.afe_cfg = cfg;
   manager_cfg.feed_task_setting.prio = this->feed_task_priority_;
   manager_cfg.feed_task_setting.core = this->feed_task_core_;
-  manager_cfg.feed_task_setting.stack_size = this->feed_task_stack_size_;
+  manager_cfg.feed_task_setting.stack_size = effective_feed_task_stack_size(this->feed_task_stack_size_, cfg);
+  if (manager_cfg.feed_task_setting.stack_size != this->feed_task_stack_size_) {
+    ESP_LOGI(TAG, "VOIP AEC feed stack: %d requested, %u bytes required", this->feed_task_stack_size_,
+             (unsigned) manager_cfg.feed_task_setting.stack_size);
+  }
   manager_cfg.fetch_task_setting.prio = this->fetch_task_priority_;
   manager_cfg.fetch_task_setting.core = this->fetch_task_core_;
   manager_cfg.fetch_task_setting.stack_size = this->fetch_task_stack_size_;
@@ -1195,7 +1211,8 @@ void EspAfe::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "  GMF Manager: feed core=%d prio=%d stack=%d, fetch core=%d "
                 "prio=%d stack=%d",
-                this->feed_task_core_, this->feed_task_priority_, this->feed_task_stack_size_, this->fetch_task_core_,
+                this->feed_task_core_, this->feed_task_priority_,
+                effective_feed_task_stack_size(this->feed_task_stack_size_, this->afe_config_), this->fetch_task_core_,
                 this->fetch_task_priority_, this->fetch_task_stack_size_);
   ESP_LOGCONFIG(TAG,
                 "  Process: %d samples, Feed: %d samples, Fetch: %d samples, "

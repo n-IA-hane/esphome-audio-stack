@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def test_afe_input_layouts_preserve_microphones_reference_and_padding(tmp_path):
     src=(ROOT/'esphome/components/esp_afe/esp_afe.cpp').read_text()
     start=src.index('static inline void stage_afe_input_frame(')
-    end=src.index('\naec_mode_t EspAfe::derive_aec_mode_',start)
+    end=src.index('\nstatic int effective_feed_task_stack_size',start)
     program=r'''
 #include <cstdint>
 #include <cassert>
@@ -32,6 +32,8 @@ int main(){
  check({3,2,mic01,1,r2},2,dual,nullptr,{10,11,0,20,21,0});
 }
 '''
-    cpp=tmp_path/'layout.cpp';cpp.write_text(program);exe=tmp_path/'layout'
+    cpp = tmp_path / 'layout.cpp'
+    cpp.write_text(program)
+    exe = tmp_path / 'layout'
     subprocess.run(['c++','-std=c++17','-include','cstddef',str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

@@ -10,7 +10,7 @@ def test_feed_chunks_preserve_samples_and_allocation_bounds(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     helper = source[
         source.index("static inline void stage_afe_input_frame") : source.index(
-            "\naec_mode_t EspAfe::derive_aec_mode_"
+            "\nstatic int effective_feed_task_stack_size"
         )
     ]
     start = source.index(
