@@ -15,7 +15,7 @@ Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, inclu
 
 Rebuild and upload firmware to receive component changes. See the [platform preview](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.10.0-dev) for the shared playback and controller improvements.
 
-Thanks to @DunklerPhoenix and @MakaronaiVLN for sharing feedback and helping test the project.
+Thanks to everyone who donated to support the project.
 
 ---
 
