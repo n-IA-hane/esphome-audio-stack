@@ -15,8 +15,6 @@ Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, inclu
 
 Rebuild and upload firmware to receive component changes. See the [platform preview](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.10.0-dev) for the shared playback and controller improvements.
 
-Thank you to everyone supporting the project through GitHub Sponsors, including the latest donation, and to the contributors sharing fixes and hardware feedback.
-
 ---
 
 ## ESPHome Audio Stack 2026.9.2
