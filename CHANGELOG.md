@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.10.0-dev: consolidated microphone layouts and AFE processing
+
+This development preview accompanies Intercom 2026.10.0-dev. Use ESPHome 2026.9.0 or newer with the maintained profiles.
+
+- Microphone and reference-channel layouts follow the configured inputs, including supported single- and dual-microphone arrangements.
+- AFE input is delivered in bounded processing blocks.
+- Voice-communication echo cancellation reserves the feed-task stack it needs.
+- WebRTC-based AFE builds avoid loading unused neural noise-suppression models.
+
+The public ESPHome microphone and speaker interfaces remain available. Audio-only, microphone-only and speaker-only configurations remain supported where their hardware permits them.
+
+Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, including direct ESP calls. The latest package/controller work adds no new changes to this audio backend.
+
+Rebuild and upload firmware to receive component changes. See the [platform preview](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.10.0-dev) for the shared playback and controller improvements.
+
+Thank you to everyone supporting the project through GitHub Sponsors, including the latest donation, and to the contributors sharing fixes and hardware feedback.
+
+---
+
 ## ESPHome Audio Stack 2026.9.2
 
 More reliable audio startup and firmware updates, with optional dual-microphone features.

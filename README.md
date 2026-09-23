@@ -1,5 +1,7 @@
 # ESPHome Audio Stack
 
+Development preview: [2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev).
+
 Current stable release: [2026.9.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.9.2).
 
 A full-duplex audio backend for ESPHome voice devices: I2S and codec ownership,
@@ -742,3 +744,7 @@ after board bring-up.
 This repository is MIT-licensed. Espressif dependencies keep their own licenses
 and hardware restrictions; dependency source is fetched at build time rather
 than stored in this repository.
+
+## Support the project
+
+If this project is useful to you, [consider sponsoring its development](https://github.com/sponsors/n-IA-hane). Contributions help fund development tools, services and test hardware.
