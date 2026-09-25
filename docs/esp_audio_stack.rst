@@ -28,7 +28,7 @@ bypass that publishes converted raw mic on the same surface; there is no
 parallel raw microphone entity.
 
 This component requires the ESP-IDF framework and the ESPHome ``psram``
-component. It is not supported on Arduino. Maintained release targets are
+component. Arduino is not supported. Maintained release targets are
 ESP32-S3 and ESP32-P4.
 
 .. code-block:: yaml

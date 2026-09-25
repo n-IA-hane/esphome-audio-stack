@@ -86,7 +86,7 @@ Dual-mic Speech Enhancement requires ``mic_num: 2``, ``se_enabled: true``
 and two real microphone inputs: ``tdm_mic_slots`` for TDM, or
 ``rx_mic_slots: [left, right]`` with ``rx_slot_mode: stereo`` for standard I2S.
 The parent supplies either a software playback reference or the configured
-hardware reference. TDM is not required for a standard-I2S microphone pair.
+hardware reference. Standard-I2S pairs use left/right slots directly.
 
 ``esp_afe.set_mode`` Action
 ---------------------------

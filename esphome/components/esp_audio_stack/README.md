@@ -7,8 +7,7 @@ Word facade, but moves low-level audio ownership to the ESP-IDF and Espressif
 audio libraries: `esp_driver_i2s`, `esp_codec_dev`, `esp_audio_effects`
 and, through optional processors, ESP-SR/GMF AFE.
 
-The component is not an official Espressif product. It is a repo-native ESPHome
-component that integrates Espressif libraries so board YAMLs can cover shared
+This independently maintained ESPHome component integrates Espressif libraries so board YAMLs can cover shared
 codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,
 hardware and software AEC references, and full AFE processors without each
 profile reimplementing bus ownership.
@@ -35,7 +34,7 @@ speaker echo; the result still depends on reference timing, levels and the
 physical enclosure. Playback does not guarantee wake-word detection.
 
 If no processor is configured, the facade is still a coordinated full-duplex
-mic/speaker provider, but the microphone is not echo-cancelled. The parent AEC
+mic/speaker provider with converted raw microphone output. The parent AEC
 switch is an explicit bypass: disabling it publishes converted raw mic on this
 same surface. When the processor remains enabled but cannot produce valid
 output, the stack emits silence instead of silently falling back to raw mic, so
@@ -261,9 +260,8 @@ AEC reference extraction, microphone output and speaker input. It loads
 Espressif `esp_codec_dev` and `esp_audio_effects` internally because those are
 part of the bus backend.
 
-The component does not load or require any call, media-player or assistant
-component. Those are normal ESPHome consumers of the microphone and speaker
-surfaces.
+Add call, media-player and assistant components as needed. They use the
+standard ESPHome microphone and speaker interfaces.
 
 `esp_aec` and `esp_afe` are optional `AudioProcessor` providers:
 
@@ -362,7 +360,7 @@ Split-bus constraints:
 | `slot_bit_width` | int | auto | I2S slot width in bits (16, 24 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
 | `correct_dc_offset` | bool | false | Enable DC offset removal. Useful when measured capture has a DC offset; check the microphone datasheet. |
 | `mic_channel` | string | `left` | Which STD slot carries the microphone: `left` or `right`. In mono RX mode this becomes the IDF slot mask. With `rx_slot_mode: stereo`, both STD slots are read and this selects the slot in software. |
-| `rx_slot_mode` | string | `mono` | `mono` reads only `mic_channel`. `stereo` reads both STD RX slots and then selects `mic_channel`; useful for MEMS mics strapped to L/R where the wire behaves better as a full stereo frame. This is not an AEC reference mode. |
+| `rx_slot_mode` | string | `mono` | `mono` reads only `mic_channel`. `stereo` reads both STD RX slots and then selects `mic_channel`; useful for MEMS mics strapped to L/R where the wire behaves better as a full stereo frame. Use a separate reference option to select playback feedback. |
 | `rx_mic_slots` | list | - | STD dual-mic: exactly two distinct `left`/`right` values. Order is AFE channel order (first = primary/mono mic, second = secondary). Requires `rx_slot_mode: stereo`. Omit it to keep single-mic (`mic_channel` picks one slot). Mutually exclusive with TDM slots and `use_stereo_aec_reference`. Pair with `esp_afe` `mic_num: 2`. |
 | `use_stereo_aec_reference` | bool | false | ES8311 digital feedback mode (see below) |
 | `reference_channel` | string | left | Which stereo channel carries AEC reference: `left` or `right` |
@@ -647,9 +645,8 @@ changing reference source.
 
 A 48 kHz bus allows 48 kHz playback while the microphone/reference path is
 converted to 16 kHz for ESP-SR processing. The physical bus format must be
-supported by the codec and board. A higher rate is not a universal cure for
-noise or clock errors, and upsampling a low-rate source cannot restore missing
-frequencies.
+supported by the codec and board. Diagnose noise and clock errors separately. Upsampling adapts the stream to the
+playback rate while retaining the original frequency content.
 
 AEC/AFE here require 16 kHz input. Without either processor, the public
 microphone may use other supported rates when its consumers accept them.
@@ -825,8 +822,8 @@ number:
       name: Mic Gain
 ```
 
-The parent `aec` switch bypasses the entire processor. It is not the same as
-the AFE-specific AEC switch, which leaves other AFE stages active.
+The parent `aec` switch bypasses the entire processor. The AFE-specific AEC
+switch controls echo cancellation while leaving other AFE stages active.
 
 ## Technical Notes
 
@@ -910,7 +907,7 @@ internal reconfigure.
 
 When neither `use_stereo_aec_reference` nor `use_tdm_reference` is enabled, the AEC reference comes from the speaker output. Two options via `aec_reference:`:
 
-- **`ring_buffer`** (default): speaker TX is stored in an Espressif/ADF TYPE2-style ring buffer with `aec_reference_buffer_ms` of capacity. The mono-reference helper reads from the ring; on starvation it zero-fills (the AEC handles that as a "no echo this frame") rather than reusing stale data. Better frame alignment on no-codec setups (discrete MEMS mic + I²S amp) with a bounded queue whose configured capacity is not a fixed delay.
+- **`ring_buffer`** (default): speaker TX is stored in an Espressif/ADF TYPE2-style ring buffer with `aec_reference_buffer_ms` of capacity. The mono-reference helper reads from the ring; on starvation it zero-fills (the AEC handles that as a "no echo this frame") rather than reusing stale data. Better frame alignment on no-codec setups (discrete MEMS mic + I²S amp) with bounded storage; delay follows the amount of audio queued.
 - **`previous_frame`**: the audio task uses the prior TX frame as the AEC reference. Simple, lower RAM and smaller compile-time surface; no TYPE2 ring buffer or delay tuning is compiled into that build.
 
 ### PSRAM and sdkconfig Requirements
@@ -1060,9 +1057,8 @@ when that comparison supports it.
   topology has a universal cancellation percentage; qualify it with captured
   near/far speech on the final enclosure.
 - **AEC reference level**: software reference follows the playback path; hardware
-  feedback depends on the codec tap or analog wiring and its gain. It is not
-  necessarily bit-identical to speaker PCM. Check reference level and clipping
-  rather than assuming every hardware route includes all volume stages.
+  feedback depends on the codec tap or analog wiring and its gain. Check which
+  volume stages the feedback includes, along with its level and clipping.
 
 ### Independent standard-I2S microphone levels
 

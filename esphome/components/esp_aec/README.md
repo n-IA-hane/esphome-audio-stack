@@ -20,8 +20,8 @@ Standalone Espressif AEC (Acoustic Echo Cancellation) wrapper for ESPHome.
 
 Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the
 `AudioProcessor` interface. Use it when the device only needs echo cancellation
-on the mic path and does not need the wider AFE pipeline that `esp_afe`
-provides (noise suppression, Speech Enhancement, VAD, AGC).
+on the mic path. Choose `esp_afe` to add noise suppression, Speech Enhancement,
+VAD or AGC.
 
 ## When to use `esp_aec` vs `esp_afe`
 
@@ -89,7 +89,7 @@ model, enclosure, playback level and resolved ESP-SR build. Treat mode names as
 selection guidance, then record repeatable target measurements; historical
 small-sample detection counts are not product guarantees.
 
-`sr_high_perf` allocates a contiguous DMA-capable internal block at switch time. The component runs a pre-flight heap check and refuses the switch cleanly (logs a warning, keeps the previous mode active) if the block is not available.
+`sr_high_perf` allocates a contiguous DMA-capable internal block at switch time. The component runs a pre-flight heap check and refuses the switch cleanly (logs a warning, keeps the previous mode active) when the available block is too small.
 
 ## Public C++ API
 
@@ -98,7 +98,7 @@ small-sample detection counts are not product guarantees.
 | `setup()` / `dump_config()` / `get_setup_priority()` | Standard ESPHome component lifecycle. |
 | `bool is_initialized() const` | True when the esp-sr AEC handle is ready. |
 | `FrameSpec frame_spec() const` | Frame size and channel layout that `process()` expects. |
-| `bool process(mic, ref, out, mic_channels)` | Run one AEC frame. Returns false if the handle is not ready. |
+| `bool process(mic, ref, out, mic_channels)` | Run one AEC frame. Returns false while the handle is unavailable. |
 | `FeatureControl feature_control(AudioFeature)` | `AEC` is `RESTART_REQUIRED`; everything else is `NOT_SUPPORTED`. |
 | `bool set_feature(AudioFeature, bool enabled)` | Currently returns `false`; standalone AEC has no per-feature live toggle. Use a mode reconfigure or the parent stack's explicit processor bypass. |
 | `ProcessorTelemetry telemetry() const` | Returns the default/empty telemetry record; standalone AEC does not publish frame or ring counters. |

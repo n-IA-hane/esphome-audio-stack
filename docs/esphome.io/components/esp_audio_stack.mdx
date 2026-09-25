@@ -16,8 +16,7 @@ processed audio to wake word, Voice Assistant and call components. Echo
 cancellation reduces local speaker playback in that microphone signal while
 the speaker continues playing normally.
 
-This component requires the ESP-IDF framework and the `psram` component. Arduino
-is not supported.
+This component requires the ESP-IDF framework and the `psram` component.
 
 One resident audio task is created during setup and parks while idle. I2S
 channels, DMA and codec paths start on first consumer and stop after the last

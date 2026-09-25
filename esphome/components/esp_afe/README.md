@@ -15,8 +15,7 @@ Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 The default input format follows `mic_num`: `MR` for one microphone and `MMR`
 for two. `M` is a microphone, `R` is the playback reference, and `N` is an
 unused position filled with zero. Optional `input_format: MMNR` adds that
-padding inside the AFE input frame. It does not enable another microphone or
-require an unused I2S slot to be captured.
+padding inside the AFE input frame while preserving the physical capture layout.
 
 Channel placement follows the microphone and reference indices returned by
 Espressif's AFE configuration. Physical wiring belongs in `esp_audio_stack`
@@ -161,7 +160,7 @@ esp_afe:
 | `mode` | string | `low_cost` | AFE mode: `low_cost` or `high_perf` |
 | `mic_num` | int | `1` | Number of microphones (1 or 2). Dual-mic configs must enable `se_enabled`; SE/BSS is structural for two-mic AFE |
 | `input_format` | string | `auto` | Internal processor roles: `mr`, `mnr`, `mmr`, `mmnr`. Auto selects MR/MMR from `mic_num`; physical slot selection belongs to the parent. |
-| `output_prebuffer_frames` | int | `0` | Optional reserve of 0-2 native AFE output frames; nonzero values require two microphones and add startup latency. It is not a count of I2S descriptors. |
+| `output_prebuffer_frames` | int | `0` | Optional reserve of 0-2 native AFE output frames; nonzero values require two microphones and add startup latency. Each unit is one native AFE output frame. |
 | `post_afe_agc_support` | bool or `auto` | `auto` | Compile the optional dual-mic AGC when enabled at boot or exposed by a switch. Set true for later activation by a lambda; false excludes it. |
 | `aec_enabled` | bool | **true** | Enable acoustic echo cancellation |
 | `aec_filter_length` | int | `4` | ESP-SR filter-length parameter (1-8). Effective time coverage depends on the selected engine/frame shape; tune it from measured echo-tail behavior. |
@@ -598,11 +597,11 @@ risk on the same network path that carries TTS/media, API and VoIP traffic.
 
 ## Known Limitations
 
-1. **Speech Enhancement replaces NS on dual-mic input**: With two microphone channels, `afe_config_check()` prioritizes SE/BSS over NS. SE/BSS is structural and is not a runtime toggle. Dual-mic AGC runs as an explicit post-AFE WebRTC stage because ESP-SR 2.5.3 omits AGC from its effective two-microphone graph.
+1. **Speech Enhancement replaces NS on dual-mic input**: With two microphone channels, `afe_config_check()` prioritizes SE/BSS over NS. SE/BSS is selected when the graph is built. Dual-mic AGC runs as an explicit post-AFE WebRTC stage because ESP-SR 2.5.3 omits AGC from its effective two-microphone graph.
 
 2. **Runtime toggles**: AEC and VAD use the active GMF control without rebuilding. NS/AGC and type/mode changes require a full AFE reinit.
 
-3. **data_volume**: The AFE's built-in `data_volume` field is not used as a product signal in this ESPHome integration. Input/output RMS is computed locally instead.
+3. **Level measurements**: This integration computes input/output RMS locally for its diagnostic sensors.
 
 4. **ESP-SR is closed source**: `memory_alloc_mode` influences its placement,
    but not every private allocation is controllable or observable. Measure the
@@ -700,8 +699,8 @@ The AFE component includes a small IDF link adapter for that configuration:
 neural-model lookup returns no handle, and the unused neural archives are not
 pulled into the application. The active WebRTC processing path is unchanged.
 Selecting NSNet2 or NSNet3 in SDK configuration leaves Espressif's original
-model dispatcher in place. The adapter does not modify downloaded libraries,
-move weights between memory regions, or add audio tasks or buffers.
+model dispatcher in place. The adapter selects the dispatcher at link time; the downloaded library sources
+and active WebRTC processing remain unchanged.
 
 ## License
 

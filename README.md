@@ -21,13 +21,12 @@ For example, while the device plays music or a spoken reply:
 
 ![Speaker playback continues while AEC reduces its echo in microphone audio supplied to Micro Wake Word, Voice Assistant and VoIP.](docs/images/listen-while-playing-n-ia-hane.png)
 
-AEC acts on **microphone capture**. It does not remove audio from the speaker
-or need to mute playback to cancel echo. Correct reference routing, levels and
+AEC reduces echo in **microphone capture while the speaker keeps playing**. Correct reference routing, levels and
 microphone/speaker placement still matter; cancellation and wake-word detection
 must be checked on the finished device.
 
-The output remains a standard ESPHome microphone, so consumers do not need a
-separate echo-cancellation implementation. Audio Stack works with ESPHome's
+The standard ESPHome microphone delivers the processed signal directly to its
+consumers. Audio Stack works with ESPHome's
 speaker, mixer, resampler and player components. Your runtime configuration
 still decides which consumers run together and when Assist may start a session.
 For devices that need only capture/playback, omit the optional processor.
@@ -37,7 +36,7 @@ For devices that need only capture/playback, omit the optional processor.
 
 This guide describes Audio Stack 2026.10.0. Use ESPHome **2026.9.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
-pins for your board; a pin assignment from another board is not a wiring guide.
+pins from your board's schematic.
 
 Read in order for a first build, or jump to the relevant hardware:
 
@@ -53,7 +52,7 @@ Read in order for a first build, or jump to the relevant hardware:
 
 ## 1. Start with a microphone and speaker
 
-You do not need AEC, AFE, a display, Home Assistant or VoIP to use the backend.
+Start with Audio Stack alone; add processing and application components as needed.
 For example, an I2S MEMS microphone and an I2S amplifier can share clock wires
 while using separate data wires:
 
@@ -69,7 +68,7 @@ Amplifier DATA <-------------- ESP DOUT <-- speaker PCM
 BCLK clocks individual bits. WS (also called LRCLK) identifies the audio frame
 and its left/right slots. DIN and DOUT are named from the ESP's point of view.
 The microphone and amplifier must accept the same clock rate and frame format.
-They do not need an I2C-controlled codec for this arrangement.
+This arrangement works directly with compatible I2S microphone and amplifier modules.
 
 The [complete generic example](examples/00-generic-i2s-duplex.yaml) supplies the
 ESPHome board, PSRAM and component declarations. Its audio section is:
@@ -105,27 +104,26 @@ channel selection according to its datasheet. This is standard I2S, not PDM.
 The microphone exposes mono signed 16-bit PCM, even when the physical bus uses
 32-bit slots. The speaker also accepts signed 16-bit PCM at the bus rate. A
 consumer such as Voice Assistant starts capture; a playback component writes
-speaker samples. Declaring the two components alone does not record or play a
-file, create a telephone, or add a media-player entity.
+speaker samples. Add a recording, playback or calling component to use these
+audio endpoints.
 
 Without `processor_id`, capture contains the microphone signal with the
 configured conversion and gain, including any sound from the local speaker.
 For microphone-only or speaker-only hardware, declare only the public platform
 you use and omit the unused data pin. Internal clock generation may still be
-needed; it does not mean an unused physical speaker must be declared.
+needed even in a microphone-only configuration.
 
 ## 2. One bus or two
 
 Both supported chips can capture and play simultaneously on **one shared I2S
-bus**. Using two buses is an optional wiring arrangement, not a requirement.
+bus**. Two separate buses are an optional wiring arrangement.
 
 | Chip | Duplex on one shared bus | Two separate buses (optional) | TDM on one shared bus |
 | --- | --- | --- | --- |
 | ESP32-S3 | Yes | Yes | Yes |
 | ESP32-P4 | Yes | Yes | Yes |
 
-The chip's total peripheral count is not the number of buses this component
-requires. The ordinary shared-bus configuration uses one I2S peripheral.
+The ordinary shared-bus configuration uses one I2S peripheral.
 
 **One shared bus** saves an I2S peripheral and clock pins. Audio Stack owns both
 RX and TX, so they are configured together. Do not also assign those pins or
@@ -155,8 +153,8 @@ esp_audio_stack:
 ```
 
 Both bus blocks are required and their port numbers must differ. This backend
-uses the same configured sample rate for both; a second peripheral is not an
-independent-rate setting. Split-bus TDM is not supported. The current schema
+uses the same configured sample rate for both. Split-bus mode supports standard
+I2S; TDM uses the shared-bus configuration. The current schema
 allows two I2S ports on S3 and three on P4.
 
 If native ESPHome audio already supports your independent devices and you do
@@ -209,8 +207,7 @@ the microphone stops hearing the speaker.
 
 An acoustic echo canceller (AEC) receives the microphone signal and a playback
 **reference**. It estimates how playback reaches the microphone through the
-speaker, enclosure and room, then reduces that echo. It is not simply a
-subtraction of two identical waveforms. Clipping, the wrong reference channel
+speaker, enclosure and room, then uses that estimate to reduce the echo. Clipping, the wrong reference channel
 or excessive delay can prevent useful cancellation.
 
 ```text
@@ -237,21 +234,20 @@ Use `output_sample_rate: 16000` if the bus runs faster: the processor works at
 
 Without hardware feedback, the reference comes from the software playback
 path. The default `aec_reference: ring_buffer` retains reference samples in a
-bounded queue. `aec_reference_buffer_ms` sets its **capacity**, not a guaranteed
-fixed echo delay. `previous_frame` uses the preceding playback frame with less
+bounded queue. `aec_reference_buffer_ms` sets its **capacity**; actual delay
+depends on the queued samples. `previous_frame` uses the preceding playback frame with less
 storage; use it only when cancellation is satisfactory on the real device.
 
 Start with `sr_low_cost` for a device that also listens for a wake word.
 Communication-oriented `voip_*` and `fd_*` modes may reduce residual echo more
-aggressively, but can also affect recognition during playback. A mode named
-`high_perf` is not automatically the best choice for your enclosure or workload.
+aggressively, but can also affect recognition during playback. Choose between `low_cost` and `high_perf` by measuring cancellation, recognition
+and resource use on your device.
 See the [AEC reference](esphome/components/esp_aec/README.md) for modes and
 runtime reconfiguration.
 
 ## 5. Use the codec stereo channel as a reference
 
-Stereo input does not always mean two microphones. In ES8311 digital-feedback
-mode, the left slot carries the microphone ADC and the right slot carries DAC
+In ES8311 digital-feedback mode, the left slot carries the microphone ADC and the right slot carries DAC
 playback feedback. Audio Stack separates these two roles before processing:
 
 ```text
@@ -278,8 +274,8 @@ reference_channel: right
 
 Set `no_dac_ref: false` in **both** the ES8311 input and output codec blocks to
 request this feedback route. The processor still uses `processor_id: aec` (or
-an AFE instance). `num_channels` describes the bus, not the public microphone:
-consumers still receive mono.
+an AFE instance). `num_channels` describes the bus; the public microphone
+continues to deliver mono audio.
 
 Do not enable this mode for two ordinary stereo microphones. It would treat
 one microphone as playback reference. For two MEMS microphones use
@@ -287,8 +283,8 @@ one microphone as playback reference. For two MEMS microphones use
 necessarily expose the ES8311 feedback arrangement.
 
 Digital feedback avoids having to reconstruct playback timing from a software
-queue. It does not include every effect of the physical amplifier and speaker,
-and it does not guarantee echo-free audio.
+queue. Cancellation must still account for the physical amplifier, speaker
+and enclosure.
 
 ## 6. Use TDM for multiple input channels
 
@@ -297,7 +293,7 @@ A board with an ES7210 ADC can place two microphones and a physical playback
 feedback connection into different slots. The board schematic determines which
 ADC input is wired to the feedback; a YAML option cannot create that connection.
 
-Example physical arrangement, **not a universal ES7210 pinout**:
+Example for a board wired with this physical arrangement:
 
 ```text
 RX frame:  +----------+-----------+----------+----------+
@@ -322,8 +318,8 @@ tdm_ref_slot: 1
 tdm_tx_slot: 0
 ```
 
-These fields belong inside `esp_audio_stack`. They do not by themselves add a
-second-microphone processor. The next section explains the matching AFE setup.
+These fields select the inputs inside `esp_audio_stack`. Pair them with the
+two-microphone AFE configuration in the next section.
 For a single TDM microphone, use `tdm_mic_slots: [0]` or `tdm_mic_slot: 0` with
 hardware-reference mode, not both forms together.
 
@@ -344,7 +340,7 @@ Use `esp_afe` instead of `esp_aec` when you need additional voice processing.
 Include `[esp_audio_stack, esp_afe]` in `external_components`, and set the
 existing stack's `processor_id` to the AFE ID. Do not declare both processors.
 
-| Function | What it addresses | What it does not replace |
+| Function | What it addresses | Setup requirement |
 | --- | --- | --- |
 | AEC | Echo from the device's playback | A correctly selected playback reference |
 | NS, noise suppression | Background noise in speech capture | Good microphone placement or unclipped input |
@@ -380,8 +376,7 @@ Set `mic_num: 2` and `se_enabled: true` on the AFE. On Audio Stack choose one:
 - **TDM ADC:** `tdm_mic_slots: [0, 2]`, using the board's actual slot numbers.
 - **Standard I2S MEMS pair:** `rx_slot_mode: stereo` and
   `rx_mic_slots: [left, right]`. The microphones must share the data line
-  correctly, with one strapped left and the other right. This is not codec
-  feedback. Use a software reference when there is no hardware reference input.
+  correctly, with one strapped left and the other right. Use a software reference when there is no hardware reference input.
 
 The two input microphones are processed into **one** public microphone stream.
 The first configured microphone is also the primary channel when processing
@@ -389,13 +384,13 @@ is bypassed. See [STD dual-mic configuration](esphome/components/esp_audio_stack
 
 AFE names its internal channels `M` (microphone), `R` (reference) and `N`
 (unused padding). The default is `MR` for one microphone and `MMR` for two.
-`input_format: MMNR` inserts padding inside the AFE input; it does not mean
-there are four physical microphones or require a fourth DMA slot.
+`input_format: MMNR` inserts padding inside the AFE input. Physical capture
+still uses the two microphone slots and the configured reference source.
 
 Single- and dual-mic configurations use GMF feed/fetch tasks. Audio Stack
 supplies bounded input blocks; the AFE assembles its required processing frames
-and returns processed samples through the output stream. An AFE frame is not
-an I2S DMA descriptor or a VoIP packet.
+and returns processed samples through the output stream. AFE processing frames,
+I2S DMA descriptors and VoIP packets each have their own size and timing.
 
 With two microphones, ESP-SR prioritizes SE/BSS over its single-mic noise
 suppression stage. Optional post-AFE AGC uses a separate 10 ms processing block.
@@ -423,15 +418,14 @@ I2S RX --> select mic/reference --> 48-to-16 kHz --> AEC or AFE
 ```
 
 Declare rates on the parent Audio Stack. Use an ESPHome resampler before the
-hardware speaker for sources at another rate; the hardware speaker does not
-resample arbitrary PCM writes automatically. A mixer combines playback sources,
+hardware speaker for sources at another rate. A mixer combines playback sources,
 while the player or runtime controller decides whether an announcement should
-interrupt music. Audio Stack does not own call routing or those priorities.
+interrupt music. Audio Stack handles the resulting capture and playback.
 
-Sample rate is not slot width: a 32-bit I2S slot does not make the public PCM
-32-bit. Higher playback rates also cannot recover information absent from a
-low-rate source. Choose rates supported by the hardware and required by the
-consumers, rather than assuming 48 kHz always cures poor audio.
+Sample rate describes samples per second; slot width describes bits per bus
+slot. A 32-bit I2S bus can carry audio exposed as 16-bit PCM. Choose rates
+supported by the hardware and consumers. Upsampling preserves the source
+bandwidth while adapting it to the playback rate.
 
 [Resampler and mixer example](esphome/components/esp_audio_stack/README.md#speaker-path-resamplerspeaker--mixer).
 Playback-completion callbacks report samples delivered through I2S and propagate
@@ -460,7 +454,7 @@ must not be used as a substitute for fixing microphone gain.
 
 Optional slot-level sensors measure raw input RMS in dBFS while capture is
 active. A less negative value is louder. They help find a silent/reference
-channel but do not expose separate microphone streams to consumers.
+channel while the public microphone continues to deliver a single mono stream.
 
 Buffers and tasks have different purposes:
 
@@ -502,8 +496,8 @@ live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/dev/yamls)
 ## Upgrading to 2026.10.0
 
 Use ESPHome 2026.9.0 or newer with the maintained profiles, then rebuild and
-upload the firmware. Updating the Home Assistant integration alone does not
-update the audio backend on an ESP device.
+upload the firmware. Audio Stack runs on the ESP, so component updates take
+effect after a firmware rebuild and upload.
 
 Existing TDM YAML fields keep their meaning: slot numbers describe physical
 positions on the bus. Do not renumber microphone, reference or speaker slots
@@ -514,8 +508,8 @@ padding inside the processor, not another physical microphone.
 
 The component now selects `esp_codec_dev` `2.0.0-beta5`, an Espressif prerelease.
 Custom builds that override that dependency must remove the old override or
-adapt it to the new codec API. Standard component users do not need to add a
-manual dependency declaration. ESPHome microphone and speaker interfaces remain
+adapt it to the new codec API. Standard configurations obtain the dependency
+automatically. ESPHome microphone and speaker interfaces remain
 unchanged, including supported microphone-only and speaker-only configurations.
 
 See the [changelog](CHANGELOG.md) for audio improvements and the
@@ -546,8 +540,7 @@ Espressif dependencies and their pins:
   `n-IA-hane/esp-gmf` ref `gmf-ai-audio-esp-sr-2.4.6`.
 
 These constraints are part of the tested build contract. Update them only with
-schema, firmware and real-device validation; they are not automatically removed
-after board bring-up.
+schema, firmware and real-device validation.
 
 This repository is MIT-licensed. Espressif dependencies keep their own licenses
 and hardware restrictions; dependency source is fetched at build time rather
