@@ -546,6 +546,61 @@ This repository is MIT-licensed. Espressif dependencies keep their own licenses
 and hardware restrictions; dependency source is fetched at build time rather
 than stored in this repository.
 
+## Before opening an issue
+
+Reproduce the problem with the current maintained release and the profile for
+your board. State any local changes. For development versions with runtime
+diagnostics, open the ESPHome device logs and press **Audio Diagnostics**.
+Custom configurations can attach the same action to a template button:
+
+```yaml
+button:
+  - platform: template
+    name: Audio Diagnostics
+    entity_category: diagnostic
+    on_press:
+      - esp_audio_stack.dump_diagnostics:
+          id: audio_stack
+```
+
+Replace `audio_stack` with your component ID. The action is available in normal
+builds with `telemetry: false`; it does not enable tracing. Keep the logger at
+INFO or above. Capture the complete block from `BEGIN v=1` to `END v=1`, ideally
+once while working and again while the fault is present. Overlapping requests and requests within one second are ignored. Output is
+split across normal ESPHome loop turns; one bounded temporary snapshot is
+released at the end of the dump. Counters are sampled when requested; hardware layouts are
+a coherent copy of the most recent lifecycle state. During transitions or
+before hardware opens, some values are unavailable.
+
+The diagnostic action is new on `dev` after 2026.10.0. Older firmware requires
+an update before it can expose this action. Report the exact version tested.
+
+For device-wide memory information, include the native ESPHome `debug` sensor
+readings when available. The component dump reports its own buffers and state;
+system heap and PSRAM measurements remain with ESPHome/ESP-IDF diagnostics.
+
+Include:
+
+- Exact board/model and ESP32 variant/revision, if known.
+- ESPHome version and Audio Stack tag or commit.
+- Relevant complete audio YAML, including processors, microphone, speaker,
+  mixer/resampler and codec configuration. Remove Wi-Fi passwords, API keys
+  and other credentials.
+- Codec model and wiring for custom hardware, including clocks, data pins,
+  amplifier enable and any physical playback-reference connection.
+- Shared or split bus, and whether the fault occurs on either arrangement you
+  have actually tested. You do not need to rewire the device merely to report it.
+- Whether the symptom persists with AEC/AFE bypassed, where safe to test.
+- Steps to reproduce, expected result, actual result, relevant boot log and the
+  complete diagnostic output. For intermittent faults, include approximate
+  uptime and the activity preceding the failure.
+
+The dump does not record audio. A capture or additional tracing may still be
+needed after the first report. Issues without enough information to reproduce
+or classify the problem may be closed as incomplete.
+
+If you ignore these instructions and open a useless issue anyway, I’ll get pissed off like there’s no tomorrow.
+
 ## Support the project
 
 If this project is useful to you, [consider sponsoring its development](https://github.com/sponsors/n-IA-hane). Contributions help fund development tools, services and test hardware.

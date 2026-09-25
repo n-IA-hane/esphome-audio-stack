@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Toggle single-microphone AEC through the existing Espressif GMF control, keeping the active audio pipeline and frame sizes intact instead of rebuilding it during a call.
+- Add an on-demand runtime diagnostic action that works without verbose audio tracing.
+- Exercise failure cleanup and retries with behavioral tests.
+- Clear effective codec layouts when the backend closes, so a failed reopening cannot expose an old valid layout.
+
 ## ESPHome Audio Stack 2026.10.0
 
 This release improves microphone and playback handling while keeping the normal ESPHome microphone and speaker interfaces. Capture and playback can run together on one shared I2S bus; a second bus is optional.

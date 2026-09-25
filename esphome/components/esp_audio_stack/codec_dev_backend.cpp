@@ -553,6 +553,8 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
 }
 
 void CodecDevBackend::close() {
+  this->rx_layout_ = {};
+  this->tx_layout_ = {};
   if (!this->open_) {
     return;
   }

@@ -256,6 +256,7 @@ const char *ESPAudioStack::i2s_hardware_state_to_string(I2SHardwareState state) 
 void ESPAudioStack::set_i2s_hardware_state_(I2SHardwareState state) {
   const auto next_raw = static_cast<uint8_t>(state);
   const auto prev_raw = this->i2s_hardware_state_.exchange(next_raw, std::memory_order_relaxed);
+  this->publish_diagnostic_hardware_();
   if (prev_raw != next_raw) {
     ESP_LOGD(TAG, "I2S hardware state: %s", i2s_hardware_state_to_string(state));
   }
@@ -485,6 +486,10 @@ void ESPAudioStack::loop() {
 
 void ESPAudioStack::dump_config() {
   ESP_LOGCONFIG(TAG, "ESP Audio Stack:");
+  ESP_LOGCONFIG(TAG, "  Runtime dump: esp_audio_stack.dump_diagnostics (INFO level, telemetry optional)");
+#if ESPHOME_LOG_LEVEL < ESPHOME_LOG_LEVEL_CONFIG
+  this->dump_bus_configuration_();
+#endif
 #ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   if (this->dual_i2s_bus_) {
     ESP_LOGCONFIG(TAG, "  I2S Layout: dual bus");
@@ -1023,6 +1028,7 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     return false;
   }
 #endif
+  this->publish_diagnostic_hardware_();
   this->log_memory_snapshot_("after_i2s_prepare");
   ESP_LOGI(TAG, "ESP audio stack I2S prepared through esp_driver_i2s (%s, dma_desc=%u, dma_frames=%u)",
            this->use_tdm_bus_ ? "TDM" : "standard", static_cast<unsigned>(dma_desc_num),

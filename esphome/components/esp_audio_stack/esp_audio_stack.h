@@ -175,6 +175,7 @@ class ESPAudioStack final : public Component {
   void setup() override;
   void loop() override;
   void dump_config() override;
+  void dump_diagnostics();
   // PROCESSOR (=400) is the ESPHome tier for audio pipeline components;
   // HARDWARE (=800) is the I2C/SPI bus tier and runs too early. The
   // companion processors (esp_aec/esp_afe) also use PROCESSOR, so the
@@ -765,6 +766,38 @@ class ESPAudioStack final : public Component {
   static const char *i2s_hardware_state_to_string(I2SHardwareState state);
   void set_i2s_hardware_state_(I2SHardwareState state);
   void log_memory_snapshot_(const char *label) const;
+  // Read-only lifecycle projection. Published only while changing hardware state.
+  // No handles cross from the audio owner to the diagnostic reader.
+  struct DiagnosticLayout {
+    uint32_t rate{0};
+    uint32_t memory_map{0};
+    uint16_t mask{0};
+    uint8_t slots{0}, data_bits{0}, slot_bits{0};
+    bool valid{false};
+  };
+  struct DiagnosticHardware {
+    DiagnosticLayout rx{}, tx{};
+    uint32_t generation{0};
+    uint16_t dma_frames{0}, dma_descriptors{0};
+    uint8_t state{static_cast<uint8_t>(I2SHardwareState::UNPREPARED)};
+    bool prepared{false}, open{false};
+  };
+  DiagnosticHardware diagnostic_hardware_{};
+  portMUX_TYPE diagnostic_lock_ = portMUX_INITIALIZER_UNLOCKED;
+  uint32_t last_diagnostics_ms_{0};
+  struct DiagnosticDump {
+    DiagnosticHardware hardware;
+    uint32_t requested_ms{0}, queued_bytes{0}, pending_tx{0}, idle_drops{0}, stack_min_free{0};
+    uint8_t runtime{0}, step{0};
+    bool mic{false}, speaker{false}, paused{false}, error{false}, transition{false};
+  };
+  // Exists only while emitting an explicitly requested dump; never holds audio.
+  std::unique_ptr<DiagnosticDump> diagnostic_dump_;
+  void emit_diagnostic_section_();
+
+  void publish_diagnostic_hardware_();
+  void dump_bus_configuration_() const;
+
   void service_speaker_reset_();
 
 #ifdef USE_ESP_AUDIO_STACK_TDM_REF_DIAGNOSTIC
@@ -922,6 +955,11 @@ template<typename... Ts> class StartAction final : public Action<Ts...>, public 
 template<typename... Ts> class StopAction final : public Action<Ts...>, public Parented<ESPAudioStack> {
  public:
   void play(const Ts &...x) override { this->parent_->stop(); }
+};
+
+template<typename... Ts> class DumpDiagnosticsAction final : public Action<Ts...>, public Parented<ESPAudioStack> {
+ public:
+  void play(const Ts &...x) override { this->parent_->dump_diagnostics(); }
 };
 
 template<typename... Ts> class IsIdleCondition final : public Condition<Ts...>, public Parented<ESPAudioStack> {

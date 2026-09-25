@@ -92,6 +92,7 @@ class CodecDevBackend {
   bool has_tx() const { return this->tx_dev_ != nullptr; }
   bool has_rx() const { return this->rx_dev_ != nullptr; }
   bool is_open() const { return this->open_; }
+  bool is_prepared() const { return this->prepared_; }
   const StreamLayout &rx_layout() const { return this->rx_layout_; }
   const StreamLayout &tx_layout() const { return this->tx_layout_; }
   bool has_output_codec() const { return this->output_codec_.enabled; }

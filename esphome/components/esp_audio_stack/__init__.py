@@ -231,6 +231,7 @@ esp_audio_stack_ns = cg.esphome_ns.namespace("esp_audio_stack")
 ESPAudioStack = esp_audio_stack_ns.class_("ESPAudioStack", cg.Component)
 StartAction = esp_audio_stack_ns.class_("StartAction", automation.Action)
 StopAction = esp_audio_stack_ns.class_("StopAction", automation.Action)
+DumpDiagnosticsAction = esp_audio_stack_ns.class_("DumpDiagnosticsAction", automation.Action)
 IsIdleCondition = esp_audio_stack_ns.class_("IsIdleCondition", automation.Condition)
 
 # AudioProcessor abstract interface (internal esp_audio_stack internal audio core headers)
@@ -966,6 +967,9 @@ ESP_AUDIO_STACK_ACTION_SCHEMA = automation.maybe_simple_id(
 )
 
 
+@automation.register_action(
+    "esp_audio_stack.dump_diagnostics", DumpDiagnosticsAction, ESP_AUDIO_STACK_ACTION_SCHEMA, synchronous=True
+)
 @automation.register_action(
     "esp_audio_stack.start",
     StartAction,
