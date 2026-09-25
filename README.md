@@ -117,6 +117,17 @@ needed; it does not mean an unused physical speaker must be declared.
 
 ## 2. One bus or two
 
+Both supported chips can capture and play simultaneously on **one shared I2S
+bus**. Using two buses is an optional wiring arrangement, not a requirement.
+
+| Chip | Duplex on one shared bus | Two separate buses (optional) | TDM on one shared bus |
+| --- | --- | --- | --- |
+| ESP32-S3 | Yes | Yes | Yes |
+| ESP32-P4 | Yes | Yes | Yes |
+
+The chip's total peripheral count is not the number of buses this component
+requires. The ordinary shared-bus configuration uses one I2S peripheral.
+
 **One shared bus** saves an I2S peripheral and clock pins. Audio Stack owns both
 RX and TX, so they are configured together. Do not also assign those pins or
 that peripheral to a native `i2s_audio` component.
