@@ -19,7 +19,7 @@ For example, while the device plays music or a spoken reply:
 - **A VoIP call** sends processed microphone audio to the other party, reducing
   the echo of their voice returning through your speaker and microphone.
 
-![Speaker playback continues while AEC reduces its echo in microphone audio supplied to Micro Wake Word, Voice Assistant and VoIP.](docs/images/listen-while-playing.png)
+![Speaker playback continues while AEC reduces its echo in microphone audio supplied to Micro Wake Word, Voice Assistant and VoIP.](docs/images/listen-while-playing-n-ia-hane.png)
 
 AEC acts on **microphone capture**. It does not remove audio from the speaker
 or need to mute playback to cancel echo. Correct reference routing, levels and
