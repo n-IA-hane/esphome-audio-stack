@@ -32,9 +32,10 @@ still decides which consumers run together and when Assist may start a session.
 For devices that need only capture/playback, omit the optional processor.
 
 [Stable 2026.10.0](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0)
+| [Preview 2026.10.1-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.1-dev)
 | [Changelog](CHANGELOG.md)
 
-This guide describes Audio Stack 2026.10.0. Use ESPHome **2026.9.0 or newer**,
+This branch documents the 2026.10.1-dev preview. The stable release remains 2026.10.0. Use ESPHome **2026.9.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
 pins from your board's schematic.
 
@@ -550,8 +551,8 @@ than stored in this repository.
 
 Reproduce the problem with the current maintained release and the profile for
 your board. State any local changes. For development versions with runtime
-diagnostics, open the ESPHome device logs and press **Audio Diagnostics**.
-Custom configurations can attach the same action to a template button:
+diagnostics, open the ESPHome device logs and press **Audio Diagnostics** if
+your profile provides that button. Otherwise, add the following template button:
 
 ```yaml
 button:
@@ -572,7 +573,7 @@ released at the end of the dump. Counters are sampled when requested; hardware l
 a coherent copy of the most recent lifecycle state. During transitions or
 before hardware opens, some values are unavailable.
 
-The diagnostic action is new on `dev` after 2026.10.0. Older firmware requires
+The diagnostic action is available starting with `2026.10.1-dev`. Older firmware requires
 an update before it can expose this action. Report the exact version tested.
 
 For device-wide memory information, include the native ESPHome `debug` sensor
