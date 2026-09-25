@@ -11,9 +11,9 @@ audio-processor interface used by `esp_audio_stack`.
 It provides AEC, noise suppression, VAD, AGC and optional dual-mic Speech
 Enhancement/BSS.
 
-Single-mic profiles use the direct ESP-SR AFE feed/fetch path. Dual-mic
-profiles use the fetched GMF AFE manager/pipeline and complete-frame bridge
-rings.
+Single- and dual-microphone profiles use the GMF AFE manager/pipeline.
+Input staging assembles ESP-SR processing blocks, while an output byte stream
+retains partial reads independently of the hardware audio frame.
 
 ```yaml
 esp_afe:
@@ -61,11 +61,18 @@ boards that need those features.
 - **task_core**, **task_priority** (*Optional*, int): ESP-SR SE/BSS worker
   placement.
 - **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
-  corresponding `fetch_task_*` settings (*Optional*, int): Dual-mic GMF task
+  corresponding `fetch_task_*` settings (*Optional*, int): GMF task
   placement.
 - **feed_buf_in_psram** (*Optional*, boolean): Place the feed scratch buffer in PSRAM. Defaults to `false`.
 - **feed_ring_in_psram** (*Optional*, boolean): Place the feed staging ring in PSRAM. Defaults to `false`.
 - **fetch_ring_in_psram** (*Optional*, boolean): Place the fetch output ring in PSRAM. Defaults to `false`.
+
+Two-microphone processing requires `mic_num: 2` and `se_enabled: true`.
+Configure the actual inputs on the parent: `tdm_mic_slots` for TDM or
+`rx_mic_slots: [left, right]` with `rx_slot_mode: stereo` for two standard-I2S
+microphones. The public output is mono. `input_format` describes the AFE's
+internal `M` (microphone), `R` (reference) and `N` (padding) channels, not bus
+slot numbering. Auto selects `MR` or `MMR`; explicit `MMNR` remains supported.
 
 ## Actions
 

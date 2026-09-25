@@ -1,8 +1,5 @@
-# ESP Audio Stack + lightweight AEC.
-#
-# What this example proves:
-#   esp_audio_stack can feed a lightweight echo canceller and expose processed
-#   microphone audio through the normal ESPHome microphone surface.
+# ES8311 with standalone AEC and a software playback reference.
+# Start with the audio-only example, then add this processor.
 
 substitutions:
   name: audio-stack-aec
@@ -35,8 +32,7 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
 
-# esp_aec implements the AudioProcessor interface, so the processor interface lives in esp_audio_stack
-# here by design.
+# Include the backend and the optional echo canceller.
 external_components:
   - source: ../esphome/components
     components:
@@ -51,7 +47,7 @@ i2c:
 # Lightweight echo canceller.
 #
 # mode:
-#   fd_high_perf is the full-duplex high-performance mode from ESP-SR 2.4+.
+#   sr_low_cost is a starting point for devices that also use wake word.
 #
 # filter_length:
 #   Echo filter length. Higher values can track longer echo tails but cost more
@@ -59,12 +55,12 @@ i2c:
 esp_aec:
   id: aec
   sample_rate: 16000
-  mode: fd_high_perf
+  mode: sr_low_cost
   filter_length: 4
 
 # Audio owner with processor_id wired to esp_aec.
 #
-# Type2-style software reference: the speaker stream is staged in a tunable
+# Type2-style software reference: the speaker stream is staged in a bounded
 # ring buffer so AEC can remove echo from the microphone stream. For the lighter
 # path, use `aec_reference: previous_frame` and omit aec_reference_buffer_ms.
 esp_audio_stack:
@@ -75,7 +71,7 @@ esp_audio_stack:
   slot_bit_width: 32
   processor_id: aec
   aec_reference: ring_buffer
-  aec_reference_buffer_ms: 120
+  aec_reference_buffer_ms: 80
 
   i2s_mclk_pin: GPIO5
   i2s_bclk_pin: GPIO6

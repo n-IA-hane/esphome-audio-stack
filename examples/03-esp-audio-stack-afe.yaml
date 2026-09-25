@@ -1,8 +1,5 @@
-# ESP Audio Stack + ESP-SR AFE.
-#
-# What this example proves:
-#   esp_audio_stack can feed the full ESP-SR AFE and expose clean voice audio
-#   after AEC, noise suppression, VAD and AGC.
+# ES8311 with single-mic AFE: echo cancellation, noise suppression and gain control.
+# This is a configuration example, not a board-specific hardware test.
 
 substitutions:
   name: audio-stack-afe
@@ -35,8 +32,7 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
 
-# esp_afe implements the AudioProcessor interface, so the processor interface lives in esp_audio_stack
-# here by design.
+# Include the backend and the optional AFE processor.
 external_components:
   - source: ../esphome/components
     components:
@@ -50,24 +46,24 @@ i2c:
 
 # Full ESP-SR front end.
 #
-# type: fd:
-#   Full-duplex AFE pipeline, appropriate for two-way voice.
+# type: sr:
+#   Speech-recognition processing, a starting point for assistant devices.
 #
 # mic_num: 1:
 #   Single microphone shape. Dual-mic boards should use mic_num: 2 plus
-#   se_enabled: true and the correct input_format.
+#   se_enabled: true and the matching physical microphone slots.
 #
 # aec/ns/vad/agc:
 #   Static defaults for the didactic example. Device YAMLs can expose these as
 #   switches/selects if runtime control is wanted.
 esp_afe:
   id: afe
-  type: fd
-  mode: high_perf
+  type: sr
+  mode: low_cost
   mic_num: 1
   aec_enabled: true
   ns_enabled: true
-  vad_enabled: true
+  vad_enabled: false
   agc_enabled: true
 
 # Audio owner with processor_id wired to esp_afe.
@@ -84,7 +80,7 @@ esp_audio_stack:
   # `aec_reference: previous_frame` and omit aec_reference_buffer_ms.
   # TDM boards with a real feedback slot should use use_tdm_reference instead.
   aec_reference: ring_buffer
-  aec_reference_buffer_ms: 120
+  aec_reference_buffer_ms: 80
 
   i2s_mclk_pin: GPIO5
   i2s_bclk_pin: GPIO6

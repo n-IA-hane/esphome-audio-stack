@@ -91,7 +91,21 @@ board requires values different from the defaults.
 `rx_bus` and `tx_bus` must be configured together on different I2S peripherals.
 Dual-bus mode does not support TDM.
 
+### Capture without a processor
+
+AEC and AFE are optional. Omit `processor_id` for converted raw microphone
+capture. A codec-less I2S microphone and amplifier can share BCLK/WS and use
+separate DIN/DOUT pins; omit `codec` and I2C when the hardware needs neither.
+For split clocks use `rx_bus` and `tx_bus` on different I2S ports.
+
 ### Processor and reference
+
+The reference is playback supplied to the echo canceller, not a second voice
+microphone. ES8311 digital feedback uses left RX for capture and right RX for
+DAC feedback: configure `reference_channel: right` and `no_dac_ref: false` on
+both codec directions. TDM feedback needs a board connection to the selected
+ADC slot. YAML slot numbers remain physical bus positions after DMA packing.
+
 
 - **processor_id** (*Optional*, ID): ID of an `esp_aec` or `esp_afe` processor.
 - **aec_reference** (*Optional*, string): Software playback-reference mode, `ring_buffer` or `previous_frame`. Defaults to `ring_buffer`.

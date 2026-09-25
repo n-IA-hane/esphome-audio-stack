@@ -68,7 +68,7 @@ esp_audio_stack:
 
 ## AEC modes
 
-The resolved ESP-SR 2.4.x line supplies SR, VOIP and FD AEC modes:
+The supported ESP-SR API supplies SR, VOIP and FD AEC modes:
 
 | Mode | Engine shape | Non-linear suppression | Starting point |
 |------|--------------|------------------------|----------------|
@@ -110,9 +110,13 @@ small-sample detection counts are not product guarantees.
 
 The `AEC Mode` select wires runtime modes to a Home Assistant select entity, with the device publishing back the live mode so a rejected switch never leaves HA showing the wrong value.
 
-**Engine standard**: stay inside one engine family per device to avoid esp-sr's silent FFT calloc-fail bug on cross-engine transitions at `filter_length > 4`.
+Choose the operating mode at boot where possible. Runtime changes rebuild the
+AEC handle and can interrupt capture. Stop the parent audio path and wait for
+it to be idle before changing mode; resume it after checking the selected mode.
+The action fragments below show selection and feedback, not a complete live
+stream shutdown sequence.
 
-VoIP-only (no MWW) - VOIP engine only:
+Mode selector fragment for a call-focused device:
 
 ```yaml
 select:
@@ -132,7 +136,7 @@ select:
       - lambda: 'id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());'
 ```
 
-Voice Assistant device with wake word and codec loopback where echo is audible - SR plus FD choices:
+Mode selector fragment for a speech-recognition device:
 
 ```yaml
 select:
@@ -142,9 +146,7 @@ select:
     options:
       - "sr_low_cost"
       - "sr_high_perf"
-      - "fd_low_cost"
-      - "fd_high_perf"
-    initial_option: "fd_low_cost"
+    initial_option: "sr_low_cost"
     optimistic: false
     restore_value: true
     set_action:
@@ -158,7 +160,7 @@ select:
 
 ## Threading model
 
-None. `esp_aec::process()` runs synchronously on the caller's audio task. The caller (typically `esp_audio_stack`'s audio task on Core 0) owns the realtime thread. There are no internal worker tasks, no FreeRTOS objects beyond a mutex around mode-switch reinit.
+The wrapper adds no feed/fetch task. `esp_aec::process()` runs synchronously on the caller's audio task. The caller (typically `esp_audio_stack`'s audio task on Core 0) owns the realtime thread. A mutex protects mode-switch reinitialization; ESP-SR owns its internal implementation.
 
 ## Memory footprint
 
@@ -211,7 +213,7 @@ Use `fd_low_cost` first. For ES8311 digital feedback, verify
 `ADCL + DACR` in this mode.
 
 **Wake word detection rate dropped after enabling AEC.**
-You are likely on a `voip_*` mode. Switch to `sr_low_cost`. The VOIP engines apply a residual echo suppressor that distorts the features the MWW model expects.
+Compare the current mode with `sr_low_cost` under the same playback and speech conditions. Communication-oriented suppression can affect recognition, but also check reference wiring, clipping and microphone placement before attributing the result to the mode.
 
 **`sr_high_perf` switch fails at runtime.**
 The pre-flight check on contiguous DMA-capable internal RAM rejected the switch. Free internal heap by enabling `buffers_in_psram: true` on `esp_audio_stack`, or stay on `sr_low_cost`. Check `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)` in the logs.

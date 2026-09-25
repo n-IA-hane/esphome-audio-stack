@@ -1,725 +1,497 @@
 # ESPHome Audio Stack
 
-Development preview: [2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev).
+Audio Stack lets an ESP32 capture a microphone and play a speaker at the same
+time, including when both share one I2S peripheral. It configures the bus and
+supported hardware codecs, converts microphone samples when needed, and exposes
+normal ESPHome `microphone` and `speaker` components. Echo cancellation and
+speech processing are optional additions.
 
-Current stable release: [2026.9.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.9.2).
+[Stable 2026.9.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.9.2)
+| [Development 2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev)
+| [Changelog](CHANGELOG.md)
 
-A full-duplex audio backend for ESPHome voice devices: I2S and codec ownership,
-software echo cancellation, the complete Espressif AFE pipeline, and standard
-ESPHome microphone and speaker surfaces on top.
+This guide describes the development version. Use ESPHome **2026.9.0 or newer**,
+ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
+pins for your board; a pin assignment from another board is not a wiring guide.
 
-This repository contains three ESPHome components:
+Read in order for a first build, or jump to the relevant hardware:
 
-| Component | Role |
-|---|---|
-| `esp_audio_stack` | Owns the physical audio path: I2S buses, TDM, hardware codecs, DMA, rate/bit-depth/channel conversion, playback buffering, the AEC reference and the audio task. Exposes ESPHome `microphone` and `speaker` platforms. |
-| `esp_aec` | Standalone acoustic echo cancellation through Espressif ESP-SR AEC. Light on RAM and flash. |
-| `esp_afe` | Full Espressif Audio Front End: AEC, noise suppression, VAD, AGC and dual-mic Speech Enhancement/BSS, with runtime switches and diagnostics. |
+1. [Start with a microphone and speaker](#1-start-with-a-microphone-and-speaker)
+2. [One bus or two](#2-one-bus-or-two)
+3. [Add a hardware codec](#3-add-a-hardware-codec)
+4. [Add echo cancellation](#4-add-echo-cancellation)
+5. [Use the codec stereo channel as a reference](#5-use-the-codec-stereo-channel-as-a-reference)
+6. [Use TDM for multiple input channels](#6-use-tdm-for-multiple-input-channels)
+7. [Add AFE speech processing](#7-add-afe-speech-processing)
+8. [Combine different rates and playback sources](#8-combine-different-rates-and-playback-sources)
+9. [Tune and diagnose the finished device](#9-tune-and-diagnose-the-finished-device)
 
-Everything above the stack stays normal ESPHome: Voice Assistant, Micro Wake
-Word, `media_player`, mixer, resampler, VoIP components or your own C++
-consumers. The stack does not replace the ESPHome audio ecosystem; it replaces
-the hardware/audio ownership layer underneath it that native ESPHome does not
-provide.
+## 1. Start with a microphone and speaker
 
-## 1. What This Is
-
-ESPHome's native `i2s_audio` microphone and speaker work well when the two are
-independent devices and no software echo cancellation is needed. Real voice
-hardware is usually harder than that:
-
-- one codec owns both the ADC and the DAC on the same I2S bus, so mic and
-  speaker cannot be two independent components;
-- software AEC needs a sample-aligned copy of what the speaker is playing, the
-  playback reference;
-- media playback, TTS, wake word, Voice Assistant and calls all share one
-  speaker and one microphone;
-- codecs speak 24/32-bit slots at 48 kHz while voice pipelines want 16 kHz mono
-  `s16`;
-- multi-mic boards deliver audio as TDM frames where microphone slots and the
-  hardware echo-reference slot must be extracted at fixed positions.
-
-`esp_audio_stack` centralizes that layer:
+You do not need AEC, AFE, a display, Home Assistant or VoIP to use the backend.
+For example, an I2S MEMS microphone and an I2S amplifier can share clock wires
+while using separate data wires:
 
 ```text
-I2S / codec / TDM / MEMS mic / I2S amp
-        |
-        v
-esp_audio_stack
-  - owns I2S and codec IO
-  - converts rate, bit depth and channel layout
-  - builds or captures the speaker reference for AEC/AFE
-  - buffers speaker playback
-        |
-        v
-optional processor: esp_aec or esp_afe
-        |
-        v
-normal ESPHome microphone + speaker platforms
-        |
-        v
-Voice Assistant, Micro Wake Word, media player, mixer, VoIP, custom logic
+                              +--> Microphone BCLK / WS
+ESP BCLK / WS ----------------+
+                              +--> Amplifier BCLK / WS
+
+Microphone DATA -------------> ESP DIN  --> microphone consumers
+Amplifier DATA <-------------- ESP DOUT <-- speaker PCM
 ```
 
-The design contract is deliberate: the stack solves the hardware and
-signal-processing problem once, then disappears behind interfaces every ESPHome
-component already understands. Consumers do not know or care whether the audio
-came from a shared codec bus, a TDM frame, or two separate MEMS/amp buses.
+BCLK clocks individual bits. WS (also called LRCLK) identifies the audio frame
+and its left/right slots. DIN and DOUT are named from the ESP's point of view.
+The microphone and amplifier must accept the same clock rate and frame format.
+They do not need an I2C-controlled codec for this arrangement.
 
-## 2. What It Gives You
-
-- **Full-duplex audio on one owner.** Simultaneous capture and playback on a
-  shared codec bus, on split RX/TX buses, or on a TDM bus, driven by one pinned
-  FreeRTOS task with an explicit runtime state machine: `idle`, `mic`,
-  `speaker`, `duplex`.
-- **Hardware codec control.** Built-in `esp_codec_dev` backends for ES7210,
-  ES8311, ES8388, ES8374 and ES8389, configured from YAML with no custom C++.
-- **Format conversion where it belongs.** The physical bus can run 48 kHz,
-  32-bit, stereo or TDM while consumers receive 16 kHz, `s16`, mono. Rate
-  conversion uses Espressif `esp_audio_effects`.
-- **Every practical AEC reference topology.** Software reference from playback
-  (`previous_frame` or an ADF Type2-style `ring_buffer`), stereo codec feedback,
-  or a TDM hardware reference slot captured with the microphones.
-- **Pluggable processing.** `processor_id` attaches `esp_aec` or `esp_afe`
-  behind the microphone surface. They are mutually exclusive by validation.
-- **The clean-mic contract.** With a configured processor enabled, the ESPHome
-  microphone platform exposes the post-processor stream. If that enabled
-  processor is temporarily unavailable, output fails closed to silence. The
-  optional parent AEC switch is an explicit raw-mic bypass on the same surface;
-  there is no second parallel raw microphone.
-- **On-demand hardware lifecycle.** One resident audio task is created during
-  setup and parks without polling while idle. I2S channels, DMA and codec paths
-  start when the first consumer appears and stop when the last one leaves.
-  Consumers are reference-counted.
-- **Runtime control from Home Assistant.** Optional switch, number,
-  binary_sensor and diagnostic sensor platforms expose AEC/AFE controls, mic
-  gain, volume and TDM slot levels.
-- **Strict YAML validation.** Invalid topologies are refused at compile time:
-  impossible rate conversion, TDM slot collisions, unsupported SoCs, invalid
-  core pinning, mutually exclusive processors and more.
-- **Controlled dependencies.** Espressif component-manager dependencies use
-  tested exact pins or compatible-version constraints and are documented; the
-  resolved build manifest/lock data identifies the concrete firmware inputs.
-
-## 3. Scenarios It Covers
-
-| Hardware / goal | Shape |
-|---|---|
-| Codec board, full-duplex audio, no echo cancellation | `esp_audio_stack` alone |
-| INMP441 + MAX98357A prototype, simple duplex test | `esp_audio_stack` in dual-bus mode |
-| Single-mic voice device that talks while it plays | `esp_audio_stack` + `esp_aec` |
-| Voice Assistant + wake word + media + calls on one speaker | `esp_audio_stack` + `esp_aec` or `esp_afe` |
-| Noisy room, variable speaker distance, VAD or AGC wanted | `esp_audio_stack` + `esp_afe` |
-| Dual-mic board with Speech Enhancement/BSS | `esp_audio_stack` TDM + `esp_afe` |
-| Wake word must keep working while TTS/media plays | `esp_aec` `sr_*` modes or `esp_afe` `type: sr` |
-| Hardware already outputs echo-cancelled PCM, for example XMOS | ESPHome native audio may be enough; this stack is optional |
-
-Supported release targets, enforced by validation:
-
-| Variant | I2S ports | Dual-bus mode | TDM |
-|---|---:|---|---|
-| ESP32-S3 | 2 | yes | yes |
-| ESP32-P4 | 3 | yes | yes |
-
-`esp_audio_stack`, `esp_aec` and `esp_afe` require the ESPHome `psram:`
-component. The maintained and release-tested targets are ESP32-S3 and ESP32-P4.
-Smaller ESP32 variants are not supported targets for this audio backend.
-
-## 4. Core Concepts
-
-**Bus rate vs output rate.** `sample_rate` is the physical I2S bus and speaker
-rate. `output_sample_rate` is the microphone rate handed to consumers. A voice
-device usually runs a 48 kHz bus with 16 kHz mic output. If
-`output_sample_rate` is omitted, no conversion happens. When present, it must
-divide `sample_rate` exactly and the ratio must not exceed 6.
-
-**The reference.** AEC subtracts what the speaker played from what the
-microphone heard. The topology decides where that playback reference comes
-from: software (`aec_reference`), stereo codec feedback
-(`use_stereo_aec_reference`), or a TDM slot (`use_tdm_reference`).
-
-**The processor.** `esp_aec` and `esp_afe` implement one shared
-`AudioProcessor` interface. `esp_audio_stack` feeds them mic frames plus the
-reference and publishes their output as the microphone stream.
-
-**Consumers and lifecycle.** While nothing listens, the pre-created audio task
-is parked and the I2S/DMA/codec path is down. Hardware spins up when the first
-microphone listener or speaker stream arrives and winds down after the last one
-leaves; the task's TCB/stack remains allocated for the device lifetime.
-
-**The real-time boundary.** The audio task runs at high priority, default 19,
-pinned to core 0 by default. Any C++ callback invoked from it must not block,
-allocate or do I/O.
-
-## 5. Installation
-
-Pull only the components your YAML needs.
-
-Full-duplex audio only:
+The [complete generic example](examples/00-generic-i2s-duplex.yaml) supplies the
+ESPHome board, PSRAM and component declarations. Its audio section is:
 
 ```yaml
-external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
-    components: [esp_audio_stack]
-```
-
-With standalone AEC:
-
-```yaml
-external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
-    components: [esp_audio_stack, esp_aec]
-```
-
-With full AFE:
-
-```yaml
-external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@main
-    components: [esp_audio_stack, esp_afe]
-```
-
-Requirements:
-
-- ESP-IDF framework. Arduino is not supported.
-- PSRAM. The component schema requires the ESPHome `psram:` component so memory-heavy audio paths fail at YAML validation time instead of at runtime.
-- An `i2c:` bus when a hardware codec is configured.
-
-Espressif dependencies are resolved automatically by the IDF Component Manager.
-Their source is not stored in this repository. The dual-mic GMF path is fetched
-from the pinned `n-IA-hane/esp-gmf` compatibility branch documented below.
-
-## 6. Hardware Topologies
-
-### 6.1 Single-Bus Codec
-
-One codec handles both directions on a shared I2S bus. This is the common shape
-for compact voice boards: one I2C-controlled codec, one I2S port, mic ADC,
-speaker DAC and optional hardware echo feedback.
-
-```yaml
-i2c:
-  sda: GPIO47
-  scl: GPIO48
-  frequency: 400kHz
-
 esp_audio_stack:
   id: audio_stack
-  sample_rate: 48000
-  output_sample_rate: 16000
+  sample_rate: 16000
   bits_per_sample: 32
   slot_bit_width: 32
-
-  i2s_mclk_pin: GPIO5
+  rx_slot_mode: stereo
+  mic_channel: left
   i2s_bclk_pin: GPIO6
   i2s_lrclk_pin: GPIO7
   i2s_din_pin: GPIO4
   i2s_dout_pin: GPIO8
 
-  codec:
-    input:
-      type: es8311
-      address: 0x18
-    output:
-      type: es8311
-      address: 0x18
+microphone:
+  - platform: esp_audio_stack
+    id: board_mic
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: board_speaker
+    esp_audio_stack_id: audio_stack
 ```
 
-If the codec supports digital DAC feedback, prefer the stereo reference over
-the software one.
+These are example GPIOs for an S3 prototype, not universal board pins. Set the
+microphone's L/R selection to match `mic_channel`, and configure the amplifier's
+channel selection according to its datasheet. This is standard I2S, not PDM.
 
-### 6.2 Dual-Bus, No Codec
+The microphone exposes mono signed 16-bit PCM, even when the physical bus uses
+32-bit slots. The speaker also accepts signed 16-bit PCM at the bus rate. A
+consumer such as Voice Assistant starts capture; a playback component writes
+speaker samples. Declaring the two components alone does not record or play a
+file, create a telephone, or add a media-player entity.
 
-One I2S peripheral reads the microphone, another drives the speaker amplifier.
-Typical parts: INMP441 or ICS MEMS mic plus MAX98357A-class I2S amp. Requires an
-SoC with at least two I2S ports.
+Without `processor_id`, capture contains the microphone signal with the
+configured conversion and gain, including any sound from the local speaker.
+For microphone-only or speaker-only hardware, declare only the public platform
+you use and omit the unused data pin. Internal clock generation may still be
+needed; it does not mean an unused physical speaker must be declared.
+
+## 2. One bus or two
+
+**One shared bus** saves an I2S peripheral and clock pins. Audio Stack owns both
+RX and TX, so they are configured together. Do not also assign those pins or
+that peripheral to a native `i2s_audio` component.
+
+**Two buses** suit boards where the microphone and amplifier use separate clock
+wires. Replace the top-level I2S pin fields in the first example with:
 
 ```yaml
 esp_audio_stack:
   id: audio_stack
-  sample_rate: 48000
-  output_sample_rate: 16000
+  sample_rate: 16000
   bits_per_sample: 32
   slot_bit_width: 32
-
+  rx_slot_mode: stereo
+  mic_channel: left
   rx_bus:
     i2s_num: 0
-    i2s_bclk_pin: GPIO12
-    i2s_lrclk_pin: GPIO13
-    i2s_din_pin: GPIO11
-
+    i2s_bclk_pin: GPIO6
+    i2s_lrclk_pin: GPIO7
+    i2s_din_pin: GPIO4
   tx_bus:
     i2s_num: 1
     i2s_bclk_pin: GPIO9
     i2s_lrclk_pin: GPIO10
-    i2s_dout_pin: GPIO14
-
-  rx_slot_mode: stereo
-  mic_channel: right
-
-  # Lightweight software reference. Use ring_buffer when the enclosure needs
-  # a delay-tunable AEC reference.
-  aec_reference: previous_frame
+    i2s_dout_pin: GPIO8
 ```
 
-Rules enforced at validation: `rx_bus` and `tx_bus` must be configured
-together, must use different `i2s_num` values, and top-level I2S data pins must
-not be set alongside them. Dual-bus mode does not support TDM. There is no
-hardware feedback channel in this topology, so AEC uses the software reference.
+Both bus blocks are required and their port numbers must differ. This backend
+uses the same configured sample rate for both; a second peripheral is not an
+independent-rate setting. Split-bus TDM is not supported. The current schema
+allows two I2S ports on S3 and three on P4.
 
-### 6.3 TDM Codec With Hardware Reference
+If native ESPHome audio already supports your independent devices and you do
+not need this backend's shared codec or reference handling, it remains a valid
+choice. A device with hardware echo cancellation, such as an XMOS voice front
+end, may not need a software processor here at all.
 
-Multi-slot TDM input through an ADC codec, with the speaker DAC feedback
-occupying one slot. This is the strongest software-AEC topology available: the
-reference is captured by hardware in the same TDM frame as the microphones.
+## 3. Add a hardware codec
 
-Single mic plus hardware reference:
+A hardware codec converts analog microphone signals to digital samples (ADC)
+and digital playback to analog output (DAC). This is different from an audio
+file codec such as MP3 or FLAC. Audio Stack handles PCM and hardware codec
+control; a media player/decoder handles compressed files.
+
+The I2C connection configures the codec. I2S carries audio. Some codecs also
+require MCLK, a higher-frequency master clock:
+
+```text
+ESP I2C SDA/SCL <-------------> Codec registers (gain, format, volume)
+ESP MCLK/BCLK/WS -------------> Codec clocks
+ESP DIN <--------------------- Codec ADC <--- microphone
+ESP DOUT --------------------> Codec DAC ---> amplifier ---> speaker
+```
+
+Use the [ES8311 audio-only example](examples/01-esp-audio-stack-only.yaml) for
+the declaration structure. Replace its GPIOs, I2C address and clock settings
+with those of your board. The codec block is added to `esp_audio_stack`:
 
 ```yaml
-esp_audio_stack:
-  id: audio_stack
-  processor_id: afe_processor
-  sample_rate: 48000
-  output_sample_rate: 16000
-  bits_per_sample: 32
-  slot_bit_width: 32
-
-  i2s_mclk_pin: GPIO5
-  i2s_bclk_pin: GPIO6
-  i2s_lrclk_pin: GPIO7
-  i2s_din_pin: GPIO4
-  i2s_dout_pin: GPIO8
-
-  use_tdm_reference: true
-  tdm_total_slots: 4
-  tdm_mic_slot: 0
-  tdm_ref_slot: 2
-  tdm_tx_slot: 0
-
-  codec:
-    input:
-      type: es7210
-      address: 0x40
-    output:
-      type: es8311
-      address: 0x18
+codec:
+  input:
+    type: es8311
+    address: 0x18
+  output:
+    type: es8311
+    address: 0x18
 ```
 
-Dual mic plus hardware reference for Speech Enhancement/BSS:
+The driver, through Espressif `esp_codec_dev`, owns codec configuration. Avoid
+boot lambdas that rewrite the same registers behind its back.
 
-```yaml
-esp_afe:
-  id: afe_processor
-  type: sr
-  mode: low_cost
-  mic_num: 2
-  se_enabled: true
-  input_format: mmr
-  aec_enabled: true
-  ns_enabled: false
-  agc_enabled: true  # post-AFE WebRTC AGC; ESP-SR 2.5.3 omits it from the 2MIC graph
+ES8311, ES8388, ES8374 and ES8389 are supported input/output codec choices;
+ES7210 is input-only. Declaring a supported chip cannot compensate for incorrect
+wiring, amplifier enable polarity or an incompatible board clock arrangement.
 
-esp_audio_stack:
-  id: audio_stack
-  processor_id: afe_processor
-  sample_rate: 48000
-  output_sample_rate: 16000
+## 4. Add echo cancellation
 
-  tdm_total_slots: 4
-  tdm_mic_slots: [0, 2]
-  use_tdm_reference: true
-  tdm_ref_slot: 1
-  tdm_tx_slot: 0
+Full duplex means capture and playback can run together. It does **not** mean
+the microphone stops hearing the speaker.
+
+An acoustic echo canceller (AEC) receives the microphone signal and a playback
+**reference**. It estimates how playback reaches the microphone through the
+speaker, enclosure and room, then reduces that echo. It is not simply a
+subtraction of two identical waveforms. Clipping, the wrong reference channel
+or excessive delay can prevent useful cancellation.
+
+```text
+Playback PCM --> speaker path ---------------------> loudspeaker
+                     |
+                     +--> reference ----+
+                                        v
+Microphone --> capture -------------> [AEC] --> processed microphone
 ```
 
-Slot numbers are zero-based physical TDM slots. The reference slot must differ
-from every mic slot, and `tdm_total_slots` must exceed the highest index in
-use. Use the schematic, and when in doubt use per-slot level sensors to find the
-slot that moves during playback.
-
-## 7. Echo Cancellation Reference Topologies
-
-### 7.1 Software Reference
-
-When no hardware feedback exists, the stack derives the reference from the
-speaker playback path.
-
-| Mode | What it does | Cost | Use it when |
-|---|---|---|---|
-| `ring_buffer` | Stores converted speaker TX frames in an Espressif ADF Type2-style ring buffer. Capacity is `aec_reference_buffer_ms`, default 80 ms, range 32 to 500. | More RAM and one ring read/write per frame. | No-codec enclosures where acoustic delay needs tuning or `previous_frame` leaves echo. |
-| `previous_frame` | Converts the latest speaker TX frame to the processor rate and reuses it as the next AEC reference frame. | Lowest RAM and smallest compiled path. No delay tuning. | Battery devices, simple prototypes, or tested layouts where the speaker/mic path is already close enough. |
-
-This mode is ignored automatically when a stereo or TDM reference is configured.
-
-### 7.2 Stereo Codec Feedback
-
-ES8311-class codecs can route DAC output back as the second ADC channel. The
-stack reads stereo input where one channel is the user's microphone and the
-other is the playback reference.
-
-```yaml
-esp_audio_stack:
-  id: audio_stack
-  processor_id: aec_processor
-  num_channels: 2
-  use_stereo_aec_reference: true
-  reference_channel: right
-
-  codec:
-    input:
-      type: es8311
-      address: 0x18
-      no_dac_ref: false
-    output:
-      type: es8311
-      address: 0x18
-      no_dac_ref: false
-```
-
-This is the recommended AEC topology on ES8311 boards.
-
-### 7.3 TDM Hardware Reference
-
-TDM hardware reference is described in section 6.3. It is sample-aligned by
-hardware, supports one or two microphone slots, and is the required shape for
-dual-mic BSS with a real reference.
-
-`use_stereo_aec_reference` and `use_tdm_reference` are mutually exclusive. A
-board has one hardware reference topology at a time, and the validator enforces
-it.
-
-One common confusion: the AFE `R` channel does not have to be a physical slot.
-The processor is always fed a reference buffer; the topology only decides
-whether that buffer comes from hardware or from the playback stream.
-
-## 8. Processors
-
-### 8.1 `esp_aec`: Standalone Echo Cancellation
-
-`esp_aec` wraps ESP-SR AEC as a minimal `AudioProcessor`. It is fixed at 16 kHz.
+Add `esp_aec` to your `external_components` list, declare it, and add
+`processor_id: aec` to the existing audio stack:
 
 ```yaml
 esp_aec:
-  id: aec_processor
+  id: aec
   sample_rate: 16000
   mode: sr_low_cost
   filter_length: 4
-
-esp_audio_stack:
-  id: audio_stack
-  processor_id: aec_processor
 ```
 
-| Mode | Use case |
-|---|---|
-| `sr_low_cost` | Best starting point for Voice Assistant and Micro Wake Word. |
-| `sr_high_perf` | Stronger SR AEC, with more internal memory pressure. |
-| `fd_low_cost` / `fd_high_perf` | Full-duplex modes with NLP for codec targets where residual speaker echo is audible. |
-| `voip_low_cost` / `voip_high_perf` | VoIP-oriented suppression. Can hurt wake-word detection. |
+Use `output_sample_rate: 16000` if the bus runs faster: the processor works at
+16 kHz. [Complete AEC example](examples/02-esp-audio-stack-aec.yaml).
 
-The mode can be switched at runtime with `esp_aec.set_mode`.
+Without hardware feedback, the reference comes from the software playback
+path. The default `aec_reference: ring_buffer` retains reference samples in a
+bounded queue. `aec_reference_buffer_ms` sets its **capacity**, not a guaranteed
+fixed echo delay. `previous_frame` uses the preceding playback frame with less
+storage; use it only when cancellation is satisfactory on the real device.
 
-### 8.2 `esp_afe`: Full Audio Front End
+Start with `sr_low_cost` for a device that also listens for a wake word.
+Communication-oriented `voip_*` and `fd_*` modes may reduce residual echo more
+aggressively, but can also affect recognition during playback. A mode named
+`high_perf` is not automatically the best choice for your enclosure or workload.
+See the [AEC reference](esphome/components/esp_aec/README.md) for modes and
+runtime reconfiguration.
 
-`esp_afe` wraps Espressif AFE through the same GMF feed/fetch pipeline for
-single-mic and dual-mic devices. It exposes AEC, noise suppression, VAD, AGC
-and, where supported, dual-mic Speech Enhancement/BSS. DSP processing runs
-outside the hardware audio task, and feature changes preserve its frame cadence.
+## 5. Use the codec stereo channel as a reference
+
+Stereo input does not always mean two microphones. In ES8311 digital-feedback
+mode, the left slot carries the microphone ADC and the right slot carries DAC
+playback feedback. Audio Stack separates these two roles before processing:
+
+```text
+ES8311 I2S RX frame
++----------------------+----------------------+
+| Left: microphone ADC | Right: DAC reference |
++-----------+----------+-----------+----------+
+            |                      |
+            +--> microphone        +--> reference
+                      |                 |
+                      +------> AEC <----+
+                                |
+                                v
+                        mono microphone
+```
+
+On the ES8311 example, add these fields to the existing `esp_audio_stack` block:
+
+```yaml
+num_channels: 2
+use_stereo_aec_reference: true
+reference_channel: right
+```
+
+Set `no_dac_ref: false` in **both** the ES8311 input and output codec blocks to
+request this feedback route. The processor still uses `processor_id: aec` (or
+an AFE instance). `num_channels` describes the bus, not the public microphone:
+consumers still receive mono.
+
+Do not enable this mode for two ordinary stereo microphones. It would treat
+one microphone as playback reference. For two MEMS microphones use
+`rx_mic_slots`, described below. Likewise, another stereo codec does not
+necessarily expose the ES8311 feedback arrangement.
+
+Digital feedback avoids having to reconstruct playback timing from a software
+queue. It does not include every effect of the physical amplifier and speaker,
+and it does not guarantee echo-free audio.
+
+## 6. Use TDM for multiple input channels
+
+TDM carries several numbered slots in each frame instead of just left/right.
+A board with an ES7210 ADC can place two microphones and a physical playback
+feedback connection into different slots. The board schematic determines which
+ADC input is wired to the feedback; a YAML option cannot create that connection.
+
+Example physical arrangement, **not a universal ES7210 pinout**:
+
+```text
+RX frame:  +----------+-----------+----------+----------+
+           | 0: mic A | 1: ref    | 2: mic B | 3: unused|
+           +----+-----+-----+-----+----+-----+----------+
+                |           |          |
+                +-----------+----------+--> select and convert --> AFE
+
+TX frame:  +----------+-----------+----------+----------+
+           | 0: audio| 1: unused | 2: unused| 3: unused|
+           +----+-----+-----------+----------+----------+
+                +--> DAC --> speaker
+```
+
+After choosing the board's pins and codecs, this fragment selects that layout:
+
+```yaml
+tdm_total_slots: 4
+tdm_mic_slots: [0, 2]
+use_tdm_reference: true
+tdm_ref_slot: 1
+tdm_tx_slot: 0
+```
+
+These fields belong inside `esp_audio_stack`. They do not by themselves add a
+second-microphone processor. The next section explains the matching AFE setup.
+For a single TDM microphone, use `tdm_mic_slots: [0]` or `tdm_mic_slot: 0` with
+hardware-reference mode, not both forms together.
+
+Slot numbers always refer to the **physical frame**. The driver packs selected
+slots into DMA memory, and Audio Stack maps them back to their configured roles.
+In the illustrated layout, RX stores three selected slots and TX one; the bus
+still has four physical slots. Do not change `tdm_total_slots` to three or
+renumber slot 2 to save memory. A diagnostic sensor for slot 3 causes that slot
+to be captured as well.
+
+TDM and AEC are separate decisions. TDM with `tdm_mic_slots` can also use a
+software playback reference when no physical reference is wired. Hardware
+stereo feedback and hardware TDM feedback cannot be enabled together.
+
+## 7. Add AFE speech processing
+
+Use `esp_afe` instead of `esp_aec` when you need additional voice processing.
+Include `[esp_audio_stack, esp_afe]` in `external_components`, and set the
+existing stack's `processor_id` to the AFE ID. Do not declare both processors.
+
+| Function | What it addresses | What it does not replace |
+| --- | --- | --- |
+| AEC | Echo from the device's playback | A correctly selected playback reference |
+| NS, noise suppression | Background noise in speech capture | Good microphone placement or unclipped input |
+| VAD, voice activity detection | Whether speech is present | Wake-word recognition or speech-to-text |
+| AGC, automatic gain control | Variation in speech level | Correct ADC gain; it cannot restore clipped samples |
+| SE/BSS, two-microphone speech enhancement | Uses both microphones to improve speech separation | A second real microphone and the correct channel layout |
+
+A single-microphone starting point is:
 
 ```yaml
 esp_afe:
-  id: afe_processor
+  id: afe
   type: sr
   mode: low_cost
   mic_num: 1
   aec_enabled: true
   ns_enabled: true
-  vad_enabled: false
   agc_enabled: true
-
-esp_audio_stack:
-  id: audio_stack
-  processor_id: afe_processor
+  vad_enabled: false
 ```
 
-| Type | Use case |
-|---|---|
-| `sr` | Speech recognition profile. Right default for assistant devices. |
-| `vc` | Voice communication profile with stronger residual suppression. |
-| `fd` | Full-duplex pipeline with NLP baked in, for two-way speech. |
+[Complete single-mic AFE example](examples/03-esp-audio-stack-afe.yaml).
+The public microphone now provides processed mono audio to its consumers.
+Disabling the parent stack's processor switch deliberately bypasses processing;
+disabling just the AFE's AEC stage leaves the other enabled stages in place.
+If an enabled processor is temporarily unavailable, the stack emits silence
+instead of switching unexpectedly to raw microphone audio.
 
-Dual-mic Speech Enhancement requires `mic_num: 2`, `se_enabled: true`, two mic
-slots on a TDM board, and an `input_format` matching the ESP-SR channel order of
-your board port.
+### Two microphones, with or without TDM
 
-`input_format` letters:
+Set `mic_num: 2` and `se_enabled: true` on the AFE. On Audio Stack choose one:
 
-| Letter | Meaning |
-|---|---|
-| `M` | Microphone channel |
-| `N` | Unknown/unused channel, usually zero or ignored by the pipeline |
-| `R` | Playback reference channel for AEC |
+- **TDM ADC:** `tdm_mic_slots: [0, 2]`, using the board's actual slot numbers.
+- **Standard I2S MEMS pair:** `rx_slot_mode: stereo` and
+  `rx_mic_slots: [left, right]`. The microphones must share the data line
+  correctly, with one strapped left and the other right. This is not codec
+  feedback. Use a software reference when there is no hardware reference input.
 
-Supported values are `auto`, `mr`, `mnr`, `mmr`, `mmnr`. Leave it on `auto`
-unless porting a known board topology.
+The two input microphones are processed into **one** public microphone stream.
+The first configured microphone is also the primary channel when processing
+is bypassed. See [STD dual-mic configuration](esphome/components/esp_audio_stack/README.md#configuration-options).
 
-`esp_aec` and `esp_afe` are mutually exclusive in one firmware.
+AFE names its internal channels `M` (microphone), `R` (reference) and `N`
+(unused padding). The default is `MR` for one microphone and `MMR` for two.
+`input_format: MMNR` inserts padding inside the AFE input; it does not mean
+there are four physical microphones or require a fourth DMA slot.
 
-## 9. Microphone and Speaker Surfaces
+Single- and dual-mic configurations use GMF feed/fetch tasks. Audio Stack
+supplies bounded input blocks; the AFE assembles its required processing frames
+and returns processed samples through the output stream. An AFE frame is not
+an I2S DMA descriptor or a VoIP packet.
 
-### 9.1 Microphone
+With two microphones, ESP-SR prioritizes SE/BSS over its single-mic noise
+suppression stage. Optional post-AFE AGC uses a separate 10 ms processing block.
+AEC and VAD can be changed through the running AFE; changing NS, AGC or the AFE
+mode rebuilds processing and can briefly interrupt microphone output. Set the
+normal operating configuration at boot rather than repeatedly rebuilding it
+in an automation. [AFE settings and controls](esphome/components/esp_afe/README.md).
 
-```yaml
-microphone:
-  - platform: esp_audio_stack
-    id: clean_mic
-    esp_audio_stack_id: audio_stack
+## 8. Combine different rates and playback sources
+
+`sample_rate` is the physical bus and speaker rate. `output_sample_rate` is the
+microphone rate after conversion. For example, 48 kHz playback and 16 kHz voice
+capture share a 48 kHz bus; only the microphone/reference path is downsampled.
+Supported conversion uses integer ratios up to six, not arbitrary input/output
+rate pairs. Omitting `output_sample_rate` keeps the bus rate.
+
+```text
+Media / TTS --> resampler --+
+                           +--> mixer --> 48 kHz speaker --> I2S TX
+Call audio --> resampler --+
+
+I2S RX --> select mic/reference --> 48-to-16 kHz --> AEC or AFE
+                                                       |
+                                                       +--> 16 kHz microphone
 ```
 
-The platform publishes mono `s16` audio at `output_sample_rate`. When
-`processor_id` is configured and enabled, this is the post-processor stream.
-Disabling the parent stack's AEC switch explicitly bypasses the processor and
-publishes the converted raw mic on the same surface. Feed it to normal ESPHome
-consumers:
+Declare rates on the parent Audio Stack. Use an ESPHome resampler before the
+hardware speaker for sources at another rate; the hardware speaker does not
+resample arbitrary PCM writes automatically. A mixer combines playback sources,
+while the player or runtime controller decides whether an announcement should
+interrupt music. Audio Stack does not own call routing or those priorities.
 
-```yaml
-micro_wake_word:
-  microphone: clean_mic
-  models:
-    - model: okay_nabu
+Sample rate is not slot width: a 32-bit I2S slot does not make the public PCM
+32-bit. Higher playback rates also cannot recover information absent from a
+low-rate source. Choose rates supported by the hardware and required by the
+consumers, rather than assuming 48 kHz always cures poor audio.
 
-voice_assistant:
-  microphone: clean_mic
-  media_player: speaker_media_player
-  micro_wake_word: mww
-```
+[Resampler and mixer example](esphome/components/esp_audio_stack/README.md#speaker-path-resamplerspeaker--mixer).
+Playback-completion callbacks report samples delivered through I2S and propagate
+to compatible mixer/resampler consumers. Preserve that feedback when adding
+synchronized playback such as Sendspin.
 
-During TTS or media playback, wake word keeps working because the speaker signal
-has been subtracted. During a call, the assistant reacts to the person in the
-room, not to the remote caller's voice coming out of the speaker.
+## 9. Tune and diagnose the finished device
 
-### 9.2 Speaker
+First prove microphone capture and speaker playback independently. Then add
+processing, and finally concurrent music, voice commands and calls. A device
+that plays TTS once has not yet demonstrated stable full-duplex operation.
 
-```yaml
-speaker:
-  - platform: esp_audio_stack
-    id: speaker_out
-    esp_audio_stack_id: audio_stack
-    sample_rate: 48000
-    bits_per_sample: 16
-    buffer_duration: 500ms
-```
+| Observation | Check first |
+| --- | --- |
+| Silent mic or speaker | Wiring, selected slot, codec initialization, amplifier enable and whether a consumer started the stream |
+| Other party hears their voice back | Reference activity, reference channel, clipping and enclosure coupling |
+| Quiet microphone | Codec ADC gain, then software mic gain; compare at the same distance and level |
+| Distorted loud speech | Lower gain before the stage that clips; post-processing cannot reconstruct lost samples |
+| Clicks or gaps | Capture/processing/playback timing, queue pressure and largest free internal block |
+| Wake word unreliable during playback | Reference correctness and AEC mode, then measured recognition on the enclosure |
 
-The speaker accepts 16-bit PCM, one or two channels, 8 to 48 kHz, and plays at
-the bus rate. Combine it with ESPHome resampler and mixer speakers upstream
-when multiple sources at multiple rates share the output.
+Hardware microphone gain acts before digital processing. `input_gain` scales
+mic input before the processor; the software `mic_gain` control scales its
+output. **0 dB is unity gain**, not mute. Speaker volume changes playback and
+must not be used as a substitute for fixing microphone gain.
 
-## 10. Lifecycle, Automations and Runtime Entities
+Optional slot-level sensors measure raw input RMS in dBFS while capture is
+active. A less negative value is louder. They help find a silent/reference
+channel but do not expose separate microphone streams to consumers.
 
-Runtime state is one of `idle`, `mic`, `speaker`, `duplex`.
+Buffers and tasks have different purposes:
 
-| Trigger | Fires when |
-|---|---|
-| `on_start` / `on_idle` | The stack leaves / returns to idle. |
-| `on_state` | Any state change. The new state is passed as a string. |
-| `on_mic_start` / `on_mic_idle` | Capture starts / stops. |
-| `on_speaker_start` / `on_speaker_idle` | Playback starts / stops. |
-| `on_amplifier_required` / `on_amplifier_idle` | Speaker-path aliases for GPIO amp control. |
+- DMA descriptors feed the I2S peripheral. Their size/count affects memory and
+  scheduling headroom; keep defaults until a timing measurement justifies a change.
+- `buffer_duration` is speaker queue capacity, not mandatory added delay.
+- `buffers_in_psram` and `audio_task_stack_in_psram` can recover internal memory,
+  but do not move every DMA/library allocation to PSRAM. Measure timing as well
+  as total free heap.
+- AEC/AFE mode changes can need a large contiguous allocation even when total
+  free heap appears adequate. Check the largest block around the transition.
 
-```yaml
-esp_audio_stack:
-  id: audio_stack
-  on_amplifier_required:
-    then:
-      - output.turn_on: speaker_enable
-  on_amplifier_idle:
-    then:
-      - output.turn_off: speaker_enable
-```
+For amplifier enable callbacks, gain/volume entities and explicit start/stop,
+see [lifecycle and runtime controls](esphome/components/esp_audio_stack/README.md#lifecycle-and-runtime-controls).
 
-Actions and conditions:
+Keep diagnostics optional. Enable `telemetry` for a focused measurement instead
+of leaving per-frame logs on during normal use. Avoid increasing queues or
+watchdog limits to hide a blocked producer or consumer.
 
-| Item | Meaning |
-|---|---|
-| `esp_audio_stack.start` | Start the audio path explicitly. |
-| `esp_audio_stack.stop` | Request a stop. |
-| `esp_audio_stack.is_idle` | Condition true when the stack is idle. |
+## Configuration reference
 
-Runtime entities:
+The detailed pages contain option tables, actions and troubleshooting:
 
-```yaml
-switch:
-  - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
-    aec:
-      name: Echo Cancellation
-      restore_mode: RESTORE_DEFAULT_ON
+- [Audio Stack: pins, codecs, rates, gain, buffers and lifecycle](esphome/components/esp_audio_stack/README.md)
+- [AEC: modes and reconfiguration](esphome/components/esp_aec/README.md)
+- [AFE: features, entities, tasks and memory](esphome/components/esp_afe/README.md)
 
-number:
-  - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
-    master_volume:
-      name: Master Volume
-      speaker_id: speaker_out
-    mic_gain:
-      name: Mic Gain
-```
+The examples are configuration starting points, not prequalified firmware for
+arbitrary wiring. Their YAML can be validated without proving the physical
+microphones, codec or amplifier work. Board-specific full firmware profiles
+live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/dev/yamls).
 
-AFE switches:
+## Technical sources
 
-```yaml
-switch:
-  - platform: esp_afe
-    esp_afe_id: afe_processor
-    aec:
-      name: Echo Cancellation
-    ns:
-      name: Noise Suppression
-    vad:
-      name: Voice Activity Detector
-    agc:
-      name: Auto Gain Control
-```
+- [ESP-IDF I2S: clocks, slots and full duplex](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32s3/api-reference/peripherals/i2s.html)
+- [ESP-SR AFE: channel roles and processing](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/audio_front_end/README.html)
+- [ESP-SR AEC: microphone and playback reference](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/acoustic_echo_cancellation/README.html)
 
-TDM slot sensors exist to answer the common bring-up question empirically: play
-music, watch which slot moves, and you have found your reference slot; speak,
-and you have found the mic slots.
+## Upgrading to 2026.10.0
 
-## 11. Configuration Reference
+Use ESPHome 2026.9.0 or newer with the maintained profiles, then rebuild and
+upload the firmware. Updating the Home Assistant integration alone does not
+update the audio backend on an ESP device.
 
-All values are verified against the component schema.
+Existing TDM YAML fields keep their meaning: slot numbers describe physical
+positions on the bus. Do not renumber microphone, reference or speaker slots
+because DMA now stores only selected slots. Diagnostic slot-level sensors
+still use those same physical numbers. The AFE defaults to `MR` for one
+microphone and `MMR` for two; an explicit `MMNR` remains supported and adds
+padding inside the processor, not another physical microphone.
 
-### Core Audio
+The component now selects `esp_codec_dev` `2.0.0-beta5`, an Espressif prerelease.
+Custom builds that override that dependency must remove the old override or
+adapt it to the new codec API. Standard component users do not need to add a
+manual dependency declaration. ESPHome microphone and speaker interfaces remain
+unchanged, including supported microphone-only and speaker-only configurations.
 
-| Option | Default | Range / values | Meaning |
-|---|---:|---|---|
-| `sample_rate` | `16000` | 8000 to 48000 | Physical I2S bus and speaker rate. |
-| `output_sample_rate` | `sample_rate` | 8000 to 48000 | Microphone rate exposed to consumers. Must divide `sample_rate`, ratio at most 6. |
-| `bits_per_sample` | `16` | 16, 24, 32 | Sample container on the bus. |
-| `slot_bit_width` | `auto` | auto, 16, 24, 32 | Physical slot width. |
-| `num_channels` | `1` | 1, 2 | Physical channel count on the standard I2S bus. |
-| `speaker_channels` | `1` | 1, 2 | Playback channels. Two channels require standard I2S and `num_channels: 2`. |
-| `mic_channel` | `left` | left, right | Which stereo slot carries the mic when RX is stereo. |
-| `rx_slot_mode` | `mono` | mono, stereo | Read one or both stereo slots on RX. |
-| `tx_channel` | `left` | left, right | TX slot placement in mono-on-stereo layouts. |
-| `correct_dc_offset` | `false` | bool | Remove DC bias from capture. |
-| `input_gain` | `1.0` | 0.01 to 32.0 | Digital gain before the processor. |
-| `master_volume_min_db` | codec-dependent | -96.0 to 0.0 | Bottom of the volume curve. |
+See the [changelog](CHANGELOG.md) for audio improvements and the
+[platform migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md)
+if your firmware also uses Intercom packages.
 
-### I2S Bus
+The sparse-TDM work was informed by
+[@jyoushiki's proposal and measurements](https://github.com/n-IA-hane/esphome-audio-stack/pull/14).
+The final implementation was developed as part of the broader audio-backend
+consolidation, and @jyoushiki independently tested it on their S3 configuration.
 
-| Option | Default | Range / values | Meaning |
-|---|---:|---|---|
-| `i2s_num` | `0` | SoC port index | I2S peripheral for single-bus mode. |
-| `i2s_lrclk_pin`, `i2s_bclk_pin` | required | GPIO | Bus clocks. |
-| `i2s_mclk_pin` | `-1` | GPIO or -1 | Master clock. |
-| `i2s_din_pin`, `i2s_dout_pin` | `-1` | GPIO | Data in / data out. |
-| `i2s_mode` | `primary` | primary, secondary | Clock master or slave. |
-| `i2s_comm_fmt` | `philips` | philips, msb, pcm_short, pcm_long | Frame format. PCM short/long are TDM-only. |
-| `mclk_multiple` | `256` | 128, 256, 384, 512 | MCLK to sample-rate ratio. |
-| `use_apll` | `false` | bool | APLL clock source. In the maintained target set, only ESP32-P4 supports it. |
-| `rx_bus` / `tx_bus` | none | object | Dual-bus mode with separate I2S controllers. |
-| `dma_desc_num` | `6` | 2 to 16 | DMA descriptor count. |
-| `dma_frame_num` | auto | 64 to 4092 | Frames per descriptor. |
-
-### Processor and Reference
-
-| Option | Default | Range / values | Meaning |
-|---|---:|---|---|
-| `processor_id` | none | id | Attach `esp_aec` or `esp_afe`. |
-| `aec_reference` | `ring_buffer` | ring_buffer, previous_frame | Software reference mode. Ignored when stereo/TDM reference is active. |
-| `aec_reference_buffer_ms` | `80` | 32 to 500 | Ring capacity for `ring_buffer`. |
-| `use_stereo_aec_reference` | `false` | bool | Stereo codec DAC feedback as reference. |
-| `reference_channel` | `left` | left, right | Which stereo channel carries the feedback. |
-| `use_tdm_reference` | `false` | bool | A TDM input slot carries the hardware reference. |
-| `tdm_total_slots` | `4` | 2 to 8 | Slots in the physical TDM frame. |
-| `tdm_mic_slot` | `0` | 0 to 7 | Single mic slot. |
-| `tdm_mic_slots` | none | list of 1 or 2 | Multi-mic slot list. Enables TDM bus. |
-| `tdm_ref_slot` | `1` | 0 to 7 | Reference slot. Must differ from mic slots. |
-| `tdm_tx_slot` | `0` | 0 to 7 | Playback slot. |
-
-### Codec Block
-
-| Option | Values | Notes |
-|---|---|---|
-| `input.type` | es7210, es8311, es8388, es8374, es8389 | ADC side. |
-| `output.type` | es8311, es8388, es8374, es8389 | DAC side. |
-| `address` | I2C address | Defaults: ES7210 `0x40`, ES8311 `0x18`, others `0x20`. |
-| `gain_db` | 0.0 to 37.5 | Analog mic gain. |
-| `mic_selected` | bitmask | ES7210 ADC channel mask, default `0x0F`. |
-| `ref_channel` / `ref_gain_db` | channel / dB | ES7210 reference routing and gain. |
-| `use_mclk` | bool | ES8311/ES8389 clocking mode. |
-| `no_dac_ref` | bool | Set ES8311 input side to `false` for stereo DAC feedback. |
-
-### Task, Memory and Diagnostics
-
-| Option | Default | Range / values | Meaning |
-|---|---:|---|---|
-| `task_priority` | `19` | 1 to 24 | Audio task priority. |
-| `task_core` | `0` | -1 to 1 | Core pinning. Core 1 is rejected on single-core SoCs. |
-| `task_stack_size` | `8192` | 4096 to 32768 | Audio task stack. |
-| `buffers_in_psram` | `false` | bool | Move non-DMA audio buffers to PSRAM. |
-| `audio_task_stack_in_psram` | `false` | bool | Move the audio task stack to PSRAM through ESPHome's PSRAM task-stack helper. Requires the `psram` component. |
-| `aec_ref_ring_in_psram` | `false` | bool | Put the Type2 reference ring in PSRAM. |
-| `telemetry` | `false` | bool | Per-stage cycle counting and diagnostics. Debug only. |
-| `telemetry_log_interval_frames` | `128` | 1 to 8192 | Telemetry log cadence. |
-| `audio_effects.rate_cvt_complexity` | `3` | 1 to 3 | Rate converter quality/CPU trade-off. |
-| `audio_effects.rate_cvt_perf_type` | `speed` | speed, memory | Rate converter optimization target. |
-
-Full per-component references:
-
-- [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
-- [`esp_aec`](esphome/components/esp_aec/README.md)
-- [`esp_afe`](esphome/components/esp_afe/README.md)
-
-## 12. What The Validator Refuses
-
-Audio bring-up failures are miserable to debug at runtime, so this component
-front-loads many of them into YAML compilation. It rejects:
-
-- `sample_rate` not divisible by `output_sample_rate`, or ratio above 6;
-- TDM mic/reference slot collisions, duplicate mic slots, or too few total
-  slots;
-- `use_tdm_reference` together with `use_stereo_aec_reference`;
-- `speaker_channels: 2` on TDM or without `num_channels: 2`;
-- `pcm_short` / `pcm_long` outside TDM mode;
-- `rx_bus` without `tx_bus`, both on the same `i2s_num`, top-level bus pins
-  mixed with dual-bus mode, or dual-bus on a target without enough I2S ports;
-- I2S port numbers beyond the target SoC;
-- TDM options on SoCs without TDM support;
-- `task_core: 1` on single-core variants;
-- `use_apll` on variants without APLL;
-- `esp_aec` and `esp_afe` in the same firmware;
-- `esp_afe` feed and fetch tasks pinned to the same core;
-
-If your YAML compiles, the topology is at least physically coherent for your
-chip.
-
-## 13. Performance And Memory Notes
-
-- ESP Audio Stack profiles require PSRAM; the supported targets are ESP32-S3 and ESP32-P4.
-- DMA descriptors and I2S buffers always live in internal RAM.
-- `esp_aec` is the lighter path.
-- `esp_afe` costs more RAM and flash and gives the full speech front end plus
-  diagnostics.
-- PSRAM placement options trade internal-RAM headroom for latency. Enable them
-  individually only when memory pressure is real.
-- Keep `logger.level: INFO` on release firmware. `telemetry` and DEBUG logging
-  are diagnostic tools; per-frame logging on the audio core can itself cause
-  audio glitches.
-
-## 14. Examples
-
-| File | Shows |
-|---|---|
-| [`examples/01-esp-audio-stack-only.yaml`](examples/01-esp-audio-stack-only.yaml) | Codec-backed full-duplex mic/speaker, no processing. |
-| [`examples/02-esp-audio-stack-aec.yaml`](examples/02-esp-audio-stack-aec.yaml) | The same base with `esp_aec`. |
-| [`examples/03-esp-audio-stack-afe.yaml`](examples/03-esp-audio-stack-afe.yaml) | The same base with `esp_afe`. |
-
-The examples are intentionally minimal. Product YAMLs layer mixer, resampler,
-media player, wake word, Voice Assistant, display and call logic on top.
-
-## 15. Provenance, Dependencies And License
+## Dependencies and license
 
 This repository was extracted from the maintained
 [`n-IA-hane/esphome-intercom`](https://github.com/n-IA-hane/esphome-intercom)

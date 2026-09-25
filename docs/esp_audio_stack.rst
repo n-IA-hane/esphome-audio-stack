@@ -158,6 +158,15 @@ Processor and echo-cancellation reference:
 - **tdm_ref_slot** (*Optional*, int): Slot carrying the speaker reference, ``0`` to ``7``. Defaults to ``1``.
 - **tdm_tx_slot** (*Optional*, int): Playback slot, ``0`` to ``7``. Defaults to ``0``.
 
+Reference selection does not enable processing on its own: attach an
+``esp_aec`` or ``esp_afe`` through ``processor_id``. With ES8311 digital
+feedback, left RX is the microphone and right RX is DAC feedback; set
+``reference_channel: right`` and ``no_dac_ref: false`` in the codec input and
+output blocks. With TDM, the board wiring determines the reference slot.
+Selected slots are packed into DMA, but YAML and sensor indices remain physical
+slot numbers. ``tdm_total_slots`` describes the bus frame, not the count of
+selected microphones.
+
 Hardware codec (``codec:`` block):
 
 - **input** (*Optional*): ADC-side codec. **type** is one of ``es7210``, ``es8311``, ``es8388``,

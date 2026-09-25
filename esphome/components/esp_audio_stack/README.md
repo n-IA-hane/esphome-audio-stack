@@ -13,90 +13,26 @@ codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,
 hardware and software AEC references, and full AFE processors without each
 profile reimplementing bus ownership.
 
-## What It Solves
+## Reading this reference
 
-ESPHome's normal audio components are excellent when microphone and speaker are
-independent devices. They are not enough for every full-duplex voice target:
+Start with the [step-by-step guide](../../../README.md) for a first build: it
+introduces raw duplex I2S, codecs, AEC references, TDM and AFE in that order.
+This page documents the individual settings and their interactions.
 
-- codec boards often put ADC and DAC on the same I2S bus;
-- AEC needs a frame-aligned speaker reference, not an unrelated playback stream;
-- VA, MWW, VoIP calls and media playback need to share the same mic/speaker safely;
-- dual-mic AFE and codec feedback paths need fixed layout/rate conversion before
-  ESPHome consumers see audio.
-
-`esp_audio_stack` owns that lower layer and exposes a normal ESPHome surface
-above it.
-
-```text
-Hardware / codec / I2S
-        ↓
-esp_audio_stack: I2S, codec IO, rate/layout conversion, speaker reference
-        ↓
-optional AudioProcessor: esp_aec or esp_afe
-        ↓
-ESPHome microphone + speaker surfaces
-        ↓
-Micro Wake Word, Voice Assistant, media_player, mixer, custom components
-```
-
-## Quick Map
-
-| Use case | Recommended shape |
-|---|---|
-| ES8311/ES8388/ES8374/ES8389 codec board | Single-bus `esp_audio_stack.codec` with shared STD I2S bus |
-| ES7210 ADC + ES8311 DAC board | TDM mic slots plus optional `use_tdm_reference` |
-| INMP441 + MAX98357A on one bus | Single-bus STD I2S, `slot_bit_width: 32`, software AEC reference |
-| INMP441 + MAX98357A on two buses | Dual-bus `rx_bus` + `tx_bus`, `rx_slot_mode: stereo` if the mic is strapped to a fixed stereo slot |
-| Voice Assistant + MWW + VoIP | `esp_audio_stack` + `esp_aec` or `esp_afe`, then normal ESPHome consumers |
-| Full AFE board | `esp_audio_stack` feeding `esp_afe`; MWW remains ESPHome/TFLite |
-| Standalone audio backend, no VoIP calls | `esp_audio_stack` alone, optionally with `esp_aec` / `esp_afe` |
-
-## Capabilities
-
-- **True full duplex**: simultaneous RX and TX on one shared I2S bus, or on two
-  separate ESP-IDF simplex controllers via `rx_bus` / `tx_bus`.
-- **ESPHome facade preserved**: exposes standard `microphone` and `speaker`
-  platforms, so existing ESPHome VA/MWW/media/mixer components can consume it.
-- **Codec backend**: codec boards use `esp_codec_dev` directly for codec
-  read/write, keeping I2S DMA completion visible to ESPHome speaker callbacks.
-- **No-codec backend**: discrete MEMS microphones and I2S amplifiers use direct
-  `esp_driver_i2s` read/write without codec shims.
-- **Audio processors**: `processor_id` can point at `esp_aec` for lightweight
-  echo cancellation or `esp_afe` for GMF/ESP-SR AFE processing.
-- **Post-processor mic output**: MWW, VA and VoIP receive one stable
-  processed microphone stream. If a configured processor is unavailable, output
-  is silenced rather than silently falling back to raw mic audio.
-- **AEC reference options**: software ring buffer, previous-frame reference,
-  ES8311 stereo digital feedback, or ES7210 TDM analog feedback.
-- **Multi-rate operation**: the bus can run at 48 kHz for better codec/DAC
-  behavior while mic/ref/processor output runs at 16 kHz through
-  `esp_ae_rate_cvt`.
-- **Layout conversion**: 32-bit MEMS mic samples, stereo slot selection, TDM
-  slot extraction, stereo speaker output, mono duplication and TX bit expansion
-  use `esp_audio_effects` primitives.
-- **Stereo speaker output**: `speaker_channels: 2` exposes a real two-channel
-  ESPHome speaker and writes interleaved L/R PCM to STD stereo TX.
-- **Runtime controls**: persistent master volume, post-processor mic gain,
-  AEC enable switch, state hooks and optional telemetry.
-- **PSRAM controls**: buffers, AEC reference ring and task stacks can be placed
-  in PSRAM where it is safe; DMA-critical pieces stay internal.
-- **Compile-time pruning**: dual-bus, TDM, stereo reference, ring reference,
-  stereo TX, telemetry and codec paths are compiled only when YAML needs them.
+- [Configuration options](#configuration-options)
+- [Microphone options](#microphone-options) and [speaker options](#speaker-options)
+- [Codec options](#codec-options)
+- [Hardware reference: stereo](#es8311-digital-feedback-aec) or [TDM](#tdm-hardware-reference-es7210--es8311)
+- [Mixed-rate playback](#multi-rate-48khz-i2s-bus-with-espressif-rate-conversion)
+- [Diagnostics](#troubleshooting)
 
 ## Clean Mic Surface For Wake Word, Voice Assistant And Calls
 
-This is the main reason to use `esp_audio_stack` on full voice devices. With
-the processor enabled, the public `microphone: platform: esp_audio_stack` entry
-is the post-processor surface, not a second raw microphone tap. Speaker PCM from HA media, TTS,
-timers, local files and call playback is also captured as the AEC/AFE
-reference. `esp_aec` or `esp_afe` subtracts that reference before frames are
-delivered to ESPHome consumers.
-
-Result: the user can play music from the ESP speaker while `micro_wake_word`,
-`voice_assistant` and any call component all receive the same cleaned
-user-speech stream with the speaker audio removed. There is no separate
-wake-word microphone to wire and no need to route Voice Assistant or Micro Wake
-Word around the media player.
+With a processor enabled, `microphone: platform: esp_audio_stack` publishes its
+mono output. Voice Assistant, wake word and VoIP can use that same microphone
+component. AEC uses the configured playback reference to estimate and reduce
+speaker echo; the result still depends on reference timing, levels and the
+physical enclosure. Playback does not guarantee wake-word detection.
 
 If no processor is configured, the facade is still a coordinated full-duplex
 mic/speaker provider, but the microphone is not echo-cancelled. The parent AEC
@@ -392,7 +328,7 @@ esp_audio_stack:
   processor_id: aec_processor
 ```
 
-First-version limits:
+Split-bus constraints:
 
 - `rx_bus` and `tx_bus` must be configured together and must use different
   `i2s_num` values.
@@ -424,7 +360,7 @@ First-version limits:
 | `input_gain` | float | 1.0 | Input gain before the processor (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
 | `master_volume_min_db` | float | - | Optional 1% master-volume floor in dB (-96..0). Omit it to keep codec-dev's native curve on hardware codecs; set it to tune board UX. No-codec software volume defaults to ESPHome's -49 dB curve. |
 | `slot_bit_width` | int | auto | I2S slot width in bits (16, 24 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
-| `correct_dc_offset` | bool | false | Enable DC offset removal. Required for MEMS mics without built-in HPF (MSM261, SPH0645). |
+| `correct_dc_offset` | bool | false | Enable DC offset removal. Useful when measured capture has a DC offset; check the microphone datasheet. |
 | `mic_channel` | string | `left` | Which STD slot carries the microphone: `left` or `right`. In mono RX mode this becomes the IDF slot mask. With `rx_slot_mode: stereo`, both STD slots are read and this selects the slot in software. |
 | `rx_slot_mode` | string | `mono` | `mono` reads only `mic_channel`. `stereo` reads both STD RX slots and then selects `mic_channel`; useful for MEMS mics strapped to L/R where the wire behaves better as a full stereo frame. This is not an AEC reference mode. |
 | `rx_mic_slots` | list | - | STD dual-mic: exactly two distinct `left`/`right` values. Order is AFE channel order (first = primary/mono mic, second = secondary). Requires `rx_slot_mode: stereo`. Omit it to keep single-mic (`mic_channel` picks one slot). Mutually exclusive with TDM slots and `use_stereo_aec_reference`. Pair with `esp_afe` `mic_num: 2`. |
@@ -443,8 +379,8 @@ First-version limits:
 | `dma_frame_num` | int | auto | Frames per DMA descriptor (64-4092). Omitted means a rate/layout-derived value near 10 ms, clamped to IDF limits. |
 | `buffers_in_psram` | bool | false | Move component-owned frame buffers (RX scratch, speaker frame scratch, processor interleave, mic/ref/output buffers) to PSRAM where possible. DMA descriptors and I2S driver buffers remain internal. Saves internal heap on full builds at the cost of PSRAM traffic. |
 | `audio_task_stack_in_psram` | bool | false | Place the audio task's configured stack in PSRAM through ESPHome's PSRAM task-stack helper. This recovers approximately `task_stack_size` bytes of internal allocation at the cost of slower accesses. Enable only after measuring internal pressure and per-frame worst case. Requires `psram`; keep `false` when the target already has headroom. |
-| `aec_reference` | string | `ring_buffer` | Mono-mode AEC reference source for no-codec setups. `ring_buffer` is the Espressif/ADF TYPE2-style software reference: speaker TX is staged in a delay-tunable ring before being fed to the processor. `previous_frame` is a lighter custom mode that reuses the prior TX frame, with no ring buffer and no delay tuning. Ignored when `use_stereo_aec_reference` or `use_tdm_reference` is true. |
-| `aec_reference_buffer_ms` | int | 80 | Capacity of the AEC reference ring buffer in milliseconds (32 to 500). Only used with `aec_reference: ring_buffer`. Larger values absorb more producer/consumer jitter at the cost of latency. |
+| `aec_reference` | string | `ring_buffer` | Mono-mode AEC reference source for no-codec setups. `ring_buffer` is the Espressif/ADF TYPE2-style software reference: speaker TX is staged in a bounded ring before being fed to the processor. `previous_frame` is a lighter custom mode that reuses the prior TX frame, with no ring buffer and no delay tuning. Ignored when `use_stereo_aec_reference` or `use_tdm_reference` is true. |
+| `aec_reference_buffer_ms` | int | 80 | Capacity of the AEC reference ring buffer in milliseconds (32 to 500). Only used with `aec_reference: ring_buffer`. Larger values reserve more memory; actual delay depends on queued samples, not capacity alone. |
 | `aec_ref_ring_in_psram` | bool | false | Place the software AEC reference ring in PSRAM. Its size follows rate, frame shape and `aec_reference_buffer_ms`; internal is faster, while PSRAM recovers that allocation. Measure the trade-off on target. It has no effect with `previous_frame` or a stereo/TDM hardware reference because the ring path is not compiled. |
 
 ### I2S Bus Advanced Options
@@ -464,7 +400,7 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 | `mclk_multiple` | int | 256 | MCLK to LRCLK ratio (128, 256, 384, or 512). Most codecs accept 256. |
 | `i2s_comm_fmt` | string | `philips` | I2S frame format: `philips` (default), `msb`, `pcm_short`, `pcm_long`. Codec datasheets specify which one. |
 | `telemetry` | bool | false | Enable per-stage cycle counting and diagnostic logging. Adds a small overhead in the audio task; only enable while tuning. |
-| `telemetry_log_interval_frames` | int | 128 | When `telemetry: true`, log the snapshot every N audio frames (1-8192). Defaults to 128 frames = ~4 s at 16 kHz / 32 ms frames. |
+| `telemetry_log_interval_frames` | int | 128 | When `telemetry: true`, log the snapshot every N audio frames (1-8192). Defaults to 128 processing frames; the time interval depends on the active frame size. |
 
 ### Microphone Options
 
@@ -656,74 +592,68 @@ component checks the largest contiguous DMA-capable block and rejects a switch
 that lacks headroom. Keep the low-cost mode when that preflight or real-time
 qualification fails.
 
-### ES8311 Digital Feedback AEC (Recommended)
+### ES8311 Digital Feedback AEC
 
-For **ES8311 codec**, enable `use_stereo_aec_reference` to use the codec's
-sample-aligned DAC feedback as the AEC reference:
+ES8311 digital feedback places microphone ADC samples in the left RX slot and
+DAC feedback in the right RX slot. This is one microphone plus one reference,
+not two microphones. On an existing ES8311 configuration, set:
 
 ```yaml
-esp_audio_stack:
-  id: audio_stack
-  # ... pins ...
-  processor_id: aec_component
-  use_stereo_aec_reference: true  # ES8311 digital feedback
+num_channels: 2
+use_stereo_aec_reference: true
+reference_channel: right
 ```
 
-**How it works:**
-- The component's ES8311 codec configuration requests the supported stereo
-  ADC/DAC feedback route; no user register patch is required.
-- L channel = ADC microphone, R channel = DAC loopback reference when
-  `no_dac_ref: false` writes the Espressif ES8311 `ADCL + DACR` setting.
-  Set `reference_channel: right` for this codec loopback mode.
-- Reference is **sample-accurate** (same I2S frame as mic) → best possible AEC
-- The reference comes directly from the I2S RX deinterleave, sample-accurate
+These fields belong to `esp_audio_stack`. Set `no_dac_ref: false` in both
+`codec.input` and `codec.output`, and attach `processor_id` to AEC or AFE.
+Retain the board's I2C, I2S and clock settings. The driver owns register setup;
+do not duplicate it in boot lambdas. Digital feedback gives the processor a
+reference transported alongside capture, but acoustic delay and distortion
+still depend on the physical speaker and enclosure.
 
 ### TDM Hardware Reference (ES7210 + ES8311)
 
-For boards with **ES7210** (multi-channel ADC) + **ES8311** (DAC), the ES7210 can capture the ES8311 DAC analog output on a dedicated ADC slot, giving a sample-aligned AEC reference without the ES8311 digital feedback mode.
+Some boards route DAC playback into an ES7210 ADC input. The ADC then captures
+that signal alongside the microphones in a TDM frame. This requires a physical
+feedback connection on the board. Find its slot in the schematic or verify it
+with a slot-level sensor during playback.
 
-The shipped baseline (`packages/codec/es7210_tdm.yaml`) follows the **Espressif Korvo-2** reference: MIC3 / slot 2 = AEC ref @ 30 dB. Boards that route the DAC to a different ADC slot must override the affected PGA register from their own `on_boot` lambda **after** the baseline script runs. Set `tdm_ref_slot` accordingly in YAML.
-
-| Board | DAC routed to | YAML setting | PGA override needed |
-|---|---|---|---|
-| WS3 / Spotpear / Korvo-2 | MIC3 / slot 2 | `tdm_ref_slot: 2` (baseline default) | none (baseline already sets MIC3 = 30 dB) |
-| Waveshare P4 Touch | MIC2 / slot 1 | `tdm_ref_slot: 1` | reset MIC2 PGA to 0 dB; MIC3 stays at baseline |
+For a board wired with microphones on slots 0 and 2 and reference on slot 1:
 
 ```yaml
-esp_audio_stack:
-  id: audio_stack
-  # ... pins ...
-  processor_id: aec_component
-  use_tdm_reference: true
-  tdm_total_slots: 4
-  tdm_mic_slot: 0           # MIC1 = voice
-  tdm_ref_slot: 2           # MIC3 = DAC feedback (Korvo-2 baseline)
+tdm_total_slots: 4
+tdm_mic_slots: [0, 2]
+use_tdm_reference: true
+tdm_ref_slot: 1
+tdm_tx_slot: 0
 ```
 
-**Reference health monitor**: while the speaker is actively driving samples, the audio task watches the chosen ref slot's RMS. If it stays below -60 dBFS for ~3.2 s (100 frames at 32 ms), it emits a one-shot WARN:
+Add these fields to the configured stack, with a matching two-microphone AFE.
+For one microphone use `tdm_mic_slots: [0]` and a single-mic processor. Physical
+slot numbers do not change when IDF packs only selected slots into DMA memory.
+A slot used as reference cannot also be a microphone slot.
 
-```text
-[W][audio_stack] TDM AEC reference silent for 100 frames while speaker active (ref -72.4 dBFS); check tdm_ref_slot wiring or set use_tdm_reference: false
-```
+There is no universal ES7210 reference-slot number or gain setting. Spotpear
+ES8311 stereo feedback is a different topology and must not be configured as
+an ES7210 TDM board. Use the maintained profile for the actual board; do not
+copy old codec register overrides from a different schematic.
 
-That is the canary for "you forgot the per-board PGA override" or wiring fault. Workaround: set `use_tdm_reference: false` to fall back to the software ring-buffer reference (AEC quality drops, but the call still works).
-
-> **Note**: `use_tdm_reference` and `use_stereo_aec_reference` are mutually exclusive. TDM mode uses `I2S_SLOT_MODE_STEREO` for the I2S channel (required to get all TDM slots in DMA).
+`use_tdm_reference` and `use_stereo_aec_reference` are mutually exclusive.
+If no hardware reference exists, a TDM layout declared with `tdm_mic_slots`
+can use the software reference instead. Retain the TDM microphone layout when
+changing reference source.
 
 ### Multi-Rate: 48kHz I2S Bus with Espressif Rate Conversion
 
-Many audio codecs operate cleanly at **48 kHz**. Running the I2S bus at
-16 kHz can force the codec PLL and filters into a less favorable operating
-point, which often results in audible artifacts, worse SNR, and suboptimal
-DAC/ADC performance. At 48 kHz the codec usually produces cleaner audio: lower
-noise floor, better high-frequency response for TTS and media playback.
+A 48 kHz bus allows 48 kHz playback while the microphone/reference path is
+converted to 16 kHz for ESP-SR processing. The physical bus format must be
+supported by the codec and board. A higher rate is not a universal cure for
+noise or clock errors, and upsampling a low-rate source cannot restore missing
+frequencies.
 
-The challenge: AEC (ESP-SR), Micro Wake Word (TFLite Micro), Voice Assistant
-STT, and any AFE/AEC-backed VoIP microphone branch require **16 kHz** input.
-The solution is to run the I2S bus at 48 kHz and convert only the mic/ref path
-to 16 kHz with Espressif's official `esp_ae_rate_cvt` from
-`esp_audio_effects`. VoIP RX and native speaker/media playback can remain
-at the speaker path rate.
+AEC/AFE here require 16 kHz input. Without either processor, the public
+microphone may use other supported rates when its consumers accept them.
+`output_sample_rate` must divide `sample_rate` exactly, with ratio at most six.
 
 #### Signal Flow
 
@@ -735,7 +665,7 @@ I2S bus: 48kHz ─────┤
                     └─── Mic path (48kHz) ───┘──→ 16kHz ──→ AEC / MWW / VA / AFE VoIP TX
 ```
 
-`esp_ae_rate_cvt` is the standalone C API behind Espressif's GMF `aud_rate_cvt` element. The TDM/stereo path uses one multi-channel converter handle for selected mic/ref channels, so the relative latency between microphones and reference stays coupled. Mono software-reference AEC uses the same converter for both RX mic and TX reference.
+`esp_ae_rate_cvt` is the standalone C API behind Espressif's GMF `aud_rate_cvt` element. The TDM/stereo path uses one multi-channel converter handle for selected mic/ref channels, so the relative latency between microphones and reference stays coupled. Software-reference AEC converts microphone and playback-reference streams to the processor rate.
 
 If `output_sample_rate` is omitted the conversion ratio is 1. Bit-depth and layout conversion still use `esp_audio_effects` when the bus format needs it.
 
@@ -754,10 +684,10 @@ If `output_sample_rate` is omitted the conversion ratio is 1. Bit-depth and layo
 esp_audio_stack:
   id: audio_stack
   # ... pins ...
-  sample_rate: 48000           # I2S bus rate (ES8311/ES7210 native, best DAC quality)
+  sample_rate: 48000           # Physical bus and playback rate
   output_sample_rate: 16000    # Mic/AEC/MWW/VA converted to 16kHz via esp_ae_rate_cvt
   processor_id: aec_component
-  use_stereo_aec_reference: true    # Reference from I2S RX stereo deinterleave (no delay needed)
+  use_stereo_aec_reference: true    # Select hardware feedback; also configure its channel and codec
 
 esp_aec:
   id: aec_component
@@ -807,83 +737,96 @@ target and concurrent workload. Profile before changing them and listen/test
 the result; do not reduce quality merely to suppress a long-loop warning whose
 actual blocking source has not been identified.
 
-#### How Home Assistant Knows to Send 48kHz
+#### Media player format and sample rate
 
-HA reads the `sample_rate` from the `announcement_pipeline` in the `media_player` config and transcodes audio accordingly via `ffmpeg_proxy`:
+A media player's pipeline format advertises the audio it can accept. The
+hardware speaker still runs at the parent stack's `sample_rate`. Use a
+resampler to connect sources at other rates, including TTS services that
+produce their own native rate.
 
-```yaml
-media_player:
-  - platform: speaker_source
-    announcement_pipeline:
-      speaker: va_speaker        # Points to the resampler speaker
-      format: FLAC
-      sample_rate: 48000         # HA will transcode TTS and media to FLAC 48kHz
-      num_channels: 1
-```
-
-For TTS, HA requests the TTS engine at 48kHz directly. For radio/media streams, `ffmpeg_proxy` transcodes the source to FLAC 48kHz before sending it to the device. In both cases audio arrives at the ESP at 48kHz and goes to the speaker without any intermediate downsampling.
-
-> **Note**: Do not patch ES8311 feedback registers from YAML. Codec setup is
-> owned by `esp_codec_dev`; `use_stereo_aec_reference` and `reference_channel`
-> select the supported stack behavior. Without a hardware feedback mode,
-> no-codec builds use `aec_reference` (`ring_buffer` by default,
-> `previous_frame` for light profiles).
+Home Assistant may convert media for a compatible player, but that does not
+mean every TTS engine generates 48 kHz audio or every source URL is transcoded.
+Check the actual incoming stream format when investigating a rate mismatch.
+Configure the media player and its decoders separately from this PCM backend.
 
 ## Pin Mapping by Codec
 
-### ES8311 (Spotpear Ball v2, AI Voice Kits)
+A codec model does not determine a board's GPIO assignment. Two boards using
+ES8311 can wire different I2C, MCLK, BCLK, WS, data and amplifier-enable pins.
+Use the schematic and a matching
+[board profile linked from the main guide](../../../README.md#configuration-reference).
+Do not copy a P4 or S3 pin list merely because its codec name matches.
 
-```yaml
-esp_audio_stack:
-  i2s_lrclk_pin: GPIO45   # LRCK
-  i2s_bclk_pin: GPIO9     # SCLK
-  i2s_mclk_pin: GPIO16    # MCLK (required)
-  i2s_din_pin: GPIO10     # SDOUT (codec → ESP)
-  i2s_dout_pin: GPIO8     # SDIN (ESP → codec)
-  sample_rate: 48000             # ES8311 native rate (better DAC quality)
-  output_sample_rate: 16000      # Mic/AEC/MWW/VA at 16kHz (rate conversion x3)
-  use_stereo_aec_reference: true # Digital feedback (recommended)
-```
-
-### ES8311 + ES7210 TDM (Waveshare ESP32-S3-AUDIO-Board, Korvo-2 wiring)
-
-```yaml
-esp_audio_stack:
-  i2s_lrclk_pin: GPIO14   # LRCK (shared bus)
-  i2s_bclk_pin: GPIO13    # SCLK
-  i2s_mclk_pin: GPIO12    # MCLK (required)
-  i2s_din_pin: GPIO15     # ES7210 SDOUT (codec -> ESP)
-  i2s_dout_pin: GPIO16    # ES8311 SDIN (ESP -> codec)
-  sample_rate: 16000
-  use_tdm_reference: true
-  tdm_total_slots: 4
-  tdm_mic_slot: 0          # MIC1 = voice
-  tdm_ref_slot: 2          # MIC3 = DAC analog feedback (Korvo-2 baseline)
-  # Waveshare P4 Touch: tdm_ref_slot: 1 (MIC2) + override MIC2 PGA to 0 dB in on_boot
-```
-
-### ES8388 (LyraT, Audio Dev Boards)
-
-```yaml
-esp_audio_stack:
-  i2s_lrclk_pin: GPIO25   # LRCK
-  i2s_bclk_pin: GPIO5     # SCLK
-  i2s_mclk_pin: GPIO0     # MCLK (required)
-  i2s_din_pin: GPIO35     # DOUT
-  i2s_dout_pin: GPIO26    # DIN
-  sample_rate: 16000
-```
+For ES8311 digital feedback, configure the right RX channel as reference. For
+ES7210 analog feedback, determine which ADC input actually receives playback.
+These are different electrical arrangements; neither is implied by enabling
+`processor_id`.
 
 ## When to Use This vs Standard i2s_audio
 
-| Scenario | Use This Component | Use Standard i2s_audio |
-|----------|-------------------|----------------------|
-| ES8311/ES8388/ES8374/ES8389 codec | Yes | No for shared-bus full duplex |
-| INMP441 + MAX98357A on same bus | Yes (direct TX reference, `slot_bit_width: 32`) | No |
-| INMP441 + MAX98357A on separate buses | Either works | Yes |
-| PDM microphone + I2S speaker | No | Yes (different protocols) |
-| Need true full-duplex on single bus | Yes | Limited |
-| VA + MWW + VoIP on same device | Yes (single bus) | Yes (dual bus with mixer speaker) |
+Use Audio Stack when you need one component to own a shared codec/bus, extract
+an AEC reference or feed its optional processors. Native ESPHome audio remains
+appropriate when it already supports the hardware and the required independent
+capture/playback arrangement. Native PDM input is a separate option; this
+backend's standard-I2S/TDM inputs do not accept PDM microphones.
+
+## Lifecycle and runtime controls
+
+Runtime state is one of `idle`, `mic`, `speaker`, `duplex`.
+
+| Trigger | Fires when |
+|---|---|
+| `on_start` / `on_idle` | The stack leaves / returns to idle. |
+| `on_state` | Any state change. The new state is passed as a string. |
+| `on_mic_start` / `on_mic_idle` | Capture starts / stops. |
+| `on_speaker_start` / `on_speaker_idle` | Playback starts / stops. |
+| `on_amplifier_required` / `on_amplifier_idle` | Speaker-path aliases for GPIO amp control. |
+
+Declare `speaker_enable` as the board's amplifier-enable output. Add these
+callbacks to the existing stack; capture alone should not power the amplifier.
+
+```yaml
+esp_audio_stack:
+  id: audio_stack
+  on_amplifier_required:
+    then:
+      - output.turn_on: speaker_enable
+  on_amplifier_idle:
+    then:
+      - output.turn_off: speaker_enable
+```
+
+Normal microphone/speaker consumers start and stop their own use of the stack.
+For explicit control, these actions and condition are available:
+
+| Item | Meaning |
+|---|---|
+| `esp_audio_stack.start` | Start the audio path explicitly. |
+| `esp_audio_stack.stop` | Request a stop. |
+| `esp_audio_stack.is_idle` | Condition true when the stack is idle. |
+
+Optional runtime entities (replace `speaker_out` with the existing speaker ID):
+
+```yaml
+switch:
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
+    aec:
+      name: Echo Cancellation
+      restore_mode: RESTORE_DEFAULT_ON
+
+number:
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
+    master_volume:
+      name: Master Volume
+      speaker_id: speaker_out
+    mic_gain:
+      name: Mic Gain
+```
+
+The parent `aec` switch bypasses the entire processor. It is not the same as
+the AFE-specific AEC switch, which leaves other AFE stages active.
 
 ## Technical Notes
 
@@ -922,7 +865,10 @@ esp_audio_stack:
   the right hooks for amplifier power gating; do not use the generic audio-stack
   `on_start`/`on_idle` for speaker power if wake word or VA can keep the mic
   path active.
-- **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/VoIP/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, including zero as a `memset()` fast path. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. **Clipping warning**: positive gain can still saturate the PCM stream. On loud speech with gain > +6 dB, peak samples can clip and produce harmonic distortion that degrades STT and VoIP audio. If you need gain > +6 dB to bring a weak MEMS mic up to working levels, pair this component with `esp_afe` and `agc_enabled: true`; with standalone `esp_aec` there is no automatic ceiling.
+- **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/VoIP/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, A zero linear multiplier means silence; **0 dB means unity gain**. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. Positive gain can clip any sample that exceeds the PCM range. Check the ADC
+and pre-processor levels first: AGC after processing cannot recover a waveform
+already clipped by the ADC or software input gain.
+
 ### Audio task lifecycle
 
 The audio task is an internal FreeRTOS task with three properties worth knowing about in the current design:
@@ -964,7 +910,7 @@ internal reconfigure.
 
 When neither `use_stereo_aec_reference` nor `use_tdm_reference` is enabled, the AEC reference comes from the speaker output. Two options via `aec_reference:`:
 
-- **`ring_buffer`** (default): speaker TX is stored in an Espressif/ADF TYPE2-style ring buffer with `aec_reference_buffer_ms` of capacity. The mono-reference helper reads from the ring; on starvation it zero-fills (the AEC handles that as a "no echo this frame") rather than reusing stale data. Better frame alignment on no-codec setups (discrete MEMS mic + I²S amp) at the cost of `aec_reference_buffer_ms` of latency.
+- **`ring_buffer`** (default): speaker TX is stored in an Espressif/ADF TYPE2-style ring buffer with `aec_reference_buffer_ms` of capacity. The mono-reference helper reads from the ring; on starvation it zero-fills (the AEC handles that as a "no echo this frame") rather than reusing stale data. Better frame alignment on no-codec setups (discrete MEMS mic + I²S amp) with a bounded queue whose configured capacity is not a fixed delay.
 - **`previous_frame`**: the audio task uses the prior TX frame as the AEC reference. Simple, lower RAM and smaller compile-time surface; no TYPE2 ring buffer or delay tuning is compiled into that build.
 
 ### PSRAM and sdkconfig Requirements
@@ -1083,16 +1029,18 @@ and GMF/display/application work may occupy either core. Capture task timing and
 loop warnings under the failing composite workload before changing affinity or
 priority; a core move can simply transfer the contention.
 
-### SPI Errors (err 101) With AEC
-1. Start from a low-cost mode. If a high-performance mode is rejected, inspect
-   the logged largest contiguous DMA-capable block.
-2. Enable `buffers_in_psram: true` to free internal heap
-3. Reduce display update interval (500ms+) to avoid SPI bus contention
-4. Check free heap in logs after boot
+### SPI errors while audio is active
+
+Check which component emitted the error and whether an allocation failed just
+before it. SPI display traffic, internal-memory pressure and audio processing
+can overlap, but the error number alone does not identify the cause. Compare
+the same device with playback idle and active, recording the largest internal
+block and task timing. Apply a memory-placement or display-refresh change only
+when that comparison supports it.
 
 ## Known Limitations
 
-- **Media files should match bus sample rate**: For best quality, use media files at the bus `sample_rate` (e.g. 48kHz). The `resampler` speaker handles conversion from any rate, but native rate avoids resampling artifacts.
+- **Speaker input rate**: PCM delivered to the hardware speaker must match the bus rate. Use a resampler for supported sources at other rates; matching the source and bus rate avoids an unnecessary conversion.
 - **loopTask long-operation warnings during streaming**: Do not classify these
   as expected or harmless. Dedicated I2S processing may continue, but a stalled
   ESPHome loop can delay API, UI, automations, buffers and lifecycle control.
@@ -1111,13 +1059,10 @@ priority; a core move can simply transfer the contention.
   represent some physical effects while also adding nonlinearities. Neither
   topology has a universal cancellation percentage; qualify it with captured
   near/far speech on the final enclosure.
-- **AEC reference**: The reference signal is always the exact post-volume PCM sent to the speaker, with no additional scaling. For hardware codec setups (ES8311, TDM), the reference naturally includes hardware volume. For software reference (no codec), the reference includes software volume. Pre-AEC input gain/gain affects only the mic signal, not the reference; use it sparingly because it changes what the AEC/AFE sees.
-
-## License
-
-The ESPHome wrapper code is MIT-licensed. Espressif libraries fetched for
-codec, conversion and optional processing retain their own licenses and
-product-use restrictions; see the repository `THIRD_PARTY_NOTICES.md`.
+- **AEC reference level**: software reference follows the playback path; hardware
+  feedback depends on the codec tap or analog wiring and its gain. It is not
+  necessarily bit-identical to speaker PCM. Check reference level and clipping
+  rather than assuming every hardware route includes all volume stages.
 
 ### Independent standard-I2S microphone levels
 
@@ -1142,3 +1087,9 @@ remains mono. `tdm_slot_levels` retains its existing syntax for TDM boards; both
 options use the same observer. With neither option configured, the observer and
 its storage are excluded from the firmware. STD dual-mic capture code and fields
 are likewise excluded when no stack configures `rx_mic_slots`.
+
+## License
+
+The ESPHome wrapper code is MIT-licensed. Espressif libraries fetched for
+codec, conversion and optional processing retain their own licenses and
+product-use restrictions; see the repository `THIRD_PARTY_NOTICES.md`.

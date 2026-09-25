@@ -1,0 +1,51 @@
+# Generic S3 prototype: I2S microphone and amplifier, no codec or processing.
+# Change GPIOs and PSRAM mode for your board. Match the mic L/R strap to mic_channel.
+# This declares audio endpoints; add a consumer/player to record or play sound.
+#
+# ESP BCLK/WS --+--> microphone clocks
+#              +--> amplifier clocks
+# Microphone --DATA--> ESP DIN --> microphone consumer
+# Amplifier <--DATA--- ESP DOUT <-- PCM playback
+esphome:
+  name: generic-i2s-duplex
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+
+# Local checkout example. For a standalone YAML, replace this source with
+# github://n-IA-hane/esphome-audio-stack@dev for the development version.
+external_components:
+  - source: ../esphome/components
+    components: [esp_audio_stack]
+
+esp_audio_stack:
+  id: audio_stack
+  sample_rate: 16000
+  bits_per_sample: 32
+  slot_bit_width: 32
+  rx_slot_mode: stereo
+  mic_channel: left
+  i2s_bclk_pin: GPIO6
+  i2s_lrclk_pin: GPIO7
+  i2s_din_pin: GPIO4
+  i2s_dout_pin: GPIO8
+
+microphone:
+  - platform: esp_audio_stack
+    id: board_mic
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: board_speaker
+    esp_audio_stack_id: audio_stack

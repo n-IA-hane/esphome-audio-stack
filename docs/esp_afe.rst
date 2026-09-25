@@ -73,7 +73,7 @@ Configuration variables:
 - **task_core** / **task_priority** (*Optional*, int): ESP-SR SE/BSS worker
   placement.
 - **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
-  matching ``fetch_task_*`` options (*Optional*, int): Dual-mic GMF manager/pipeline
+  matching ``fetch_task_*`` options (*Optional*, int): GMF manager/pipeline
   task settings.
 - **feed_buf_in_psram**, **feed_ring_in_psram**, **fetch_ring_in_psram**
   (*Optional*, boolean): Wrapper scratch/bridge placement controls.
@@ -82,8 +82,11 @@ Configuration variables:
   on the asynchronous dual-mic GMF path so bounded scheduler jitter does not
   become a silent output frame.
 
-Dual-mic Speech Enhancement requires a TDM topology with two microphone slots
-and a valid echo reference supplied by ``esp_audio_stack``.
+Dual-mic Speech Enhancement requires ``mic_num: 2``, ``se_enabled: true``
+and two real microphone inputs: ``tdm_mic_slots`` for TDM, or
+``rx_mic_slots: [left, right]`` with ``rx_slot_mode: stereo`` for standard I2S.
+The parent supplies either a software playback reference or the configured
+hardware reference. TDM is not required for a standard-I2S microphone pair.
 
 ``esp_afe.set_mode`` Action
 ---------------------------

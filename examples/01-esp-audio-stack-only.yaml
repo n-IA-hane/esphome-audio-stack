@@ -1,12 +1,5 @@
-# ESP Audio Stack only: codec-backed full-duplex microphone + speaker.
-#
-# What this example proves:
-#   esp_audio_stack can own a codec/I2S audio path and expose normal ESPHome
-#   microphone/speaker surfaces without enabling AEC or AFE processing.
-#
-# Contract:
-#   This base profile lists only esp_audio_stack. Shared primitives are internal
-#   headers, not public ESPHome components.
+# ES8311 duplex without processing. Adapt pins and PSRAM to your board.
+# I2C configures the codec; I2S RX carries capture and TX carries playback.
 
 substitutions:
   name: audio-stack-only
@@ -40,7 +33,7 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
 
-# Component source under test.
+# Local checkout source; use the repository @dev URL for a standalone preview YAML.
 external_components:
   - source: ../esphome/components
     components:

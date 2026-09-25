@@ -5,15 +5,20 @@
 This development preview accompanies Intercom 2026.10.0-dev. Use ESPHome 2026.9.0 or newer with the maintained profiles.
 
 - Microphone and reference-channel layouts follow the configured inputs, including supported single- and dual-microphone arrangements.
+- TDM capture and playback allocate DMA space for the selected slots instead of every physical slot. This reduces memory use for sparse layouts without changing the configured bus rate or physical slot numbering.
 - AFE input is delivered in bounded processing blocks.
 - Voice-communication echo cancellation reserves the feed-task stack it needs.
 - WebRTC-based AFE builds avoid loading unused neural noise-suppression models.
+
+This preview uses Espressif `esp_codec_dev` `2.0.0-beta5`. That dependency is still a prerelease; keep the version selected by this component when reproducing the tested configuration.
 
 The public ESPHome microphone and speaker interfaces remain available. Audio-only, microphone-only and speaker-only configurations remain supported where their hardware permits them.
 
 Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, including direct ESP calls. The latest package/controller work adds no new changes to this audio backend.
 
 Rebuild and upload firmware to receive component changes. See the [platform preview](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.10.0-dev) for the shared playback and controller improvements.
+
+Thanks to @jyoushiki for the sparse-TDM proposal, detailed measurements and hardware testing that helped shape this improvement.
 
 Thanks to everyone who donated to support the project.
 
