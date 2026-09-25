@@ -295,12 +295,9 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     return false;
   }
 
-  // Single-mic ESP-SR AFE is not reliable after a live disable_aec():
-  // fetch can keep timing out and downstream consumers receive silence until
-  // reboot. Match Espressif's algorithm_stream contract instead: create the
-  // instance with AEC structurally on/off. Dual-mic GMF keeps AEC initialized
-  // so its manager can still apply feature toggles at runtime.
-  cfg->aec_init = afe_mic_channels >= 2 || this->aec_enabled_.load(std::memory_order_relaxed);
+  // Keep AEC allocated so the GMF feature control can toggle it without
+  // changing frame sizes or replacing the active audio pipeline.
+  cfg->aec_init = true;
   cfg->aec_filter_length = this->aec_filter_length_;
   cfg->aec_mode = this->derive_aec_mode_();
   cfg->aec_nlp_level = static_cast<aec_nlp_level_t>(this->aec_nlp_level_);
@@ -986,23 +983,6 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     return this->recreate_instance_(false);
   }
 
-  // The configured microphone topology is immutable after code generation;
-  // use it instead of racing raw pointers while another rebuild is underway.
-  if (this->mic_num_ <= 1) {
-    bool old_value = this->aec_enabled_.load(std::memory_order_relaxed);
-    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "Applying aec_enabled=%s (single-mic AFE rebuild)", enabled ? "true" : "false");
-    if (this->recreate_instance_(false)) {
-      return true;
-    }
-    ESP_LOGW(TAG, "Failed to apply aec_enabled=%s, rolling back", enabled ? "true" : "false");
-    this->aec_enabled_.store(old_value, std::memory_order_relaxed);
-    if (!this->recreate_instance_(false)) {
-      ESP_LOGE(TAG, "Rollback also failed for aec_enabled, AFE is down");
-    }
-    return false;
-  }
-
   // Hold the config mutex only across the enable/disable call. The
   // potential teardown via recreate_instance_ takes the same mutex
   // itself; calling it inside the lock would recurse on a non-recursive
@@ -1238,7 +1218,7 @@ FrameSpec EspAfe::frame_spec() const {
 FeatureControl EspAfe::feature_control(AudioFeature feature) const {
   switch (feature) {
     case AudioFeature::AEC:
-      return this->mic_num_ <= 1 ? FeatureControl::RESTART_REQUIRED : FeatureControl::LIVE_TOGGLE;
+      return FeatureControl::LIVE_TOGGLE;
     case AudioFeature::VAD:
       return FeatureControl::RESTART_REQUIRED;
     case AudioFeature::NS:

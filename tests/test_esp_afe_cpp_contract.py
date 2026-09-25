@@ -19,19 +19,10 @@ def read_aec(name: str) -> str:
     return (AEC / name).read_text(encoding="utf-8")
 
 
-def test_single_mic_aec_toggle_rebuilds_instead_of_live_disabling() -> None:
+def test_aec_is_initialized_for_live_control() -> None:
     cpp = read("esp_afe.cpp")
-    header = read("esp_afe.h")
-
-    assert "single-mic AFE rebuild" in cpp
-    assert "cfg->aec_init = afe_mic_channels >= 2 || this->aec_enabled_.load" in cpp
-    assert "return this->mic_num_ <= 1 ? FeatureControl::RESTART_REQUIRED : FeatureControl::LIVE_TOGGLE;" in cpp
-    assert "rebuild-only on the ESP-SR single-mic pipeline" in header
-
-    install_start = cpp.index("bool EspAfe::install_instance_(")
-    install_end = cpp.index("\nEspAfe::AfeInstance EspAfe::detach_instance_", install_start)
-    install = cpp[install_start:install_end]
-    assert "direct_iface_->disable_aec" not in install
+    assert "cfg->aec_init = true;" in cpp
+    assert "ESP_AFE_FEATURE_AEC, false" in cpp
 
 
 def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:

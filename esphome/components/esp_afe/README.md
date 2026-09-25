@@ -417,16 +417,22 @@ cannot allocate the contiguous DMA-capable internal block).
 
 ## Feature Toggle Behavior
 
-AEC, VAD, and NS/AGC toggle differently because the selected direct/GMF path
-exposes only part of the lower ESP-SR runtime control surface:
+AEC, VAD, and NS/AGC use different controls provided by Espressif:
 
 | Feature | Toggle Method | Audio Gap | Notes |
 |---------|-------------|-----------|-------|
-| AEC | Live AFE control | None | Immediate on/off through the direct API or `ESP_AFE_FEATURE_AEC` on GMF |
+| AEC | GMF feature control | No pipeline restart | Switches echo cancellation on/off in the existing AFE instance, including single-mic input |
 | SE | Boot-time graph choice | N/A | Structural on dual-mic builds; single-mic users should use a single-mic config or `esp_aec` |
 | NS | AFE reinit | hundreds of ms plus possible audio-task restart | ESP-SR exposes low-level vtable entries, but `esp_gmf_afe_manager` does not expose an NS feature enum. Not exposed on dual-mic SE/BSS builds because `afe_config_check()` prioritizes BSS over NS |
 | AGC | AFE reinit | hundreds of ms plus possible audio-task restart | Rebuilds ESP-SR's AGC for one mic or the explicit post-AFE WebRTC AGC for two mics. Avoid toggling while real-time audio is active. |
 | VAD | Live AFE control | None | `vad_init` stays structural. On GMF, VAD remains enabled while the element creates its wake-state lock, then the configured OFF state is applied from the first output callback after open. |
+
+AEC stays initialized while disabled so switching it during a call preserves
+the microphone format, worker tasks and buffers. Disabling AEC therefore does
+not reclaim its working memory. The microphone continues through the other
+active AFE stages. If every AFE feature is disabled, the existing all-features-off
+policy stops the processor and emits silence; that is a separate state from
+switching only AEC off in a full profile.
 
 **Why reinit for NS/AGC?** ESP-SR's low-level AFE vtable includes
 `enable_ns()`, `disable_ns()`, `enable_agc()`, and `disable_agc()`, but the
