@@ -12,11 +12,12 @@ playback buffering and the echo-cancellation reference. It exposes standard ESPH
 :doc:`microphone </components/microphone/index>` and
 :doc:`speaker </components/speaker/index>` platforms on top.
 
-Use it when microphone and speaker cannot be independent components: shared
-codec buses where one codec owns both ADC and DAC, software echo cancellation
-that needs a sample-aligned copy of the playback signal on the capture path,
-TDM multi-microphone layouts, or devices where media, TTS, wake word, Voice
-Assistant and calls share one speaker.
+Use it to coordinate simultaneous capture and playback on a single shared
+I2S bus, separate RX/TX buses, or supported TDM layouts. A second bus is not
+required. Its optional echo cancellation reduces local speaker playback in the
+microphone stream before wake word, Voice Assistant or calls consume it. The
+speaker continues playing normally. Consumers use the standard ESPHome
+microphone interface; cancellation quality depends on the reference and hardware.
 
 An optional audio processor, :doc:`esp_aec </components/esp_aec>` or
 :doc:`esp_afe </components/esp_afe>`, can be attached behind the microphone

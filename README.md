@@ -1,10 +1,49 @@
 # ESPHome Audio Stack
 
-Audio Stack lets an ESP32 capture a microphone and play a speaker at the same
-time, including when both share one I2S peripheral. It configures the bus and
-supported hardware codecs, converts microphone samples when needed, and exposes
-normal ESPHome `microphone` and `speaker` components. Echo cancellation and
-speech processing are optional additions.
+**Capture the microphone and play the speaker at the same time, even on a
+single shared I2S bus. Feed echo-cancelled microphone audio to Micro Wake Word,
+Voice Assistant and calls through their normal ESPHome interfaces.**
+
+Audio Stack coordinates the I2S input/output and supported hardware codecs.
+It supports a single shared bus, separate RX/TX buses, and supported TDM
+microphone layouts. A second I2S bus is **not required**.
+
+With `esp_aec` or `esp_afe` enabled, the processor reduces the local speaker's
+echo in the microphone signal **before** that signal reaches its consumers.
+For example, while the device plays music or a spoken reply:
+
+- **Micro Wake Word** receives processed microphone audio, helping it detect
+  your wake word while playback continues.
+- **Voice Assistant** receives that same processed input for speech-to-text,
+  reducing the device's own playback in what it sends for recognition.
+- **A VoIP call** sends processed microphone audio to the other party, reducing
+  the echo of their voice returning through your speaker and microphone.
+
+```text
+Music / TTS / remote caller --> speaker --> sound in the room
+                                  |                |
+                           playback reference     +--> microphone hears
+                                  |                    your voice + playback
+                                  v                          |
+                                 AEC <-----------------------+
+                                  |
+                        processed microphone
+                                  |
+                    +-------------+-------------+
+                    |             |             |
+               Wake word     Voice Assistant   VoIP TX
+```
+
+AEC acts on **microphone capture**. It does not remove audio from the speaker
+or need to mute playback to cancel echo. Correct reference routing, levels and
+microphone/speaker placement still matter; cancellation and wake-word detection
+must be checked on the finished device.
+
+The output remains a standard ESPHome microphone, so consumers do not need a
+separate echo-cancellation implementation. Audio Stack works with ESPHome's
+speaker, mixer, resampler and player components. Your runtime configuration
+still decides which consumers run together and when Assist may start a session.
+For devices that need only capture/playback, omit the optional processor.
 
 [Stable 2026.9.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.9.2)
 | [Development 2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev)

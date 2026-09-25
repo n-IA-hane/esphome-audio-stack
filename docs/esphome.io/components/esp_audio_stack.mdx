@@ -10,9 +10,11 @@ ESP32-P4 voice devices with PSRAM. It owns the low-level audio path: I2S buses,
 hardware codec control, DMA, sample-rate conversion, playback buffering and the
 echo-cancellation reference.
 
-It exposes normal ESPHome `microphone` and `speaker` platforms, so wake word,
-Voice Assistant, media playback and custom call components can share one audio
-backend.
+Capture and playback can run together on one shared I2S bus; a second bus is
+optional. With AEC or AFE enabled, the standard ESPHome microphone delivers
+processed audio to wake word, Voice Assistant and call components. Echo
+cancellation reduces local speaker playback in that microphone signal while
+the speaker continues playing normally.
 
 This component requires the ESP-IDF framework and the `psram` component. Arduino
 is not supported.
