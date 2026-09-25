@@ -1,22 +1,31 @@
 # Changelog
 
-## 2026.10.0-dev: consolidated microphone layouts and AFE processing
+## ESPHome Audio Stack 2026.10.0
 
-This development preview accompanies Intercom 2026.10.0-dev. Use ESPHome 2026.9.0 or newer with the maintained profiles.
+This release improves microphone and playback handling while keeping the normal ESPHome microphone and speaker interfaces. Capture and playback can run together on one shared I2S bus; a second bus is optional.
 
-- Microphone and reference-channel layouts follow the configured inputs, including supported single- and dual-microphone arrangements.
-- TDM capture and playback allocate DMA space for the selected slots instead of every physical slot. This reduces memory use for sparse layouts without changing the configured bus rate or physical slot numbering.
-- AFE input is delivered in bounded processing blocks.
-- Voice-communication echo cancellation reserves the feed-task stack it needs.
-- WebRTC-based AFE builds avoid loading unused neural noise-suppression models.
+### What improves
 
-This preview uses Espressif `esp_codec_dev` `2.0.0-beta5`. That dependency is still a prerelease; keep the version selected by this component when reproducing the tested configuration.
+- TDM boards use less DMA memory by storing only the selected microphone, reference and playback slots. Physical wiring, bus rate and YAML slot numbers stay the same.
+- One- and two-microphone configurations feed the AFE with the configured channel order. Both standard-I2S microphone pairs and supported TDM arrangements remain available.
+- AFE input is supplied in bounded blocks, so a larger speech-processing frame does not dictate the hardware audio processing interval.
+- Voice-communication AEC modes reserve the feed-task stack they need.
+- WebRTC noise-suppression builds avoid linking unused neural-model weights into internal RAM.
+- The documentation now explains simple I2S audio, shared-bus duplex, codec feedback, TDM, AEC and AFE in order, with diagrams and configuration examples.
 
-The public ESPHome microphone and speaker interfaces remain available. Audio-only, microphone-only and speaker-only configurations remain supported where their hardware permits them.
+### Updating
 
-Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, including direct ESP calls. The latest package/controller work adds no new changes to this audio backend.
+Use **ESPHome 2026.9.0 or newer** with the maintained profiles. Rebuild and upload firmware to receive these changes; updating a Home Assistant integration does not update the device's audio backend.
 
-Rebuild and upload firmware to receive component changes. See the [platform preview](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.10.0-dev) for the shared playback and controller improvements.
+Keep existing physical TDM slot numbers. Standard component configurations do not need a manual codec-library declaration. This release selects Espressif `esp_codec_dev` **2.0.0-beta5**; that dependency is still an upstream prerelease. Remove custom 1.x overrides before building because the backend now uses the 2.x API.
+
+Audio Stack can be used independently of VoIP Stack. Microphone-only and speaker-only configurations remain supported where the hardware permits them. Echo cancellation and AFE processing are optional.
+
+### Validation
+
+Full-profile concurrency was exercised on Waveshare S3 Audio and Spotpear, including direct ESP calls. These results apply to the tested boards and configurations, not every possible codec board or enclosure. The software suite passes 68 tests, and the documentation examples were checked through ESPHome configuration validation.
+
+### Thanks
 
 Thanks to @jyoushiki for the sparse-TDM proposal, detailed measurements and hardware testing that helped shape this improvement.
 

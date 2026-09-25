@@ -23,7 +23,7 @@ logger:
   level: INFO
 
 # Local checkout example. For a standalone YAML, replace this source with
-# github://n-IA-hane/esphome-audio-stack@dev for the development version.
+# github://n-IA-hane/esphome-audio-stack@main for the stable version.
 external_components:
   - source: ../esphome/components
     components: [esp_audio_stack]

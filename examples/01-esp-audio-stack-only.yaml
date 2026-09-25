@@ -33,7 +33,7 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
 
-# Local checkout source; use the repository @dev URL for a standalone preview YAML.
+# Local checkout source; use the repository @main URL for a standalone stable YAML.
 external_components:
   - source: ../esphome/components
     components:

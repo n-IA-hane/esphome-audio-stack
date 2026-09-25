@@ -32,11 +32,10 @@ speaker, mixer, resampler and player components. Your runtime configuration
 still decides which consumers run together and when Assist may start a session.
 For devices that need only capture/playback, omit the optional processor.
 
-[Stable 2026.9.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.9.2)
-| [Development 2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev)
+[Stable 2026.10.0](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0)
 | [Changelog](CHANGELOG.md)
 
-This guide describes the development version. Use ESPHome **2026.9.0 or newer**,
+This guide describes Audio Stack 2026.10.0. Use ESPHome **2026.9.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
 pins for your board; a pin assignment from another board is not a wiring guide.
 
