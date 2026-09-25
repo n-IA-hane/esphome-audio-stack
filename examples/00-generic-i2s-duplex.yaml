@@ -7,6 +7,7 @@
 # Microphone --DATA--> ESP DIN --> microphone consumer
 # Amplifier <--DATA--- ESP DOUT <-- PCM playback
 esphome:
+  min_version: 2026.9.0
   name: generic-i2s-duplex
 
 esp32:
