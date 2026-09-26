@@ -1,11 +1,17 @@
 # Changelog
 
-## ESPHome Audio Stack 2026.10.1 (release candidate)
+## ESPHome Audio Stack 2026.10.1
+
+Changes since stable **2026.10.0**.
 
 - Toggle single-microphone AEC through the existing Espressif GMF control, keeping the active audio pipeline and frame sizes intact instead of rebuilding it during a call.
 - Add an on-demand runtime diagnostic action that works without verbose audio tracing.
 - Exercise failure cleanup and retries with behavioral tests.
 - Clear effective codec layouts when the backend closes, so a failed reopening cannot expose an old valid layout.
+
+Thanks to everyone who donated to support the project.
+
+---
 
 ## ESPHome Audio Stack 2026.10.0
 
