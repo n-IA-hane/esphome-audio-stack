@@ -9,7 +9,7 @@
 
 ## ESPHome Audio Stack 2026.10.0
 
-This release improves microphone and playback handling while keeping the normal ESPHome microphone and speaker interfaces. Capture and playback can run together on one shared I2S bus; a second bus is optional.
+This release reduces DMA memory use for sparse TDM layouts, adjusts AFE input buffering and task-stack allocation, and removes unused neural-model weights from WebRTC noise-suppression builds.
 
 ### What improves
 
