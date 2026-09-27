@@ -65,7 +65,6 @@ esp_aec:
 # ring buffer so AEC can remove echo from the microphone stream. For the lighter
 # path, use `aec_reference: previous_frame` and omit aec_reference_buffer_ms.
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 48000
   output_sample_rate: 16000
   bits_per_sample: 32

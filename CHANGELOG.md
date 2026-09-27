@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Simplify examples further by omitting the stack declaration ID and the IDs
+in start/stop, idle and diagnostic actions. These already support automatic
+binding; custom lambdas can still use an explicit name.
+
 ## ESPHome Audio Stack 2026.10.1
 
 Changes since stable **2026.10.0**.

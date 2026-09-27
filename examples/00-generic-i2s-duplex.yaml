@@ -30,7 +30,6 @@ external_components:
     components: [esp_audio_stack]
 
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 16000
   bits_per_sample: 32
   slot_bit_width: 32

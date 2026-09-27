@@ -47,3 +47,36 @@ external_components:
     assert "Traceback" not in output
     if message:
         assert message in output
+
+
+def test_unnamed_stack_binds_endpoints_actions_and_idle_condition(tmp_path):
+    """Exercise ESPHome's actual ID resolution without a named stack."""
+    import re
+
+    text = (ROOT / "examples/00-generic-i2s-duplex.yaml").read_text().replace(
+        "../esphome/components", str(ROOT / "esphome/components")
+    )
+    text += """
+button:
+  - platform: template
+    name: Exercise audio actions
+    on_press:
+      - esp_audio_stack.stop:
+      - wait_until:
+          condition:
+            esp_audio_stack.is_idle:
+          timeout: 2s
+      - esp_audio_stack.start:
+      - esp_audio_stack.dump_diagnostics:
+"""
+    path = tmp_path / "unnamed.yaml"
+    path.write_text(text)
+    result = subprocess.run(
+        [sys.executable, "-m", "esphome", "compile", str(path), "--only-generate"],
+        capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = next(tmp_path.rglob("main.cpp")).read_text()
+    parents = re.findall(r"->set_parent\(([^)]+)\)", generated)
+    assert len(parents) >= 6
+    assert len(set(parents)) == 1

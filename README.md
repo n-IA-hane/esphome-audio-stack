@@ -75,7 +75,6 @@ ESPHome board, PSRAM and component declarations. Its audio section is:
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 16000
   bits_per_sample: 32
   slot_bit_width: 32
@@ -100,7 +99,8 @@ speaker:
 numbers and AEC switch find that instance automatically, so `esp_audio_stack_id`
 is optional and omitted in these examples. One instance can manage a shared bus
 or separate RX/TX buses; using two buses does not mean declaring two stacks.
-Keep `id: audio_stack` when your actions or lambdas refer to that name.
+The stack declaration and its actions can also omit IDs. Add an explicit stack
+`id` only when your custom lambdas or other named references need it.
 
 These are example GPIOs for an S3 prototype, not universal board pins. Set the
 microphone's L/R selection to match `mic_channel`, and configure the amplifier's
@@ -139,7 +139,6 @@ wires. Replace the top-level I2S pin fields in the first example with:
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 16000
   bits_per_sample: 32
   slot_bit_width: 32
@@ -565,7 +564,6 @@ button:
     entity_category: diagnostic
     on_press:
       - esp_audio_stack.dump_diagnostics:
-          id: audio_stack
 ```
 
 Replace `audio_stack` with your component ID. The action is available in normal

@@ -69,7 +69,6 @@ esp_afe:
 
 # Audio owner with processor_id wired to esp_afe.
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 48000
   output_sample_rate: 16000
   bits_per_sample: 32

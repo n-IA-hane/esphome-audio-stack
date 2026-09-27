@@ -18,7 +18,8 @@ Only one `esp_audio_stack` instance is currently supported per ESP. Microphone,
 speaker, sensor, number and AEC-switch platforms resolve it automatically;
 `esp_audio_stack_id` is optional. Examples omit that redundant reference.
 The stack can own a shared I2S bus or separate RX/TX buses within this single
-instance. Keep an explicit stack `id` if actions or lambdas need to reference it.
+instance. Its start/stop, idle condition and dump action also resolve the stack
+automatically. Add an explicit stack `id` for custom lambdas that name it.
 
 ## Reading this reference
 
@@ -282,7 +283,6 @@ standard ESPHome microphone and speaker interfaces.
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   i2s_lrclk_pin: GPIO45      # Word Select (WS/LRCLK)
   i2s_bclk_pin: GPIO9        # Bit Clock (BCK/BCLK)
   i2s_mclk_pin: GPIO16       # Master Clock (optional, some codecs need it)
@@ -313,7 +313,6 @@ split-data-interface path is not compiled.
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   rx_bus:
     i2s_num: 0
     i2s_lrclk_pin: GPIO37
@@ -449,7 +448,6 @@ expects standard interleaved L/R 16-bit PCM at the bus sample rate:
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 48000
   num_channels: 2
   speaker_channels: 2
@@ -473,7 +471,6 @@ the board wiring and codec datasheet match the selected I2S format:
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   codec:
     i2c_id: bus_a
     input:
@@ -519,7 +516,6 @@ The selected primitives are logged at boot in `dump_config()`:
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   sample_rate: 48000
   output_sample_rate: 16000
   audio_effects:
@@ -555,7 +551,6 @@ esp_aec:
   mode: sr_low_cost       # Linear-only AEC, preserves spectral features for MWW
 
 esp_audio_stack:
-  id: audio_stack
   # ... pins ...
   processor_id: aec_component   # or esp_afe component
   buffers_in_psram: true  # Optional when the composite firmware needs internal headroom
@@ -681,7 +676,6 @@ If `output_sample_rate` is omitted the conversion ratio is 1. Bit-depth and layo
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   # ... pins ...
   sample_rate: 48000           # Physical bus and playback rate
   output_sample_rate: 16000    # Mic/AEC/MWW/VA converted to 16kHz via esp_ae_rate_cvt
@@ -785,7 +779,6 @@ callbacks to the existing stack; capture alone should not power the amplifier.
 
 ```yaml
 esp_audio_stack:
-  id: audio_stack
   on_amplifier_required:
     then:
       - output.turn_on: speaker_enable
