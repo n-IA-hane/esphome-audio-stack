@@ -100,10 +100,8 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: clean_mic
-    esp_audio_stack_id: audio_stack
 
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
-    esp_audio_stack_id: audio_stack
     buffer_duration: 500ms

@@ -85,12 +85,10 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: raw_mic
-    esp_audio_stack_id: audio_stack
 
 # Public speaker. Media, TTS and call layers can feed this directly or through
 # ESPHome mixer/resampler components.
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
-    esp_audio_stack_id: audio_stack
     buffer_duration: 500ms

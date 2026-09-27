@@ -44,12 +44,10 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: afe_clean_mic
-    esp_audio_stack_id: afe_audio_stack
 
 speaker:
   - platform: esp_audio_stack
     id: afe_stack_speaker
-    esp_audio_stack_id: afe_audio_stack
 
 switch:
   - platform: esp_afe

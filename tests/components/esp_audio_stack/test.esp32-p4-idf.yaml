@@ -39,23 +39,19 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: stack_mic
-    esp_audio_stack_id: audio_stack
 
 speaker:
   - platform: esp_audio_stack
     id: stack_speaker
-    esp_audio_stack_id: audio_stack
     buffer_duration: 500ms
 
 switch:
   - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
     aec:
       name: AEC
 
 number:
   - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
     mic_gain:
       name: Mic Gain
     master_volume:

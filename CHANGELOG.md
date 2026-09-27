@@ -4,6 +4,9 @@
 
 Changes since stable **2026.10.0**.
 
+- Simplify YAML examples by omitting redundant `esp_audio_stack_id` references.
+  The component supports one instance per ESP; its child platforms already
+  resolve that instance automatically.
 - Toggle single-microphone AEC through the existing Espressif GMF control, keeping the active audio pipeline and frame sizes intact instead of rebuilding it during a call.
 - Add an on-demand runtime diagnostic action that works without verbose audio tracing.
 - Exercise failure cleanup and retries with behavioral tests.

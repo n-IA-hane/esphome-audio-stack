@@ -89,13 +89,18 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: board_mic
-    esp_audio_stack_id: audio_stack
 
 speaker:
   - platform: esp_audio_stack
     id: board_speaker
-    esp_audio_stack_id: audio_stack
 ```
+
+**One stack per device:** the component currently supports a single
+`esp_audio_stack` instance on each ESP. Its microphone, speaker, level sensors,
+numbers and AEC switch find that instance automatically, so `esp_audio_stack_id`
+is optional and omitted in these examples. One instance can manage a shared bus
+or separate RX/TX buses; using two buses does not mean declaring two stacks.
+Keep `id: audio_stack` when your actions or lambdas refer to that name.
 
 These are example GPIOs for an S3 prototype, not universal board pins. Set the
 microphone's L/R selection to match `mic_channel`, and configure the amplifier's

@@ -12,6 +12,14 @@ codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,
 hardware and software AEC references, and full AFE processors without each
 profile reimplementing bus ownership.
 
+## One stack per device
+
+Only one `esp_audio_stack` instance is currently supported per ESP. Microphone,
+speaker, sensor, number and AEC-switch platforms resolve it automatically;
+`esp_audio_stack_id` is optional. Examples omit that redundant reference.
+The stack can own a shared I2S bus or separate RX/TX buses within this single
+instance. Keep an explicit stack `id` if actions or lambdas need to reference it.
+
 ## Reading this reference
 
 Start with the [step-by-step guide](../../../README.md) for a first build: it
@@ -47,7 +55,6 @@ The YAML stays normal ESPHome from the consumer side:
 microphone:
   - platform: esp_audio_stack
     id: clean_mic
-    esp_audio_stack_id: audio_stack
 
 micro_wake_word:
   microphone: clean_mic
@@ -286,12 +293,10 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: mic_component
-    esp_audio_stack_id: audio_stack
 
 speaker:
   - platform: esp_audio_stack
     id: spk_component
-    esp_audio_stack_id: audio_stack
 ```
 
 ### Dual-Bus Codec-Less Setup
@@ -411,7 +416,6 @@ There is no second parallel pre-AEC microphone for MWW, VA or VoIP:
 microphone:
   - platform: esp_audio_stack
     id: mic_main
-    esp_audio_stack_id: audio_stack
 ```
 
 It mirrors ESPHome's microphone layer for actions, data callbacks, mute state,
@@ -453,7 +457,6 @@ esp_audio_stack:
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
-    esp_audio_stack_id: audio_stack
 ```
 
 For no-codec or codec software-reference AEC, stereo TX is downmixed to mono for
@@ -560,7 +563,6 @@ esp_audio_stack:
 microphone:
   - platform: esp_audio_stack
     id: mic_aec
-    esp_audio_stack_id: audio_stack
 
 micro_wake_word:
   microphone: mic_aec     # Post-AEC works with SR linear AEC
@@ -702,7 +704,6 @@ speaker:
   # Hardware output: writes 48kHz PCM to the I2S bus
   - platform: esp_audio_stack
     id: hw_speaker
-    esp_audio_stack_id: audio_stack
     buffer_duration: 500ms
     # timeout is optional and defaults to never. Set e.g. timeout: 10s only
     # when this hardware speaker should auto-stop after an abandoned writer.
@@ -807,14 +808,12 @@ Optional runtime entities (replace `speaker_out` with the existing speaker ID):
 ```yaml
 switch:
   - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
     aec:
       name: Echo Cancellation
       restore_mode: RESTORE_DEFAULT_ON
 
 number:
   - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
     master_volume:
       name: Master Volume
       speaker_id: speaker_out
@@ -1070,7 +1069,6 @@ They observe an already active capture; they do not start a second I2S reader.
 ```yaml
 sensor:
   - platform: esp_audio_stack
-    esp_audio_stack_id: audio_stack
     std_slot_levels:
       - slot: left
         name: Left microphone level
