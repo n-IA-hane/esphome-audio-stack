@@ -334,6 +334,7 @@ class EspAfe final : public Component, public AudioProcessor {
   static esp_gmf_err_io_t gmf_input_release_cb_(void *ctx, esp_gmf_payload_t *load, int wait_ticks);
   static esp_gmf_err_io_t gmf_output_acquire_cb_(void *ctx, esp_gmf_payload_t *load, uint32_t wanted_size,
                                                  int wait_ticks);
+  static void gmf_processed_output_cb_(const int16_t *data, size_t bytes, void *ctx);
   static esp_gmf_err_io_t gmf_output_release_cb_(void *ctx, esp_gmf_payload_t *load, int wait_ticks);
   esp_gmf_err_io_t gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wanted_size, int wait_ticks);
   esp_gmf_err_io_t gmf_output_release_(esp_gmf_payload_t *load, int wait_ticks);

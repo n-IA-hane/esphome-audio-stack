@@ -298,9 +298,9 @@ async def to_code(config):
     add_idf_component(
         name="espressif/gmf_ai_audio",
         repo="https://github.com/n-IA-hane/esp-gmf.git",
-        # Pin the P4 realtime-stack fix so an existing IDF component lock
-        # cannot silently retain the older branch head.
-        ref="43b1e18f2a9234393a65d4b7eba2f132b95a5a24",
+        # Pin immediate external PCM delivery and the existing P4 stack placement.
+        # An older lock must not retain the input-paced output bridge.
+        ref="95c97b55b349894b95b34dcd357f8c81fd5be098",
         path="elements/gmf_ai_audio",
     )
     add_idf_component(name="espressif/esp-sr", ref="^2.5.3")

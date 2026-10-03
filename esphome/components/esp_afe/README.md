@@ -713,3 +713,16 @@ and active WebRTC processing remain unchanged.
 The ESPHome wrapper code is MIT-licensed. ESP-SR, GMF and other fetched
 Espressif dependencies retain their own licenses and product-use restrictions;
 see the repository `THIRD_PARTY_NOTICES.md`.
+
+### Realtime output delivery
+
+Processed PCM is copied from the existing GMF fetch task into the component's
+bounded output FIFO as soon as it is available. Microphone consumers keep their
+normal frame cadence. Delivery no longer waits for the GMF input job to acquire
+its next block, which could leave a consumer without audio even while processed
+samples were already waiting. VAD and command-event monitoring remain in GMF.
+
+This uses the optional external-output callback in the pinned GMF fork. It adds
+no task or audio buffer and omits GMF's intermediate output data bus. The callback
+uses the existing nonblocking FIFO writer; normal manager shutdown detaches and
+drains the callback before releasing its resources.

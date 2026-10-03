@@ -412,6 +412,16 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     return false;
   }
 
+  const esp_gmf_err_t output_ret = esp_gmf_afe_set_output_callback(
+      static_cast<esp_gmf_element_handle_t>(element), &EspAfe::gmf_processed_output_cb_, this);
+  if (output_ret != ESP_GMF_ERR_OK) {
+    ESP_LOGE(TAG, "Failed to bind realtime AFE output (ret=%d)", static_cast<int>(output_ret));
+    esp_gmf_obj_delete(element);
+    esp_gmf_afe_manager_destroy(manager);
+    afe_config_free(cfg);
+    return false;
+  }
+
   esp_gmf_pipeline_handle_t pipeline = nullptr;
   esp_gmf_err_t pipeline_ret = esp_gmf_pipeline_create(&pipeline);
   if (pipeline_ret != ESP_GMF_ERR_OK || pipeline == nullptr) {
@@ -1660,6 +1670,18 @@ esp_gmf_err_io_t EspAfe::gmf_output_acquire_cb_(void *ctx, esp_gmf_payload_t *lo
   (void) wanted_size;
   (void) wait_ticks;
   return ESP_GMF_IO_OK;
+}
+
+void EspAfe::gmf_processed_output_cb_(const int16_t *data, size_t bytes, void *ctx) {
+  auto *self = static_cast<EspAfe *>(ctx);
+  if (self == nullptr) {
+    return;
+  }
+  esp_gmf_payload_t payload{};
+  payload.buf = reinterpret_cast<uint8_t *>(const_cast<int16_t *>(data));
+  payload.valid_size = bytes;
+  payload.buf_length = bytes;
+  self->gmf_output_release_(&payload, 0);
 }
 
 esp_gmf_err_io_t EspAfe::gmf_output_release_cb_(void *ctx, esp_gmf_payload_t *load, int wait_ticks) {
