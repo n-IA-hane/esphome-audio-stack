@@ -52,7 +52,7 @@ speaker, mixer, resampler and player components. Your runtime configuration
 still decides which consumers run together and when Assist may start a session.
 For devices that need only capture/playback, omit the optional processor.
 
-[Stable 2026.10.1](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.1)
+[Stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 
 Use ESPHome **2026.9.0 or newer**,

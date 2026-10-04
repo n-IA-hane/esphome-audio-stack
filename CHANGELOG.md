@@ -1,10 +1,48 @@
 # Changelog
 
-## Unreleased
+## 2026.10.2
 
-Simplify examples further by omitting the stack declaration ID and the IDs
-in start/stop, idle and diagnostic actions. These already support automatic
-binding; custom lambdas can still use an explicit name.
+Changes since stable **2026.10.1**.
+
+### 🎙️ Processed audio reaches its consumers sooner
+
+While qualifying the new Waveshare BOX V2 FULL profile, we found that microphone
+samples already processed by the AFE could wait inside GMF for another input
+iteration before reaching Audio Stack.
+
+The AFE path now delivers those samples directly from its existing fetch task
+to the existing output FIFO. Wake word detection, Voice Assistant and VoIP can
+consume the processed audio without that extra handoff wait.
+
+No additional task or audio buffer is needed. The change targets `esp_afe` and
+uses a pinned GMF update, preserving the legacy GMF output path for other users.
+
+### 🧩 Shorter YAML for a single audio stack
+
+Examples now omit unnecessary stack declaration IDs and IDs in start, stop,
+idle and diagnostic actions. The existing automatic binding selects the single
+Audio Stack instance. Keep an explicit ID where a custom lambda refers to it.
+
+### 🧪 Tested on real devices
+
+The candidate was compiled and installed on Spotpear Ball V2 and Waveshare S3
+Audio, alongside the Waveshare 1.85C-BOX V2 FULL test device. Qualification included
+real calls, playback alongside calls, AEC switching and clean hangup. The owner
+also checked real playback/call audio with AEC enabled on all three devices.
+
+The component suite passed 73 tests. A separate GMF behavioral test verifies
+immediate delivery while input processing is blocked, legacy output, monitoring
+callbacks and rejection of invalid callback configurations.
+
+### 📦 Updating
+
+Refresh the Audio Stack external components from `main`, then rebuild and upload
+your ESP firmware. ESPHome **2026.9.0 or newer** is required. The GMF dependency is
+pinned by the component; there is no separate YAML option to enable the fix.
+
+[Documentation](https://github.com/n-IA-hane/esphome-audio-stack/blob/main/README.md)
+
+Thanks to everyone who helps with hardware testing, reports and support.
 
 ## ESPHome Audio Stack 2026.10.1
 

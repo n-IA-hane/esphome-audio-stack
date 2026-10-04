@@ -12,6 +12,31 @@ AEC, Speech Enhancement on dual-mic targets, optional NS/VAD/AGC stages,
 runtime controls and diagnostic sensors.
 Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 
+## How processed microphone audio reaches its consumers
+
+The AFE receives microphone samples together with the speaker reference and
+produces cleaned microphone audio. Audio Stack hands that result to the consumers
+already attached to its microphone, such as wake word detection, Voice Assistant
+or a call.
+
+Starting with 2026.10.2, a ready result is delivered by the existing AFE fetch task.
+Previously, GMF could leave it waiting for the next input-processing iteration.
+Removing that wait helps consumers receive audio on time under a heavy workload;
+it does not change the AEC algorithm or microphone sample rate.
+
+Processed PCM is copied from the existing GMF fetch task into the component's
+bounded output FIFO as soon as it is available. Microphone consumers keep their
+normal frame cadence. Delivery no longer waits for the GMF input job to acquire
+its next block, which could leave a consumer without audio even while processed
+samples were already waiting. VAD and command-event monitoring remain in GMF.
+
+This uses the optional external-output callback in the pinned GMF fork. It adds
+no task or audio buffer and omits GMF's intermediate output data bus. The callback
+uses the existing nonblocking FIFO writer; normal manager shutdown detaches and
+drains the callback before releasing its resources.
+
+## Microphone layout
+
 The default input format follows `mic_num`: `MR` for one microphone and `MMR`
 for two. `M` is a microphone, `R` is the playback reference, and `N` is an
 unused position filled with zero. Optional `input_format: MMNR` adds that
@@ -713,16 +738,3 @@ and active WebRTC processing remain unchanged.
 The ESPHome wrapper code is MIT-licensed. ESP-SR, GMF and other fetched
 Espressif dependencies retain their own licenses and product-use restrictions;
 see the repository `THIRD_PARTY_NOTICES.md`.
-
-### Realtime output delivery
-
-Processed PCM is copied from the existing GMF fetch task into the component's
-bounded output FIFO as soon as it is available. Microphone consumers keep their
-normal frame cadence. Delivery no longer waits for the GMF input job to acquire
-its next block, which could leave a consumer without audio even while processed
-samples were already waiting. VAD and command-event monitoring remain in GMF.
-
-This uses the optional external-output callback in the pinned GMF fork. It adds
-no task or audio buffer and omits GMF's intermediate output data bus. The callback
-uses the existing nonblocking FIFO writer; normal manager shutdown detaches and
-drains the callback before releasing its resources.
