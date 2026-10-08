@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Playback can restart safely after a stop
+
+A speaker stop resets its playback buffer on the audio task. New playback
+could previously be accepted before that reset completed, then discarded by
+the pending reset without a playback completion notification. The producer
+could consequently wait indefinitely for audio that would never be played.
+
+New writes now return zero while the reset is pending, so the producer retains
+those samples and retries after the buffer is ready. A host regression covers
+writes before and during reset, repeated stop requests and successful retry.
+This addresses one reproduced failure path investigated in
+[Intercom issue #129](https://github.com/n-IA-hane/esphome-intercom/issues/129).
+
+
 ## 2026.10.2
 
 Changes since stable **2026.10.1**.
