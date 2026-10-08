@@ -263,7 +263,7 @@ void ESPAudioStack::set_i2s_hardware_state_(I2SHardwareState state) {
 }
 
 void ESPAudioStack::service_speaker_reset_() {
-  if (!this->request_speaker_reset_.exchange(false, std::memory_order_relaxed)) {
+  if (!this->request_speaker_reset_.load(std::memory_order_acquire)) {
     return;
   }
   if (this->speaker_buffer_) {
@@ -277,6 +277,9 @@ void ESPAudioStack::service_speaker_reset_() {
     this->aec_ref_ring_buffer_->reset();
   }
 #endif
+  // Keep admission closed until the audio task has completed the reset. Stop
+  // requests coalesce while no new playback can be accepted into this buffer.
+  this->request_speaker_reset_.store(false, std::memory_order_release);
 }
 
 void ESPAudioStack::log_memory_snapshot_(const char *label) const {
@@ -1718,7 +1721,7 @@ void ESPAudioStack::stop_speaker() {
     this->update_runtime_state_();
   }
   // Request audio task to reset ring buffers (avoids concurrent access).
-  this->request_speaker_reset_.store(true, std::memory_order_relaxed);
+  this->request_speaker_reset_.store(true, std::memory_order_release);
   // If no mic consumers either, tear down the audio stack pipeline. This signals
   // the audio processor (e.g. AFE) it can suspend its workers and parks the
   // audio task. Once it is idle, loop() deletes the I2S channels.
@@ -1734,7 +1737,7 @@ void ESPAudioStack::stop_speaker() {
 }
 
 size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
-  if (!this->speaker_buffer_) {
+  if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire)) {
     return 0;
   }
 
