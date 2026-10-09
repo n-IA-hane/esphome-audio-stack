@@ -1,0 +1,38 @@
+# Optional read-only ES8311 register probe. Include only while investigating.
+# Set es8311_diagnostic_i2c_id to the EXISTING codec bus ID; do not add a bus.
+# Set es8311_diagnostic_address to the 7-bit address found by the I2C scan.
+substitutions:
+  es8311_diagnostic_i2c_id: i2c_1
+  es8311_diagnostic_address: "0x18"
+
+button:
+  - platform: template
+    name: ES8311 register diagnostics
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          i2c::I2CDevice codec;
+          codec.set_i2c_bus(id(${es8311_diagnostic_i2c_id}));
+          codec.set_i2c_address(${es8311_diagnostic_address});
+          // Read configuration and identity only. Do not enable/reset the codec,
+          // change formats, unmute, or alter clocks in a diagnostic action.
+          const uint8_t registers[] = {
+            0xFD, 0xFE, 0xFF, 0x00, 0x01, 0x02, 0x03, 0x04,
+            0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0D, 0x0E,
+            0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1B, 0x1C,
+            0x31, 0x32, 0x37, 0x44, 0x45
+          };
+          ESP_LOGI("es8311_probe", "BEGIN address=0x%02X (read-only, sequential)",
+                   ${es8311_diagnostic_address});
+          uint8_t failures = 0;
+          for (uint8_t reg : registers) {
+            uint8_t value = 0;
+            if (codec.read_byte(reg, &value)) {
+              ESP_LOGI("es8311_probe", "reg=0x%02X value=0x%02X", reg, value);
+            } else {
+              ++failures;
+              ESP_LOGW("es8311_probe", "reg=0x%02X READ_FAILED; stopping probe", reg);
+              break;
+            }
+          }
+          ESP_LOGI("es8311_probe", "END read_failures=%u", failures);
