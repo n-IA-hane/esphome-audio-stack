@@ -47,6 +47,7 @@ class CodecDevBackend {
     bool use_mclk{true};
     bool no_dac_ref{true};
     float input_gain_db{24.0f};
+    float pa_gain_db{0.0f};
   };
 
   struct SampleConfig {

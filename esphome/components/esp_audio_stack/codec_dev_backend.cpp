@@ -235,6 +235,7 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
       cfg.ctrl_if = *ctrl;
       cfg.gpio_if = nullptr;
       cfg.pa_cfg.pa_pin = -1;
+      cfg.pa_cfg.hw_gain.pa_gain = config.pa_gain_db;
       cfg.sys_cfg.is_master = false;
       cfg.sys_cfg.no_mclk = !config.use_mclk;
       cfg.dac_cfg.ref_enable = !config.no_dac_ref;

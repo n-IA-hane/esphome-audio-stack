@@ -20,12 +20,12 @@ struct esp_codec_dev_bus_info_t {uint32_t sample_rate=0;unsigned data_bit=0,slot
 struct esp_codec_dev_sample_info_t {unsigned sample_rate,bits_per_sample,channel,channel_mask,mclk_multiple;};
 struct audio_codec_i2s_cfg_t {unsigned port;void *rx_handle;void *tx_handle;int clk_src;};
 struct audio_codec_ctrl_if_t {};
-struct audio_codec_if_t {const audio_codec_ctrl_if_t *ctrl;};
+struct audio_codec_if_t {const audio_codec_ctrl_if_t *ctrl;float pa_gain=0;};
 struct audio_codec_data_if_t {int (*get_bus_info)(const audio_codec_data_if_t*,esp_codec_dev_type_t,esp_codec_dev_bus_info_t*);};
 struct esp_codec_dev_cfg_t {esp_codec_dev_type_t dev_type;const audio_codec_if_t *codec_if;const audio_codec_data_if_t *data_if;};
 struct Dev {esp_codec_dev_cfg_t cfg;bool open=false;};
 using esp_codec_dev_handle_t=Dev*;
-struct es8311_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;void *gpio_if;struct{int pa_pin;}pa_cfg;struct{bool is_master,no_mclk;}sys_cfg;struct{bool ref_enable;}dac_cfg;};
+struct es8311_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;void *gpio_if;struct{int pa_pin;struct{float pa_gain;}hw_gain;}pa_cfg;struct{bool is_master,no_mclk;}sys_cfg;struct{bool ref_enable;}dac_cfg;};
 struct es7210_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;struct{bool is_master;}sys_cfg;struct{const char *label;}adc_cfg;};
 std::set<const void*> resources;
 int allocation=0,fail_allocation=0,opens=0,fail_open=0,layouts=0,fail_layout=0,layout_mismatch=0,closes=0;
@@ -41,7 +41,7 @@ int bus_info(const audio_codec_data_if_t*,esp_codec_dev_type_t,esp_codec_dev_bus
  return 0;
 }
 const audio_codec_data_if_t* audio_codec_new_i2s_data(const audio_codec_i2s_cfg_t*){auto*p=make<audio_codec_data_if_t>();if(p)p->get_bus_info=bus_info;return p;}
-const audio_codec_if_t* es8311_codec_new(const es8311_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p)p->ctrl=c->ctrl_if;return p;}
+const audio_codec_if_t* es8311_codec_new(const es8311_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p){p->ctrl=c->ctrl_if;p->pa_gain=c->pa_cfg.hw_gain.pa_gain;}return p;}
 const audio_codec_if_t* es7210_codec_new(const es7210_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p)p->ctrl=c->ctrl_if;return p;}
 Dev* esp_codec_dev_new(const esp_codec_dev_cfg_t*c){auto*p=make<Dev>();if(p)p->cfg=*c;return p;}
 int esp_codec_dev_open(Dev*d,const esp_codec_dev_sample_info_t*){assert(!d->open);if(++opens==fail_open)return -1;d->open=true;return 0;}
@@ -71,9 +71,11 @@ void reset_faults(){allocation=opens=layouts=closes=0;fail_allocation=fail_open=
 void assert_closed(CodecDevBackend&b){assert(!b.is_open());assert(!b.rx_layout().valid);assert(!b.tx_layout().valid);}
 bool setup(CodecDevBackend&b,bool split,bool rx,bool tx,bool es7210){
  CodecDevBackend::GenericCodecConfig cfg;cfg.enabled=true;cfg.kind=CodecDevBackend::CodecKind::ES8311;
- b.set_input_codec_config(cfg);b.set_output_codec_config(cfg);
+ b.set_input_codec_config(cfg);cfg.pa_gain_db=7.6f;b.set_output_codec_config(cfg);
  CodecDevBackend::Es7210Config adc;adc.enabled=es7210;b.set_es7210_config(adc);
- return b.setup(0,split?1:0,tx?reinterpret_cast<void*>(1):nullptr,rx?reinterpret_cast<void*>(2):nullptr,0);
+ const bool ok=b.setup(0,split?1:0,tx?reinterpret_cast<void*>(1):nullptr,rx?reinterpret_cast<void*>(2):nullptr,0);
+ if(ok){if(tx)assert(b.tx_codec_if_->pa_gain==7.6f);if(rx&&!es7210)assert(b.rx_codec_if_->pa_gain==0.0f);}
+ return ok;
 }
 int main(){
  for(bool split:{false,true}) for(bool es7210:{false,true}) for(int sides:{1,2,3}) {

@@ -95,6 +95,7 @@ CONF_REF_CHANNEL = "ref_channel"
 CONF_REF_GAIN_DB = "ref_gain_db"
 CONF_USE_MCLK = "use_mclk"
 CONF_NO_DAC_REF = "no_dac_ref"
+CONF_PA_GAIN = "pa_gain"
 CONF_ON_MIC_START = "on_mic_start"
 CONF_ON_MIC_IDLE = "on_mic_idle"
 CONF_ON_SPEAKER_START = "on_speaker_start"
@@ -203,6 +204,7 @@ CODEC_OUTPUT_SCHEMA = cv.typed_schema(
                 cv.Optional(CONF_ADDRESS, default=0x18): cv.i2c_address,
                 cv.Optional(CONF_USE_MCLK, default=True): cv.boolean,
                 cv.Optional(CONF_NO_DAC_REF, default=True): cv.boolean,
+                cv.Optional(CONF_PA_GAIN, default=0.0): cv.float_range(min=0.0, max=40.0),
             }
         ),
         "es8388": cv.Schema(
@@ -865,6 +867,7 @@ async def to_code(config):
                         output_conf[CONF_ADDRESS],
                         output_conf.get(CONF_USE_MCLK, True),
                         output_conf.get(CONF_NO_DAC_REF, True),
+                        output_conf[CONF_PA_GAIN],
                     )
                 )
             else:

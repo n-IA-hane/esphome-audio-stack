@@ -4,6 +4,7 @@ import esphome.codegen as cg
 from esphome.components import number, speaker
 import esphome.config_validation as cv
 from esphome.const import (
+    CONF_INITIAL_VALUE,
     CONF_MAX_VALUE,
     CONF_MIC_GAIN,
     CONF_MIN_VALUE,
@@ -30,6 +31,7 @@ MIC_GAIN_SCHEMA = number.number_schema(
     {
         cv.Optional(CONF_MIN_VALUE, default=-20.0): cv.float_range(min=-20.0, max=30.0),
         cv.Optional(CONF_MAX_VALUE, default=30.0): cv.float_range(min=-20.0, max=30.0),
+        cv.Optional(CONF_INITIAL_VALUE, default=0.0): cv.float_range(min=-20.0, max=30.0),
     }
 )
 
@@ -73,6 +75,7 @@ async def _setup_mic_gain(config, key, parent):
         cg.add(var.set_parent(parent))
         cg.add(var.set_min_db(conf[CONF_MIN_VALUE]))
         cg.add(var.set_max_db(conf[CONF_MAX_VALUE]))
+        cg.add(var.set_initial_db(conf[CONF_INITIAL_VALUE]))
 
 
 async def to_code(config):

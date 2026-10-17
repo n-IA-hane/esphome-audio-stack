@@ -180,6 +180,10 @@ Hardware codec (``codec:`` block):
   ``use_stereo_aec_reference``).
 - **output** (*Optional*): DAC-side codec. **type** is one of ``es8311``, ``es8388``, ``es8374``,
   ``es8389``, with the same address and clocking options (``no_dac_ref`` defaults to ``true`` on output).
+  ES8311 also accepts **pa_gain** (external amplifier gain in dB, default ``0.0``).
+  This is passed to Espressif's hardware gain calibration; it is not an extra
+  software boost. Set it from the amplifier circuit so the DAC volume accounts
+  for the physical output gain. Other boards retain the existing default.
 
 Task, memory and diagnostics:
 
@@ -288,7 +292,11 @@ An optional number platform exposes gain and volume controls.
           speaker_id: stack_speaker
 
 - **mic_gain** (*Optional*): Microphone gain in dB. **min_value**/**max_value** default to ``-20.0``
-  and ``30.0``.
+  and ``30.0``. **initial_value** defaults to ``0.0`` dB and is used only when no
+  saved user setting exists. The selected value is clamped to the configured
+  range and applied after AEC/AFE processing. A board can lower its analog ADC
+  gain to prevent clipping and specify an appropriate post-processor default
+  without overwriting the user's saved Mic Gain.
 - **master_volume** (*Optional*): Master volume for the speaker referenced by **speaker_id**.
 
 Sensor

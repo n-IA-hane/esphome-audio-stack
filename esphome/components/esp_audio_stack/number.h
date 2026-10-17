@@ -19,17 +19,16 @@ class MicGainNumber final : public number::Number, public Component {
   void set_parent(ESPAudioStack *parent) { this->parent_ = parent; }
   void set_min_db(float min_db) { this->min_db_ = min_db; }
   void set_max_db(float max_db) { this->max_db_ = max_db; }
+  void set_initial_db(float initial_db) { this->initial_db_ = initial_db; }
 
   void setup() override {
     float value;
     this->pref_ = global_preferences->make_preference<float>(this->get_object_id_hash());
-    if (this->pref_.load(&value)) {
-      value = clamp_db_(value);
-      this->apply_(value);
-      this->publish_state(value);
-    } else {
-      this->publish_state(this->clamp_db_(0.0f));  // 0 dB = unity gain when allowed
-    }
+    if (!this->pref_.load(&value))
+      value = this->initial_db_;
+    value = this->clamp_db_(value);
+    this->apply_(value);
+    this->publish_state(value);
   }
 
   void dump_config() override {
@@ -68,6 +67,7 @@ class MicGainNumber final : public number::Number, public Component {
   ESPPreferenceObject pref_;
   float min_db_{-20.0f};
   float max_db_{30.0f};
+  float initial_db_{0.0f};
 };
 
 class MasterVolumeNumber final : public number::Number, public Component {

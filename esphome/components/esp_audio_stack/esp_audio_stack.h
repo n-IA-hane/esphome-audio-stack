@@ -269,13 +269,14 @@ class ESPAudioStack final : public Component {
     cfg.input_gain_db = input_gain_db;
     this->codec_backend_.set_input_codec_config(cfg);
   }
-  void configure_es8311_codec(uint8_t address, bool use_mclk, bool no_dac_ref) {
+  void configure_es8311_codec(uint8_t address, bool use_mclk, bool no_dac_ref, float pa_gain_db = 0.0f) {
     CodecDevBackend::GenericCodecConfig cfg;
     cfg.enabled = true;
     cfg.kind = CodecDevBackend::CodecKind::ES8311;
     cfg.address = address;
     cfg.use_mclk = use_mclk;
     cfg.no_dac_ref = no_dac_ref;
+    cfg.pa_gain_db = pa_gain_db;
     this->codec_backend_.set_output_codec_config(cfg);
   }
   void configure_output_codec(uint8_t kind, uint8_t address, bool use_mclk, bool no_dac_ref) {
