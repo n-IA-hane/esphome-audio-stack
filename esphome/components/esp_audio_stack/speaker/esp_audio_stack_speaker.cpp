@@ -100,7 +100,7 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t
 
   if (!this->listener_registered_.load(std::memory_order_acquire)) {
     // Honor the producer's backpressure budget, as the native I2S speaker does.
-    // A mixer retrying a stopped sink must not starve the loop that closes it.
+    // A zero budget remains nonblocking; retry scheduling belongs to that caller.
     vTaskDelay(ticks_to_wait);
     return 0;
   }

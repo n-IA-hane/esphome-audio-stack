@@ -741,6 +741,13 @@ mean every TTS engine generates 48 kHz audio or every source URL is transcoded.
 Check the actual incoming stream format when investigating a rate mismatch.
 Configure the media player and its decoders separately from this PCM backend.
 
+The bundled `resampler` accepts a decoder block larger than its input buffer by
+writing only the available prefix. When full, it waits for space within the
+caller's budget instead of repeatedly rejecting an oversized request without
+waiting. Its input remains a byte stream; `RingBufferAudioSource` reconstructs
+PCM frames across fragments. This differs from the hardware speaker's
+whole-frame write contract below.
+
 ## Pin Mapping by Codec
 
 A codec model does not determine a board's GPIO assignment. Two boards using
@@ -763,6 +770,26 @@ capture/playback arrangement. Native PDM input is a separate option; this
 backend's standard-I2S/TDM inputs do not accept PDM microphones.
 
 ## Lifecycle and runtime controls
+
+### Speaker write contract
+
+`play(data, length, ticks_to_wait)` accepts a prefix of the caller's signed 16-bit
+PCM. Its return value is the number of bytes accepted, always a multiple of one
+complete interleaved frame (two bytes for mono, four for stereo). The caller keeps
+and retries the unaccepted suffix. Supply complete frames; a trailing incomplete
+frame is not accepted or padded.
+
+Writes are bounded by the currently available whole-frame capacity, so a block
+larger than the ring buffer can still make progress over successive calls. When
+even one frame cannot fit, the write waits for one frame within the caller's tick
+budget. It never overwrites queued PCM or uses the ring buffer's byte-oriented
+partial-write fallback, which could split a stereo frame.
+
+A pending reset or closed speaker admission returns zero and retains the caller's
+wait behavior. A zero budget is nonblocking; callers must avoid a tight retry
+loop at a priority that starves cleanup. The maintained mixer uses a bounded wait
+and VoIP's nonblocking silence path stops retrying for that frame. Host PCM tests
+verify capacity, wraparound, alignment and retries, not FreeRTOS scheduling.
 
 Runtime state is one of `idle`, `mic`, `speaker`, `duplex`.
 

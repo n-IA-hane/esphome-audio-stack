@@ -248,8 +248,12 @@ size_t ResamplerSpeaker::play(const uint8_t *data, size_t length, TickType_t tic
   } else {
     std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer_.lock();
     if (temp_ring_buffer) {
-      // Only write to the ring buffer if the reference is valid
-      bytes_written = temp_ring_buffer->write_without_replacement(data, length, ticks_to_wait);
+      // An oversized BYTEBUF send fails immediately, ignoring ticks_to_wait.
+      // Accept the prefix that fits, or wait for one byte when full, so a
+      // decoder block larger than this input ring cannot turn into a busy retry.
+      // Input remains a byte stream; RingBufferAudioSource stitches PCM frames.
+      const size_t write_length = std::min(length, std::max<size_t>(1, temp_ring_buffer->free()));
+      bytes_written = temp_ring_buffer->write_without_replacement(data, write_length, ticks_to_wait);
     } else {
       // Delay to avoid repeatedly hammering while waiting for the speaker to start
       vTaskDelay(ticks_to_wait);

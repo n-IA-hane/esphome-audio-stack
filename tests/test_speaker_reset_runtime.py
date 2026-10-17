@@ -21,6 +21,7 @@ def test_new_pcm_is_not_accepted_into_a_pending_reset(tmp_path):
     source = AUDIO_SOURCE.read_text()
     code = r'''
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -32,7 +33,8 @@ void vTaskDelay(unsigned) {}
 struct Buffer {
  unsigned queued=100,discarded=0;std::function<void()> during_reset;
  void reset(){if(during_reset)during_reset();discarded+=queued;queued=0;}
- size_t write_without_replacement(void*,size_t len,unsigned,bool){queued+=len;return len;}
+ size_t free() const {return 4096;}
+ size_t write_without_replacement(const void*,size_t len,unsigned,bool){queued+=len;return len;}
 };
 struct Callback {void call(){}};
 struct ESPAudioStack {

@@ -21,6 +21,7 @@ def test_rejected_output_yields_without_accepting_or_dropping_pcm(tmp_path):
     stack = method((ROOT / 'esp_audio_stack.cpp').read_text(), 'size_t ESPAudioStack::play(')
     code = r'''
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstddef>
@@ -30,7 +31,8 @@ void vTaskDelay(unsigned ticks){waited+=ticks;}
 unsigned millis(){return 123;}
 struct Buffer {
  unsigned writes=0;
- size_t write_without_replacement(void*,size_t length,unsigned,bool){++writes;return length;}
+ size_t free() const {return 4096;}
+ size_t write_without_replacement(const void*,size_t length,unsigned,bool){++writes;return length;}
 };
 struct ESPAudioStack {
  Buffer *speaker_buffer_=nullptr;std::atomic<bool> request_speaker_reset_{false};

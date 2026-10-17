@@ -1739,7 +1739,7 @@ void ESPAudioStack::stop_speaker() {
 size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
   if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire)) {
     // Reset admission is closed, but the caller still owns its PCM. Respect
-    // its wait budget so retries cannot starve the task servicing the reset.
+    // its wait budget; zero remains nonblocking and does not promise fairness.
     vTaskDelay(ticks_to_wait);
     return 0;
   }
@@ -1755,9 +1755,13 @@ size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_
   if (aligned_len == 0) {
     return 0;
   }
-  size_t written = this->speaker_buffer_->write_without_replacement((void *) data, aligned_len, ticks_to_wait, false);
-
-  return written;
+  const size_t free_bytes = this->speaker_buffer_->free();
+  const size_t aligned_free = free_bytes - (free_bytes % frame_bytes);
+  // Write only complete frames that fit now. If none fit, wait for one frame,
+  // not the whole caller block (which can exceed the ring's capacity). Keep
+  // RingBuffer's byte-oriented partial fallback disabled: it can split a frame.
+  const size_t write_len = std::min(aligned_len, std::max(frame_bytes, aligned_free));
+  return this->speaker_buffer_->write_without_replacement(data, write_len, ticks_to_wait, false);
 }
 
 size_t ESPAudioStack::get_speaker_buffer_available() const {
