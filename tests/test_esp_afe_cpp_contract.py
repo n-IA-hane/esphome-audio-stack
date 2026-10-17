@@ -133,15 +133,17 @@ def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:
     init = read("__init__.py")
     aec_init = read_aec("__init__.py")
 
-    assert 'add_idf_component(name="espressif/esp-sr", ref="^2.5.3")' in init
+    assert 'add_idf_component(name="espressif/esp-sr", ref="2.6.0")' in init
     assert 'name="espressif/gmf_ai_audio"' in init
     assert 'repo="https://github.com/n-IA-hane/esp-gmf.git"' in init
-    assert 'ref="95c97b55b349894b95b34dcd357f8c81fd5be098"' in init
+    assert 'ref="b1e077aa5fd34e937752712f94b1a515d459b116"' in init
     assert 'path="elements/gmf_ai_audio"' in init
     assert not (AFE / "idf_components" / "gmf_ai_audio").exists()
     assert 'ref="0.8.3"' not in init
-    assert 'add_idf_component(name="espressif/esp-sr", ref="^2.5.3")' in aec_init
+    assert 'add_idf_component(name="espressif/esp-sr", ref="2.6.0")' in aec_init
     assert 'ref="^2.4.4"' not in aec_init
+    assert 'name="espressif/esp-dsp"' not in init + aec_init
+    assert 'path=source' in init
 
 
 def test_afe_rebuild_timeout_never_destroys_a_busy_instance() -> None:

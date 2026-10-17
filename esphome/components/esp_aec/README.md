@@ -175,10 +175,10 @@ quoted for another board.
 ## Dependencies
 
 - ESP32 only, restricted to S3 and P4 variants (enforced in `_validate_esp32_variant`).
-- Resolves `espressif/esp-dsp` with `^1.8.0` and `espressif/esp-sr` with
-  `^2.4.6` through ESPHome's IDF component manager, then wraps the low-level
-  `afe_aec` helper. The constraints allow a newer compatible release, so the
-  lockfile/build manifest is the authority for an individual firmware.
+- Uses `espressif/esp-sr` 2.6.0 through ESPHome's IDF component manager and
+  wraps its low-level `afe_aec` helper. No independent ESP-DSP requirement is
+  added for the supported S3/P4 targets. The lockfile/build manifest records the
+  exact transitive dependency set for each firmware.
 - Implements [`AudioProcessor`](../esp_audio_stack/README.md), so it can be referenced by any component that accepts that interface.
 
 ## Logging

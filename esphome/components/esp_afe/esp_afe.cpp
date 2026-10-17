@@ -29,6 +29,16 @@ static const TickType_t CONFIG_MUTEX_TIMEOUT = pdMS_TO_TICKS(250);
 static const TickType_t DRAIN_WAIT_TIMEOUT = pdMS_TO_TICKS(50);
 static constexpr uint32_t REINIT_STAGE_WARN_US = 50000;
 
+// GMF 1.1 exposes this placement explicitly. The published compatibility fork
+// predating that field already uses the same fixed P4/internal, S3/PSRAM policy.
+// Keep source compatibility until coordinated source pins can be published.
+template<typename Setting>
+static auto configure_gmf_stack_memory(Setting &setting, bool internal, int)
+    -> decltype(setting.stack_in_internal = internal, void()) {
+  setting.stack_in_internal = internal;
+}
+template<typename Setting> static void configure_gmf_stack_memory(Setting &, bool, long) {}
+
 struct AfeModePreset {
   const char *name;
   int type;
@@ -374,6 +384,13 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   manager_cfg.fetch_task_setting.prio = this->fetch_task_priority_;
   manager_cfg.fetch_task_setting.core = this->fetch_task_core_;
   manager_cfg.fetch_task_setting.stack_size = this->fetch_task_stack_size_;
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+  constexpr bool afe_stacks_internal = true;
+#else
+  constexpr bool afe_stacks_internal = false;
+#endif
+  configure_gmf_stack_memory(manager_cfg.feed_task_setting, afe_stacks_internal, 0);
+  configure_gmf_stack_memory(manager_cfg.fetch_task_setting, afe_stacks_internal, 0);
   manager_cfg.read_cb = nullptr;
   manager_cfg.read_ctx = nullptr;
   manager_cfg.result_cb = nullptr;

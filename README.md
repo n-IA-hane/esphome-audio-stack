@@ -21,6 +21,8 @@ Even a small contribution helps cover the real costs of keeping the project acti
 
 # ESPHome Audio Stack
 
+[Development preview 2026.10.3-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.3-dev) uses the coordinated `dev` sources.
+
 **Capture the microphone and play the speaker at the same time, even on a
 single shared I2S bus. Feed echo-cancelled microphone audio to Micro Wake Word,
 Voice Assistant and calls through their normal ESPHome interfaces.**
@@ -59,7 +61,29 @@ Use ESPHome **2026.9.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
 pins from your board's schematic.
 
-Read in order for a first build, or jump to the relevant hardware:
+## Choose a complete device or a custom audio path
+
+| Your goal | Starting point | Expected result |
+| --- | --- | --- |
+| Use a supported board for calls, Assist or music | [A maintained Intercom device YAML](https://github.com/n-IA-hane/esphome-intercom/tree/main/yamls) | Board wiring, audio and application consumers are composed together |
+| Bring up your own microphone and speaker | [The basic I2S example](#1-start-with-a-microphone-and-speaker) | Public microphone/speaker endpoints for your consumer or player |
+| Reduce playback echo in microphone capture | [AEC](#4-add-echo-cancellation), after raw capture/playback work | Processed microphone audio using a correctly routed playback reference |
+| Use a codec loopback or several microphones | [Stereo reference](#5-use-the-codec-stereo-channel-as-a-reference) or [TDM](#6-use-tdm-for-multiple-input-channels) | Channel roles matching the physical board wiring |
+| Add the full speech front end | [AFE](#7-add-afe-speech-processing) | The selected speech-processing stages on the existing audio path |
+| Combine music, voice replies and calls | [Rates and playback sources](#8-combine-different-rates-and-playback-sources) | Shared output with the required resamplers/mixer and application coordination |
+
+For a maintained device, start with its defaults and the
+[progressive package examples](https://github.com/n-IA-hane/esphome-intercom/blob/dev/packages/README.md#work-through-a-full-profile).
+The reorganized development profiles use `firmware_features` to select consumers;
+you do not need to construct this low-level audio path again. The selected
+AFE/AEC/native backend is a separate hardware/profile choice.
+
+For a custom build, the numbered sections grow from capture/playback to concurrent
+applications. Bus layouts, codec reference and TDM are **hardware alternatives**,
+not mandatory upgrades to apply in sequence. Stop when your device has the
+functionality it needs.
+
+Read in order for a first custom build, or jump to the relevant hardware:
 
 1. [Start with a microphone and speaker](#1-start-with-a-microphone-and-speaker)
 2. [One bus or two](#2-one-bus-or-two)
@@ -92,7 +116,18 @@ The microphone and amplifier must accept the same clock rate and frame format.
 This arrangement works directly with compatible I2S microphone and amplifier modules.
 
 The [complete generic example](examples/00-generic-i2s-duplex.yaml) supplies the
-ESPHome board, PSRAM and component declarations. Its audio section is:
+ESPHome board, PSRAM and component declarations. From a repository checkout,
+validate it with:
+
+```bash
+esphome config examples/00-generic-i2s-duplex.yaml
+```
+
+It uses a local component source. If copying it outside the repository, replace
+that source as instructed in the example. This first example declares audio
+endpoints; it has no network, Voice Assistant or player, and does not record or
+play anything by itself. Use a complete device profile for a ready-to-use
+application. Its audio section is:
 
 ```yaml
 esp_audio_stack:
@@ -555,14 +590,21 @@ and is exercised on real ES8311, ES7210/ES8311, ESP32-S3 and ESP32-P4 hardware.
 `SOURCE.md` records the initial extraction provenance; later repository commits
 are tracked by this repository's own history.
 
-Espressif dependencies and their pins:
+Dependencies selected by the current component sources:
 
-- `esp_codec_dev` `2.0.0-beta5` for codec control and explicit stream-layout queries;
-- `esp_audio_effects` `^1.4.2` for rate, bit-depth and layout conversion,
-  or `~1.3` on pre-v3 ESP32-P4 silicon, which cannot execute the newer binaries;
-- `esp-dsp` `^1.8.0` and `esp-sr` `^2.5.3` for the processors;
-- dual-mic `gmf_ai_audio` from the pinned
-  `n-IA-hane/esp-gmf` ref `gmf-ai-audio-esp-sr-2.4.6`.
+- `esp_codec_dev` `2.0.0-beta5` when a hardware codec is configured;
+- `esp_audio_effects` `1.4.3` for conversion, with `1.3.0~1` for the supported
+  pre-v3 ESP32-P4 engineering-sample path;
+- `esp-sr` `2.6.0` for AEC/AFE; the wrappers no longer add a separate direct
+  `esp-dsp` constraint, though dependencies can still bring DSP transitively;
+- AFE's `gmf_ai_audio` from `n-IA-hane/esp-gmf`, pinned in
+  [the component configuration](esphome/components/esp_afe/__init__.py) to
+  `b1e077aa5fd34e937752712f94b1a515d459b116` by default.
+
+The development preview now pins the validated GMF AI Audio 1.1.1 source.
+`gmf_source` remains available for explicitly identified local experiments. See
+[development dependency identity](esphome/components/esp_afe/README.md#dependency-identity-for-development-builds).
+Published stable releases retain their own recorded dependency set.
 
 These constraints are part of the tested build contract. Update them only with
 schema, firmware and real-device validation.

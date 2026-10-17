@@ -738,3 +738,22 @@ and active WebRTC processing remain unchanged.
 The ESPHome wrapper code is MIT-licensed. ESP-SR, GMF and other fetched
 Espressif dependencies retain their own licenses and product-use restrictions;
 see the repository `THIRD_PARTY_NOTICES.md`.
+
+## Dependency identity for development builds
+
+AEC and AFE select ESP-SR 2.6.0 explicitly. The GMF AI Audio 1.1.1 integration has
+been prepared against that same library, preserving the immediate external PCM
+callback and GMF's suspend/abort ordering during close. The new manager settings
+keep feed/fetch stacks internal on P4 and in PSRAM on S3. Existing channel mapping,
+mode choices and external MWW processing are unchanged.
+
+For an unpublished GMF candidate, `gmf_source` accepts the local directory that
+contains its `idf_component.yml` (the `elements/gmf_ai_audio` directory). Record
+its upstream revision and the dirty source hash with the firmware artifacts.
+Omit it for the published pinned dependency. This override changes the source of
+the same GMF component; it does not select a second AFE implementation.
+
+The development preview pins GMF commit
+`b1e077aa5fd34e937752712f94b1a515d459b116`. This publishes the validated component
+source; no local `gmf_source` override is needed for this preview. Keep an immutable
+remote pin when preparing later updates.

@@ -1738,6 +1738,9 @@ void ESPAudioStack::stop_speaker() {
 
 size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
   if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire)) {
+    // Reset admission is closed, but the caller still owns its PCM. Respect
+    // its wait budget so retries cannot starve the task servicing the reset.
+    vTaskDelay(ticks_to_wait);
     return 0;
   }
 

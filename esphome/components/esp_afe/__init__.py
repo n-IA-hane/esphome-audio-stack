@@ -84,6 +84,7 @@ CONF_FEED_RING_IN_PSRAM = "feed_ring_in_psram"
 CONF_FETCH_RING_IN_PSRAM = "fetch_ring_in_psram"
 CONF_INPUT_FORMAT = "input_format"
 CONF_OUTPUT_PREBUFFER_FRAMES = "output_prebuffer_frames"
+CONF_GMF_SOURCE = "gmf_source"
 
 AFE_TYPES = {
     "sr": 0,  # AFE_TYPE_SR: speech recognition, linear AEC (preserves spectrum for MWW)
@@ -132,6 +133,9 @@ CONFIG_SCHEMA = cv.All(
     cv.requires_component(psram.DOMAIN),
     cv.Schema(
         {
+            # Development override for an identified, unpublished GMF candidate.
+            # The path is the gmf_ai_audio component directory, not another engine.
+            cv.Optional(CONF_GMF_SOURCE): cv.directory,
             cv.GenerateID(): cv.declare_id(EspAfe),
             cv.Optional(CONF_TYPE, default="sr"): cv.enum(AFE_TYPES, lower=True),
             cv.Optional(CONF_MODE, default="low_cost"): cv.enum(AFE_MODES, lower=True),
@@ -290,20 +294,20 @@ async def to_code(config):
     if config[CONF_POST_AFE_AGC_SUPPORT]:
         cg.add_define("USE_ESP_AFE_POST_AGC")
 
-    # esp-sr 2.4.x requires esp-dsp >=1.8.0. Declare the lower bound here so
-    # downstream audio consumers do not inherit an older transitive esp-dsp pin.
-    add_idf_component(name="espressif/esp-dsp", ref="^1.8.0")
 
     cg.add_define("USE_ESP_AFE_GMF_PATH")
-    add_idf_component(
-        name="espressif/gmf_ai_audio",
-        repo="https://github.com/n-IA-hane/esp-gmf.git",
-        # Pin immediate external PCM delivery and the existing P4 stack placement.
-        # An older lock must not retain the input-paced output bridge.
-        ref="95c97b55b349894b95b34dcd357f8c81fd5be098",
-        path="elements/gmf_ai_audio",
-    )
-    add_idf_component(name="espressif/esp-sr", ref="^2.5.3")
+    if source := config.get(CONF_GMF_SOURCE):
+        add_idf_component(name="espressif/gmf_ai_audio", path=source)
+    else:
+        add_idf_component(
+            name="espressif/gmf_ai_audio",
+            repo="https://github.com/n-IA-hane/esp-gmf.git",
+            # Pin immediate external PCM delivery and the existing P4 stack placement.
+            # An older lock must not retain the input-paced output bridge.
+            ref="b1e077aa5fd34e937752712f94b1a515d459b116",
+            path="elements/gmf_ai_audio",
+        )
+    add_idf_component(name="espressif/esp-sr", ref="2.6.0")
     add_idf_component(
         name="esp_sr_model_selection",
         path=str(Path(__file__).parent / "idf_components" / "esp_sr_model_selection"),

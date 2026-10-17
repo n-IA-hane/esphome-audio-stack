@@ -27,6 +27,7 @@ def test_new_pcm_is_not_accepted_into_a_pending_reset(tmp_path):
 #include <cstdio>
 #include <functional>
 using TickType_t=unsigned;
+void vTaskDelay(unsigned) {}
 #define ESP_LOGI(...) ((void)0)
 struct Buffer {
  unsigned queued=100,discarded=0;std::function<void()> during_reset;

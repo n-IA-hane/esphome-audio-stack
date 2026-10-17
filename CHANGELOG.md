@@ -1,6 +1,32 @@
 # Changelog
 
-## Unreleased
+## 2026.10.3-dev
+
+### Dependency consolidation and GMF integration
+
+ESP-SR is selected explicitly at 2.6.0 for both AEC and AFE. Existing full-firmware
+locks already resolved to this version; this removes ambiguity rather than
+claiming a new runtime upgrade from 2.5.5. Supported S3/P4 builds no longer request
+ESP-DSP independently when their ESP-SR target does not require it.
+
+Audio Effects is fixed at 1.4.3 for supported production targets, with the existing
+1.3-series exception for pre-v3 P4 silicon. Codec Dev remains 2.0.0-beta5.
+
+The GMF AI Audio 1.1.1 integration uses upstream feed/fetch stack placement, keeps
+P4 stacks internal and S3 stacks in PSRAM, and retains the existing immediate PCM
+output patch. `esp_afe.gmf_source` permits validation of an identified local GMF
+component when developing another candidate. The preview pins GMF commit
+`b1e077aa5fd34e937752712f94b1a515d459b116`, the same component sources used in
+the coordinated firmware qualification.
+
+
+### Rejected playback respects caller backpressure
+
+During speaker shutdown or a pending buffer reset, a rejected write now honors
+its caller-supplied wait budget before returning zero. The producer retains the
+PCM and can retry. Ordinary accepted writes receive no added delay. This follows
+the native ESPHome I2S speaker contract and prevents an active mixer from busy
+retrying a closed output while the main loop is needed for cleanup.
 
 ### Playback can restart safely after a stop
 

@@ -71,13 +71,10 @@ async def to_code(config):
 
     cg.add_define("USE_AUDIO_PROCESSOR")
 
-    # esp-sr 2.4.x requires esp-dsp >=1.8.0. Declare the lower bound here so
-    # other components can still resolve the newest compatible esp-dsp release.
-    add_idf_component(name="espressif/esp-dsp", ref="^1.8.0")
     # esp_aec wraps the ESP-SR v2 low-level afe_aec API directly so no-codec
     # devices do not need the full GMF pipeline or codec stack. Track the
     # current 2.x line for Espressif's full-duplex AEC fixes.
-    add_idf_component(name="espressif/esp-sr", ref="^2.5.3")
+    add_idf_component(name="espressif/esp-sr", ref="2.6.0")
 
 
 @automation.register_action(

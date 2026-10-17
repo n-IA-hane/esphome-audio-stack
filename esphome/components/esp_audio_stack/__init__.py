@@ -112,7 +112,7 @@ RATE_CVT_PERF_TYPES = ("speed", "memory")
 
 # Keep realtime audio builds reproducible. These component-manager versions
 # are validated with the maintained ESP32-S3 and ESP32-P4 builds.
-ESP_AUDIO_EFFECTS_REF = "^1.4.2"
+ESP_AUDIO_EFFECTS_REF = "1.4.3"
 ESP_CODEC_DEV_REF = "2.0.0-beta5"
 
 I2S_OPTIONAL_MCLK = cv.Any(
@@ -679,8 +679,8 @@ async def to_code(config):
     audio_effects_ref = ESP_AUDIO_EFFECTS_REF
     if get_esp32_variant() == VARIANT_ESP32P4 and CORE.config["esp32"].get("engineering_sample", False):
         # Espressif 1.4+ binaries require P4 revision 3.0 instructions. Keep the
-        # newest supported minor line for pre-v3 silicon, not a historical pin.
-        audio_effects_ref = "~1.3"
+        # supported pre-v3 binary revision used by the coordinated baseline.
+        audio_effects_ref = "1.3.0~1"
     add_idf_component(name="espressif/esp_audio_effects", ref=audio_effects_ref)
     if has_hardware_codec:
         add_idf_component(name="espressif/esp_codec_dev", ref=ESP_CODEC_DEV_REF)
