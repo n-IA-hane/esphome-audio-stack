@@ -490,6 +490,11 @@ esp_audio_stack:
 | `es8374` | yes | yes | Codec-dev supported ADC/DAC codec. |
 | `es8389` | yes | yes | Codec-dev supported ADC/DAC codec; `use_mclk` and `no_dac_ref` are passed through. |
 
+ES8311 output also accepts `pa_gain` (0 to 40 dB, default 0) for the external
+amplifier's hardware gain. The value is passed to `esp_codec_dev` volume
+calibration. Derive it from the amplifier circuit; it is not an additional
+software volume control. Other codec types do not accept this option.
+
 The schema intentionally does not expose codec-specific private register writes.
 If a board needs an analog mux, PA, or PGA quirk, keep that in a board package or
 a codec-dev supported option, not as a hidden generic stack behavior.
@@ -883,7 +888,11 @@ switch controls echo cancellation while leaving other AFE stages active.
   path active.
 - **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/VoIP/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, A zero linear multiplier means silence; **0 dB means unity gain**. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. Positive gain can clip any sample that exceeds the PCM range. Check the ADC
 and pre-processor levels first: AGC after processing cannot recover a waveform
-already clipped by the ADC or software input gain.
+already clipped by the ADC or software input gain. The optional
+`mic_gain.initial_value` defaults to 0 dB and is applied only if no saved value
+exists. Both saved and initial values are clamped to the configured number
+range before they are applied and published. Setup does not replace a saved
+user preference.
 
 ### Audio task lifecycle
 

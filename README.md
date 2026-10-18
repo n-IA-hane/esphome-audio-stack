@@ -512,6 +512,29 @@ mic input before the processor; the software `mic_gain` control scales its
 output. **0 dB is unity gain**, not mute. Speaker volume changes playback and
 must not be used as a substitute for fixing microphone gain.
 
+### Set gains in the order the signal passes through them
+
+1. Check raw microphone and reference levels with the intended speaker volume.
+   If the microphone ADC clips, reduce its hardware gain. Lowering software
+   gain after capture cannot recover those samples. Keep the reference's own
+   channel/gain configuration appropriate for its physical tap.
+2. For an ES8311 and an external amplifier, set `codec.output.pa_gain` from
+   the circuit's gain in dB. It defaults to 0 and is passed to Espressif's
+   hardware calibration, not added as a software boost. Do not copy another
+   board's value. Correcting it can change loudness at the same volume percentage.
+3. Compare the caller's recorded return with AEC off and on, using the same
+   playback, volume and microphone gain. Check actual PCM as well as packet
+   continuity. Account for any configured in-call music ducking.
+4. Set the post-processor Mic Gain with someone speaking near the microphone.
+   Its optional `initial_value` applies only when no saved user value exists;
+   upgrading does not overwrite the previous setting. Check quiet speech,
+   loud speech and simultaneous speech/playback separately.
+
+A quiet return during speaker-only playback is expected with effective AEC.
+It does not prove that nearby speech survives; background hiss alone is not
+a microphone sensitivity test. AEC, input clipping, network loss and speaker
+underruns need different evidence and should not be treated as one fault.
+
 Optional slot-level sensors measure raw input RMS in dBFS while capture is
 active. A less negative value is louder. They help find a silent/reference
 channel while the public microphone continues to deliver a single mono stream.

@@ -12,3 +12,4 @@ examples/secrets.yaml
 *.local.yaml
 build/
 dist/
+test-results/

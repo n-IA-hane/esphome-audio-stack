@@ -18,3 +18,8 @@ sample rates or add audio buffering.
 
 The upstream C++ files retain their GPLv3 license; the Python schema retains
 its MIT license. The original ESPHome license is included in `LICENSE`.
+
+The development adapter also accepts bounded prefixes of PCM blocks larger
+than its input buffer and waits for space during backpressure. These changes
+are separate from task placement. Retiring this provider requires preserving
+large-block progress and stop/reset behavior as well as the scheduling options.
