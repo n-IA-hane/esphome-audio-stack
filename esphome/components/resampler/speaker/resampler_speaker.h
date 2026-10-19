@@ -8,7 +8,7 @@
 #include "esphome/components/speaker/speaker.h"
 
 #include "esphome/core/component.h"
-#include "esphome/components/esp_audio_stack/audio_core_task_utils.h"
+#include "task_compat.h"
 
 #include <freertos/event_groups.h>
 
@@ -16,7 +16,6 @@ namespace esphome::resampler {
 
 class ResamplerSpeaker final : public Component, public speaker::Speaker {
  public:
-  float get_setup_priority() const override { return esphome::setup_priority::DATA; }
   void dump_config() override;
   void setup() override;
   void loop() override;
@@ -41,11 +40,15 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
   void set_volume(float volume) override;
   float get_volume() override { return this->output_speaker_->get_volume(); }
 
-  void set_task_core(BaseType_t core) { this->task_core_ = core; }
-  void set_task_priority(UBaseType_t priority) { this->task_priority_ = priority; }
-
   void set_output_speaker(speaker::Speaker *speaker) { this->output_speaker_ = speaker; }
   void set_task_stack_in_psram(bool task_stack_in_psram) { this->task_stack_in_psram_ = task_stack_in_psram; }
+
+  template<int8_t CORE, uint8_t PRIORITY> void set_task_scheduling() {
+    static_assert(CORE == -1 || (CORE >= 0 && CORE < portNUM_PROCESSORS), "Invalid resampler task core");
+    static_assert(PRIORITY > 0 && PRIORITY < configMAX_PRIORITIES, "Invalid resampler task priority");
+    this->task_core_ = CORE;
+    this->task_priority_ = PRIORITY;
+  }
 
   void set_target_bits_per_sample(uint8_t target_bits_per_sample) {
     this->target_bits_per_sample_ = target_bits_per_sample;
@@ -89,12 +92,7 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
 
   speaker::Speaker *output_speaker_{nullptr};
 
-  void release_task_();
-  TaskHandle_t task_handle_{nullptr};
-  StaticTask_t task_tcb_{};
-  StackType_t *task_stack_{nullptr};
-  BaseType_t task_core_{tskNO_AFFINITY};
-  UBaseType_t task_priority_{1};
+  ScheduledTask<> task_;
 
   audio::AudioStreamInfo target_stream_info_;
 
@@ -108,6 +106,8 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
   uint16_t filters_;
 
   uint8_t target_bits_per_sample_{0};
+  int8_t task_core_{-1};
+  uint8_t task_priority_{1};
 
   bool passthrough_bits_per_sample_{false};
   bool task_stack_in_psram_{false};

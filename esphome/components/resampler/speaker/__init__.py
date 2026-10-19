@@ -5,6 +5,7 @@ from esphome.const import (
     CONF_BITS_PER_SAMPLE,
     CONF_BUFFER_DURATION,
     CONF_FILTERS,
+    CONF_FRAMEWORK,
     CONF_ID,
     CONF_NUM_CHANNELS,
     CONF_OUTPUT_SPEAKER,
@@ -13,24 +14,24 @@ from esphome.const import (
     PLATFORM_ESP32,
 )
 from esphome.core.entity_helpers import inherit_property_from
+import esphome.final_validate as fv
+from esphome.types import ConfigType
+
+from .. import CONF_TAPS, resampler_ns, validate_taps
 
 AUTO_LOAD = ["audio"]
-DEPENDENCIES = ["esp_audio_stack"]
 CODEOWNERS = ["@kahrendt"]
 
-resampler_ns = cg.esphome_ns.namespace("resampler")
 ResamplerSpeaker = resampler_ns.class_(
     "ResamplerSpeaker", cg.Component, speaker.Speaker
 )
 
-CONF_TAPS = "taps"
+PASSTHROUGH = "passthrough"
 CONF_TASK_CORE = "task_core"
 CONF_TASK_PRIORITY = "task_priority"
 
-PASSTHROUGH = "passthrough"
 
-
-def _set_stream_limits(config):
+def _set_stream_limits(config: ConfigType) -> ConfigType:
     audio.set_stream_limits(
         min_bits_per_sample=16,
         max_bits_per_sample=32,
@@ -39,7 +40,7 @@ def _set_stream_limits(config):
     return config
 
 
-def _validate_audio_compatibility(config):
+def _validate_audio_compatibility(config: ConfigType) -> None:
     inherit_property_from(CONF_NUM_CHANNELS, CONF_OUTPUT_SPEAKER)(config)
     inherit_property_from(CONF_SAMPLE_RATE, CONF_OUTPUT_SPEAKER)(config)
 
@@ -60,19 +61,24 @@ def _validate_audio_compatibility(config):
     )(config)
 
 
-def _validate_taps(taps):
-    value = cv.int_range(min=16, max=128)(taps)
-    if value % 4 != 0:
-        raise cv.Invalid("Number of taps must be divisible by 4")
-    return value
-
-
-def _validate_task_core(config):
-    if config.get(CONF_TASK_CORE) == 1 and esp32.get_esp32_variant() not in (
-        esp32.VARIANT_ESP32, esp32.VARIANT_ESP32S3,
-        esp32.VARIANT_ESP32S31, esp32.VARIANT_ESP32P4,
-    ):
-        raise cv.Invalid("task_core: 1 requires a supported dual-core ESP32")
+def _validate_task_core(config: ConfigType) -> ConfigType:
+    if config[CONF_TASK_CORE] != 1:
+        return config
+    esp32.only_on_variant(
+        supported=[
+            esp32.VARIANT_ESP32,
+            esp32.VARIANT_ESP32S3,
+            esp32.VARIANT_ESP32P4,
+            esp32.VARIANT_ESP32H4,
+            esp32.VARIANT_ESP32S31,
+        ],
+        msg_prefix="resampler speaker task_core: 1",
+    )(config)
+    sdkconfig = fv.full_config.get()[PLATFORM_ESP32][CONF_FRAMEWORK][
+        esp32.CONF_SDKCONFIG_OPTIONS
+    ]
+    if sdkconfig.get("CONFIG_FREERTOS_UNICORE") == "y":
+        raise cv.Invalid("task_core: 1 requires FreeRTOS dual-core mode")
     return config
 
 
@@ -88,22 +94,21 @@ CONFIG_SCHEMA = cv.All(
                 CONF_BUFFER_DURATION, default="100ms"
             ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TASK_STACK_IN_PSRAM): psram.validate_task_stack_in_psram,
-            cv.Optional(CONF_TASK_CORE): cv.int_range(min=0, max=1),
+            cv.Optional(CONF_TASK_CORE, default=-1): cv.int_range(min=-1, max=1),
             cv.Optional(CONF_TASK_PRIORITY, default=1): cv.int_range(min=1, max=23),
             cv.Optional(CONF_FILTERS, default=16): cv.int_range(min=2, max=1024),
-            cv.Optional(CONF_TAPS, default=16): _validate_taps,
+            cv.Optional(CONF_TAPS, default=16): validate_taps,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on([PLATFORM_ESP32]),
     _set_stream_limits,
-    _validate_task_core,
 )
 
 
-FINAL_VALIDATE_SCHEMA = _validate_audio_compatibility
+FINAL_VALIDATE_SCHEMA = cv.All(_validate_task_core, _validate_audio_compatibility)
 
 
-async def to_code(config):
+async def to_code(config: ConfigType) -> None:
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await speaker.register_speaker(var, config)
@@ -112,6 +117,11 @@ async def to_code(config):
     cg.add(var.set_output_speaker(output_spkr))
 
     cg.add(var.set_buffer_duration(config[CONF_BUFFER_DURATION]))
+    cg.add(
+        var.set_task_scheduling(
+            cg.TemplateArguments(config[CONF_TASK_CORE], config[CONF_TASK_PRIORITY])
+        )
+    )
 
     if config.get(CONF_TASK_STACK_IN_PSRAM):
         cg.add(var.set_task_stack_in_psram(True))
@@ -125,7 +135,3 @@ async def to_code(config):
 
     cg.add(var.set_filters(config[CONF_FILTERS]))
     cg.add(var.set_taps(config[CONF_TAPS]))
-
-    cg.add(var.set_task_priority(config[CONF_TASK_PRIORITY]))
-    if CONF_TASK_CORE in config:
-        cg.add(var.set_task_core(config[CONF_TASK_CORE]))
