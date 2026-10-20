@@ -51,6 +51,7 @@ class ESPAudioStackSpeaker final : public speaker::Speaker, public Component, pu
   // semaphore count to leak (take N times, give 1 time → never reaches MAX_LISTENERS
   // → speaker never enters STATE_STOPPING → is_playing stays true forever).
   std::atomic<bool> listener_registered_{false};
+  bool parent_requested_{false};
   bool i2s_error_latched_{false};
 };
 

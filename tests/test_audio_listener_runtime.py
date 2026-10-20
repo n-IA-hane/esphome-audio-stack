@@ -40,7 +40,7 @@ struct Parent {
  bool has_i2s_error(){return false;}
  bool register_mic_consumer(void*){assert(ready);++starts;return true;}
  void unregister_mic_consumer(void*){++stops;}
- bool is_running(){return ready;}
+ bool is_running(){return ready;} bool is_starting(){return false;}
  void start_speaker(){assert(ready);++starts;}
  void stop_speaker(){++stops;}
 };
@@ -53,11 +53,11 @@ struct Base {
  void enable_loop_soon_any_context(){loop_enabled=true;}void disable_loop(){loop_enabled=false;}
 };
 struct ESPAudioStackMicrophone:Base {
- std::atomic<uint32_t> active_listeners_{0};
+ std::atomic<uint32_t> active_listeners_{0};bool parent_registered_=false;
  void start();bool release_listener_();void stop();void loop();
 };
 struct ESPAudioStackSpeaker:Base {
- std::atomic<bool> listener_registered_{false};
+ std::atomic<bool> listener_registered_{false};bool parent_requested_=false;
  bool finishing_=false,pause_state_=false,buffered=false;
  uint32_t last_write_ms_=0;std::optional<uint32_t> timeout_{500};
  bool has_buffered_data(){return buffered;}

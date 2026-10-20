@@ -776,6 +776,17 @@ backend's standard-I2S/TDM inputs do not accept PDM microphones.
 
 ## Lifecycle and runtime controls
 
+Hardware startup is asynchronous. Microphone and speaker requests wake the
+existing audio task, which opens the shared codec/I2S path. The ESPHome loop
+continues handling API, UI and automations while the hardware settles. Consumers
+remain in `STARTING` until completion; a stop during startup invalidates that
+request and releases its resources before another start can use them.
+
+Use `on_start` for actions that require the hardware to be ready, rather than
+assuming that `esp_audio_stack.start` returns with a running microphone. No
+fixed delay is needed. `on_idle` retains its stop-request semantics;
+`esp_audio_stack.is_idle` also waits for hardware cleanup to finish.
+
 ### Speaker write contract
 
 `play(data, length, ticks_to_wait)` accepts a prefix of the caller's signed 16-bit
@@ -800,9 +811,10 @@ Runtime state is one of `idle`, `mic`, `speaker`, `duplex`.
 
 | Trigger | Fires when |
 |---|---|
-| `on_start` / `on_idle` | The stack leaves / returns to idle. |
+| `on_start` | Shared hardware startup has completed. |
+| `on_idle` | A stop was requested; cleanup may still be in progress. |
 | `on_state` | Any state change. The new state is passed as a string. |
-| `on_mic_start` / `on_mic_idle` | Capture starts / stops. |
+| `on_mic_start` / `on_mic_idle` | The first microphone consumer attaches / the last detaches. |
 | `on_speaker_start` / `on_speaker_idle` | Playback starts / stops. |
 | `on_amplifier_required` / `on_amplifier_idle` | Speaker-path aliases for GPIO amp control. |
 
@@ -824,7 +836,7 @@ For explicit control, these actions and condition are available:
 
 | Item | Meaning |
 |---|---|
-| `esp_audio_stack.start` | Start the audio path explicitly. |
+| `esp_audio_stack.start` | Request asynchronous hardware startup. |
 | `esp_audio_stack.stop` | Request a stop. |
 | `esp_audio_stack.is_idle` | Condition true when the stack is idle. |
 
@@ -898,11 +910,11 @@ user preference.
 
 The audio task is an internal FreeRTOS task with three properties worth knowing about in the current design:
 
-- **Permanent early creation**. The task is created during component setup and then parks in its outer wait loop until `esp_audio_stack.start` flips `audio_stack_running_`. This reserves the TCB/stack before Wi-Fi/API/VA churn fragments internal RAM.
+- **Permanent early creation**. The task is created during component setup and then parks in its outer wait loop until a start request wakes it. The task opens codec/I2S hardware and reports completion back to the main loop. This reserves the TCB/stack before Wi-Fi/API/VA churn fragments internal RAM.
 - **No task churn; intentional I2S churn**. Once created, the audio task lives
   for the rest of the device's uptime. I2S channels do not:
-  `esp_audio_stack.stop` deletes the IDF TX/RX channel handles after the task
-  parks, so the bus is really stopped. A subsequent `start` reuses the same
+  `esp_audio_stack.stop` requests cleanup; the audio task deletes the IDF TX/RX
+  channel handles after its current frame ends, so the bus is really stopped. A subsequent `start` reuses the same
   TCB/stack and creates fresh `esp_driver_i2s` channels.
 - **In-place reconfigure**. When the linked processor's `frame_spec` changes
   (for example after an AFE mode or graph rebuild), the audio task observes the

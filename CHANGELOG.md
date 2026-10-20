@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Request codec/I2S startup through the existing audio task instead of blocking
+  the ESPHome loop. Readiness, cancellation and cleanup remain tied to the
+  current start request; no additional worker task is created.
+- Keep hardware volume updates on the hardware owner and avoid rebuilding an
+  unchanged codec volume curve. DSP modes and vendor settling delays are unchanged.
+- Explicit start actions now return before hardware readiness; use `on_start`
+  for dependent actions and `esp_audio_stack.is_idle` for completed cleanup.
+
 ## 2026.10.3-dev
 
 ### Dependency consolidation and GMF integration

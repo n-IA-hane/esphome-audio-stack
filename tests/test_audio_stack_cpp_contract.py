@@ -88,6 +88,8 @@ def test_tx_completion_tracking_is_session_scoped() -> None:
     assert stop.index("tx_completion_tracking_active_.store(false") < stop.index(
         "audio_stack_running_.store(false"
     )
+    assert "audio_stack_running_.exchange(false" not in stop
+    assert "wait_audio_task_state_" not in cpp
     assert "tx_completion_tracking_active_.store(true" in enable
     assert "tx_completion_tracking_active_.store(false" in cpp[
         cpp.index("void ESPAudioStack::reset_tx_completion_tracking_") :
@@ -95,7 +97,7 @@ def test_tx_completion_tracking_is_session_scoped() -> None:
     ]
     failure = cpp[
         cpp.index("void ESPAudioStack::fail_tx_completion_tracking_") :
-        cpp.index("bool ESPAudioStack::wait_audio_task_state_")
+        cpp.index("void ESPAudioStack::apply_pending_hardware_volume_")
     ]
     assert "tx_completion_tracking_active_.store(false" in failure
     assert "has_i2s_error_.store(true" in failure

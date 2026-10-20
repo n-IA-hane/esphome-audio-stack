@@ -31,9 +31,11 @@ def test_master_gain_has_one_owner_and_reference_is_not_scaled_twice(tmp_path, h
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <thread>
+void xTaskNotifyGive(void*){}
 #define ESP_LOGD(...) ((void)0)
 #define USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
-struct Codec { float master=-1; void set_output_volume(float value){master=value;} };
+struct Codec { float master=-1; void set_output_volume(float value){master=value;} void set_output_volume_curve(float){} };
 struct Processor {
  const int16_t *reference=nullptr;
  void process(const int16_t*,const int16_t *ref,int16_t*,uint8_t){reference=ref;}
@@ -48,6 +50,10 @@ struct AudioTaskCtx {
 struct ESPAudioStack {
  std::atomic<int32_t> output_volume_q31_{0},master_volume_q31_{0},hot_output_volume_q31_{0};
  std::atomic<float> master_volume_linear_{0},master_volume_public_{0};
+ std::atomic<bool> hardware_volume_dirty_{false},hardware_volume_curve_dirty_{true};
+ std::atomic<float> master_volume_min_db_{-49};
+ void *audio_task_handle_=nullptr;
+ void apply_pending_hardware_volume_();
  Codec codec_backend_; Processor *processor_=nullptr;
  int16_t *direct_aec_ref_=nullptr;bool direct_aec_ref_valid_=false;
  void update_hot_output_volume_();
@@ -57,6 +63,7 @@ struct ESPAudioStack {
 '''
     code += method(stack, "[[maybe_unused]] int32_t multiply_q31(") + "\n"
     code += method(stack, "void ESPAudioStack::update_hot_output_volume_(") + "\n"
+    code += method(stack, "void ESPAudioStack::apply_pending_hardware_volume_(") + "\n"
     code += method(pipeline, "void ESPAudioStack::fill_mono_aec_reference_(") + "\n"
     code += method(pipeline, "void ESPAudioStack::run_processor_(") + "\n"
     code += r'''
@@ -67,7 +74,9 @@ int main(){
  stack.update_hot_output_volume_();
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_OUTPUT_CODEC
  assert(stack.hot_output_volume_q31_==(1<<29));
- assert(stack.codec_backend_.master==.75f);
+ assert(stack.codec_backend_.master==-1); // main loop never writes the codec
+ std::thread worker([&]{stack.apply_pending_hardware_volume_();});worker.join();
+ assert(stack.codec_backend_.master==.75f && !stack.hardware_volume_dirty_);
 #else
  assert(stack.hot_output_volume_q31_==(1<<28));
  assert(stack.codec_backend_.master==-1);
@@ -92,7 +101,7 @@ int main(){
     source.write_text(code)
     binary = tmp_path / "volume_reference"
     flags = ["-DUSE_ESP_AUDIO_STACK_HARDWARE_OUTPUT_CODEC", "-DUSE_ESP_AUDIO_STACK_HARDWARE_CODEC"] if hardware_master else []
-    subprocess.run(["g++", "-std=c++17", *flags, str(source), "-o", str(binary)],
+    subprocess.run(["g++", "-std=c++17", "-pthread", *flags, str(source), "-o", str(binary)],
                    check=True, capture_output=True, text=True)
     result = subprocess.run([str(binary)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -106,3 +115,40 @@ def test_software_reference_is_taken_after_tx_volume_and_before_processor_dispat
     dispatch = method(pipeline, "void ESPAudioStack::process_aec_and_callbacks_(")
     reference = dispatch.index("this->fill_mono_aec_reference_(ctx)")
     assert reference < dispatch.index("this->run_processor_(ctx)", reference)
+
+
+def test_volume_only_updates_do_not_reallocate_codec_curve(tmp_path):
+    source = (ROOT / 'esp_audio_stack.cpp').read_text()
+    code = r'''
+#include <cassert>
+#include <atomic>
+#define USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+struct Codec {
+ unsigned curves=0,volumes=0;bool fail=false;float applied=0;
+ void set_output_volume_curve(float value){++curves;if(!fail)applied=value;}
+ void set_output_volume(float){++volumes;}
+};
+struct ESPAudioStack {
+ std::atomic<bool> hardware_volume_dirty_{true},hardware_volume_curve_dirty_{true};
+ std::atomic<float> master_volume_min_db_{-49},master_volume_public_{.5};
+ Codec codec_backend_;
+ void apply_pending_hardware_volume_();
+};
+''' + method(source, 'void ESPAudioStack::apply_pending_hardware_volume_(') + r'''
+int main(){
+ ESPAudioStack s;s.apply_pending_hardware_volume_();assert(s.codec_backend_.curves==1);
+ for(unsigned i=0;i<100;++i){s.hardware_volume_dirty_=true;s.apply_pending_hardware_volume_();}
+ assert(s.codec_backend_.curves==1 && s.codec_backend_.volumes==101);
+ // A failed configuration must not prevent an explicit retry of the same value.
+ s.master_volume_min_db_=-30;s.codec_backend_.fail=true;
+ s.hardware_volume_curve_dirty_=true;s.hardware_volume_dirty_=true;s.apply_pending_hardware_volume_();
+ assert(s.codec_backend_.applied==-49);
+ s.codec_backend_.fail=false;s.hardware_volume_curve_dirty_=true;s.hardware_volume_dirty_=true;
+ s.apply_pending_hardware_volume_();assert(s.codec_backend_.applied==-30 && s.codec_backend_.curves==3);
+}
+'''
+    cpp = tmp_path / 'curve.cpp'
+    exe = tmp_path / 'curve'
+    cpp.write_text(code)
+    subprocess.run(['g++', '-std=c++17', str(cpp), '-o', str(exe)], check=True, capture_output=True, text=True)
+    subprocess.run([str(exe)], check=True, capture_output=True, text=True)

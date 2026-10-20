@@ -125,7 +125,8 @@ void ESPAudioStack::set_master_volume_min_db(float db) {
   const float previous = this->master_volume_min_db_;
   this->master_volume_min_db_ = db;
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-  this->codec_backend_.set_output_volume_curve(db);
+  this->hardware_volume_curve_dirty_.store(true, std::memory_order_release);
+  this->hardware_volume_dirty_.store(true, std::memory_order_release);
 #endif
   if (previous != db)
     this->set_master_volume(this->master_volume_linear_.load(std::memory_order_relaxed));
@@ -187,7 +188,8 @@ void ESPAudioStack::update_hot_output_volume_() {
   const int32_t previous = this->hot_output_volume_q31_.exchange(combined_q31, std::memory_order_relaxed);
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   if (hardware_master) {
-    this->codec_backend_.set_output_volume(public_master);
+    this->hardware_volume_dirty_.store(true, std::memory_order_release);
+    if (this->audio_task_handle_ != nullptr) xTaskNotifyGive(this->audio_task_handle_);
   }
 #endif
   if (previous != combined_q31) {
@@ -470,20 +472,10 @@ void ESPAudioStack::request_audio_preallocation_() {
 
 void ESPAudioStack::loop() {
   this->sync_processor_background_consumer_();
-
+  this->finish_audio_lifecycle_();
   if (!this->audio_stack_running_.load(std::memory_order_relaxed) &&
       this->audio_task_idle_.load(std::memory_order_relaxed)) {
     this->request_audio_preallocation_();
-  }
-
-  // Pick up the deferred I2S release queued by stop(). The task may still be
-  // blocked inside a codec/I2S transfer for the current frame, so delete
-  // channels only after it has parked in the outer wait loop.
-  if (this->teardown_pending_.load(std::memory_order_relaxed) &&
-      this->audio_task_idle_.load(std::memory_order_relaxed)) {
-    this->deinit_i2s_();
-    this->teardown_pending_.store(false, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "Audio stack stopped");
   }
 }
 
@@ -1472,47 +1464,105 @@ void ESPAudioStack::fail_tx_completion_tracking_(const char *reason) {
   this->teardown_pending_.store(true, std::memory_order_release);
 }
 
-bool ESPAudioStack::wait_audio_task_state_(bool idle, uint32_t timeout_ms) {
-  if (this->audio_task_idle_.load(std::memory_order_relaxed) == idle) {
-    return true;
+void ESPAudioStack::apply_pending_hardware_volume_() {
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  if (!this->hardware_volume_dirty_.exchange(false, std::memory_order_acq_rel)) return;
+  // Only a curve configuration request rebuilds the map. Ordinary volume
+  // changes must not allocate; an explicit retry still reaches the backend.
+  if (this->hardware_volume_curve_dirty_.exchange(false, std::memory_order_acq_rel))
+    this->codec_backend_.set_output_volume_curve(this->master_volume_min_db_.load(std::memory_order_relaxed));
+  this->codec_backend_.set_output_volume(this->master_volume_public_.load(std::memory_order_relaxed));
+#endif
+}
+
+void ESPAudioStack::service_audio_lifecycle_() {
+  // Called only by the permanent audio task, outside audio_session_. Hardware
+  // startup, cancellation and teardown cannot overlap one another.
+  auto phase = this->start_phase_.load(std::memory_order_acquire);
+  const bool session_failed = phase == AudioStartPhase::RUNNING &&
+      !this->audio_stack_running_.load(std::memory_order_acquire) &&
+      this->start_requested_.load(std::memory_order_acquire) &&
+      this->ready_generation_.load(std::memory_order_acquire) ==
+          this->start_generation_.load(std::memory_order_acquire);
+  const bool abandoned_ready = phase == AudioStartPhase::READY &&
+      (!this->start_requested_.load(std::memory_order_acquire) ||
+       this->ready_generation_.load(std::memory_order_acquire) !=
+           this->start_generation_.load(std::memory_order_acquire));
+  if (this->teardown_pending_.load(std::memory_order_acquire) || abandoned_ready || session_failed) {
+    this->audio_task_idle_.store(false, std::memory_order_release);
+    this->deinit_i2s_();
+    this->teardown_pending_.store(false, std::memory_order_release);
+    phase = session_failed ? AudioStartPhase::FAILED : AudioStartPhase::STOPPED;
+    this->start_phase_.store(phase, std::memory_order_release);
+    this->lifecycle_events_.fetch_add(1, std::memory_order_release);
+    this->enable_loop_soon_any_context();
   }
-  TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
-  ulTaskNotifyTake(pdTRUE, 0);
-  this->audio_state_waiter_.store(waiter, std::memory_order_release);
-  if (this->audio_task_idle_.load(std::memory_order_relaxed) == idle) {
-    this->audio_state_waiter_.store(nullptr, std::memory_order_release);
-    return true;
+  if (!this->start_requested_.load(std::memory_order_acquire)) return;
+  const uint32_t generation = this->start_generation_.load(std::memory_order_acquire);
+  if (phase == AudioStartPhase::READY || phase == AudioStartPhase::COMMITTING || phase == AudioStartPhase::RUNNING ||
+      (phase == AudioStartPhase::FAILED && this->ready_generation_.load(std::memory_order_acquire) == generation)) return;
+
+  this->audio_task_idle_.store(false, std::memory_order_release);
+  this->start_phase_.store(AudioStartPhase::STARTING, std::memory_order_release);
+  this->apply_pending_hardware_volume_();
+  const bool opened = this->enable_i2s_channels_();
+  const bool current = this->start_requested_.load(std::memory_order_acquire) &&
+      generation == this->start_generation_.load(std::memory_order_acquire);
+  if (!opened || !current) {
+    this->deinit_i2s_();
+    this->teardown_pending_.store(false, std::memory_order_release);
+    this->has_i2s_error_.store(!opened, std::memory_order_release);
+    phase = opened ? AudioStartPhase::STOPPED : AudioStartPhase::FAILED;
+  } else {
+    this->hardware_volume_dirty_.store(true, std::memory_order_release);
+    this->apply_pending_hardware_volume_();
+    this->has_i2s_error_.store(false, std::memory_order_release);
+    phase = AudioStartPhase::READY;
   }
-  const bool ok = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(timeout_ms)) > 0 ||
-                  this->audio_task_idle_.load(std::memory_order_relaxed) == idle;
-  this->audio_state_waiter_.store(nullptr, std::memory_order_release);
-  return ok;
+  this->ready_generation_.store(generation, std::memory_order_release);
+  this->start_phase_.store(phase, std::memory_order_release);
+  this->lifecycle_events_.fetch_add(1, std::memory_order_release);
+  this->enable_loop_soon_any_context();
+}
+
+void ESPAudioStack::finish_audio_lifecycle_() {
+  const uint32_t events = this->lifecycle_events_.load(std::memory_order_acquire);
+  if (events == this->handled_lifecycle_events_) return;
+  this->handled_lifecycle_events_ = events;
+  const auto phase = this->start_phase_.load(std::memory_order_acquire);
+  const uint32_t generation = this->ready_generation_.load(std::memory_order_acquire);
+  const bool current = generation == this->start_generation_.load(std::memory_order_acquire) &&
+      this->start_requested_.load(std::memory_order_acquire);
+  if (phase == AudioStartPhase::READY && current) {
+    auto expected = AudioStartPhase::READY;
+    if (!this->start_phase_.compare_exchange_strong(expected, AudioStartPhase::COMMITTING,
+                                                   std::memory_order_acq_rel)) return;
+    this->audio_stack_running_.store(true, std::memory_order_release);
+    this->start_phase_.store(AudioStartPhase::RUNNING, std::memory_order_release);
+    // Preserve producer-before-processor startup: AFE resume may need input
+    // from the audio task. Hardware is already ready at this point.
+    xTaskNotifyGive(this->audio_task_handle_);
+#ifdef USE_AUDIO_PROCESSOR
+    if (this->processor_ != nullptr && this->has_mic_consumers_.load(std::memory_order_acquire))
+      this->processor_->set_processing_active(true);
+#endif
+    this->start_callback_.call();
+    // A user callback may have cancelled or superseded this start.
+    if (this->start_requested_.load(std::memory_order_acquire) &&
+        generation == this->start_generation_.load(std::memory_order_acquire)) {
+      if (this->speaker_requested_.load(std::memory_order_acquire)) this->start_speaker();
+      ESP_LOGI(TAG, "Audio stack started");
+    }
+  } else if (phase == AudioStartPhase::FAILED && current) {
+    this->start_requested_.store(false, std::memory_order_release);
+    this->has_i2s_error_.store(true, std::memory_order_release);
+  }
+  // Child components are woken by completion, not by periodic STARTING retries.
+  this->lifecycle_callback_.call();
 }
 
 void ESPAudioStack::start() {
-  if (this->audio_stack_running_.load(std::memory_order_relaxed)) {
-    return;
-  }
-
-  // Complete any deferred close from the previous session before reopening.
-  // Reusing codec/I2S handles that the audio task has already parked during a
-  // stop/start call cycle can leave TX in a half-closed state on the next
-  // playback or an active call.
-  if (this->teardown_pending_.load(std::memory_order_relaxed)) {
-    if (this->wait_audio_task_idle_(250)) {
-      this->deinit_i2s_();
-      this->teardown_pending_.store(false, std::memory_order_relaxed);
-      ESP_LOGI(TAG, "Completed pending audio stack teardown before restart");
-    } else {
-      ESP_LOGW(TAG, "Audio stack restart refused while teardown is still pending");
-      return;
-    }
-  }
-
-  ESP_LOGI(TAG, "Starting audio stack...");
-
-  // Reuse the task created by setup(), or create it lazily if start() is
-  // entered before a task has been allocated.
+  if (this->start_requested_.load(std::memory_order_acquire) || this->is_running()) return;
   if (this->audio_task_handle_ == nullptr) {
     const BaseType_t core = this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY;
     if (!start_pinned_task(audio_task, "audio_stack", this->task_stack_size_, this, this->task_priority_, core,
@@ -1523,46 +1573,22 @@ void ESPAudioStack::start() {
     }
   }
 
-  // I2S allocation happens here, not in setup(): start() owns both driver
-  // channel creation and codec open while stop() tears the bus back down.
+  ESP_LOGI(TAG, "Audio stack startup requested");
+  this->start_generation_.fetch_add(1, std::memory_order_acq_rel);
+  this->start_requested_.store(true, std::memory_order_release);
   this->request_audio_preallocation_();
-  if (!this->enable_i2s_channels_()) {
-    ESP_LOGE(TAG, "Failed to start I2S");
-    return;
-  }
-
-  this->has_i2s_error_.store(false, std::memory_order_relaxed);
-  // start_speaker()/stop_speaker() own speaker_running_. A mic-only start
-  // still writes silence to TX to keep the full-duplex bus clocked, but it must not
-  // make the component look like active playback; otherwise the last mic
-  // consumer leaving would fail to park the pipeline.
-
-  // Wake the permanent audio task (created once in setup()).
-  this->audio_stack_running_.store(true, std::memory_order_relaxed);
-  if (this->audio_task_handle_ != nullptr) {
-    xTaskNotifyGive(this->audio_task_handle_);
-  }
-
-#ifdef USE_AUDIO_PROCESSOR
-  if (this->use_stereo_aec_ref_) {
-    ESP_LOGD(TAG, "ES8311 digital feedback - reference is sample-aligned");
-  }
-  if (this->use_tdm_ref_) {
-    ESP_LOGD(TAG, "TDM hardware reference - slot %u is echo ref", this->tdm_ref_slot_);
-  }
-  if (this->processor_ != nullptr && this->has_mic_consumers_.load(std::memory_order_relaxed)) {
-    this->processor_->set_processing_active(true);
-  }
-#endif
-
-  this->start_callback_.call();
-  ESP_LOGI(TAG, "Audio stack started");
+  xTaskNotifyGive(this->audio_task_handle_);
 }
 
 void ESPAudioStack::stop() {
-  if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
-    return;
-  }
+  const bool requested = this->start_requested_.exchange(false, std::memory_order_acq_rel);
+  const bool running = this->audio_stack_running_.load(std::memory_order_acquire);
+  if (!requested && !running) return;
+  // Publish the cleanup barrier before user callbacks can inspect idle or
+  // request another start, including cancellation before hardware has opened.
+  this->teardown_pending_.store(true, std::memory_order_release);
+  this->start_generation_.fetch_add(1, std::memory_order_acq_rel);
+  this->speaker_requested_.store(false, std::memory_order_release);
 
   ESP_LOGI(TAG, "Stopping audio stack (deferred)");
 
@@ -1586,10 +1612,8 @@ void ESPAudioStack::stop() {
   this->audio_stack_running_.store(false, std::memory_order_relaxed);
   this->idle_callback_.call();
 
-  // Defer I2S deletion to loop(): polling audio_task_idle_ here would block
-  // the main task for up to 600 ms (often >60 ms), starving network/UI/LVGL.
-  // loop() picks this up on the next tick once the audio task has parked.
-  this->teardown_pending_.store(true, std::memory_order_relaxed);
+  // The audio task closes I2S after the current frame or pending open completes.
+  if (this->audio_task_handle_ != nullptr) xTaskNotifyGive(this->audio_task_handle_);
 }
 
 bool ESPAudioStack::register_mic_consumer(void *token) {
@@ -1683,7 +1707,7 @@ void ESPAudioStack::unregister_mic_consumer(void *token) {
 #endif
     // If no playback either, park the audio task and delete I2S channels once
     // the task is idle.
-    if (!this->speaker_running_.load(std::memory_order_relaxed)) {
+    if (!this->speaker_requested_.load(std::memory_order_acquire)) {
       ESP_LOGI(TAG, "Audio stack going idle (no consumers, no playback)");
       this->stop();
     }
@@ -1694,11 +1718,12 @@ void ESPAudioStack::unregister_mic_consumer(void *token) {
 }
 
 void ESPAudioStack::start_speaker() {
+  this->speaker_requested_.store(true, std::memory_order_release);
   if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
     this->start();
   }
   if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
-    ESP_LOGW(TAG, "Speaker start refused: audio stack did not enter RUNNING");
+    // The speaker remains STARTING until the shared hardware completion event.
     return;
   }
   if (!this->speaker_running_.load(std::memory_order_relaxed)) {
@@ -1716,6 +1741,7 @@ void ESPAudioStack::start_speaker() {
 }
 
 void ESPAudioStack::stop_speaker() {
+  this->speaker_requested_.store(false, std::memory_order_release);
   if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
     this->speaker_idle_callback_.call();
     this->update_runtime_state_();

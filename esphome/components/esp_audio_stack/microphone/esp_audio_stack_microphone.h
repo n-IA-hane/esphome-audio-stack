@@ -35,6 +35,7 @@ class ESPAudioStackMicrophone final : public microphone::Microphone, public Comp
   // Valid before setup(), so early capture/stop automations remain balanced.
   std::atomic<uint32_t> active_listeners_{0};
   bool release_listener_();
+  bool parent_registered_{false};
   bool i2s_error_latched_{false};
 };
 

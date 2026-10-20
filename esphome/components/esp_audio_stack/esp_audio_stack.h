@@ -40,6 +40,8 @@
 
 namespace esphome::esp_audio_stack {
 
+enum class AudioStartPhase : uint8_t { STOPPED, STARTING, READY, COMMITTING, RUNNING, FAILED };
+
 // Maximum listener count for microphone/speaker reference counting
 static constexpr UBaseType_t MAX_LISTENERS = 16;
 
@@ -377,14 +379,20 @@ class ESPAudioStack final : public Component {
   bool is_speaker_paused() const { return this->speaker_paused_.load(std::memory_order_relaxed); }
 
   // Audio stack lifecycle control
-  void start();  // Start both mic and speaker
+  void start();  // Request shared hardware startup without blocking the caller
+  bool is_starting() const { return this->start_requested_.load(std::memory_order_acquire) && !this->is_running(); }
+  template<typename F> void add_on_lifecycle_callback(F &&callback) {
+    this->lifecycle_callback_.add(std::forward<F>(callback));
+  }
   void stop();   // Stop both
 
   bool is_running() const { return this->audio_stack_running_.load(std::memory_order_relaxed); }
   bool is_idle() const {
-    return !this->audio_stack_running_.load(std::memory_order_relaxed) &&
+    return !this->start_requested_.load(std::memory_order_acquire) &&
+           !this->audio_stack_running_.load(std::memory_order_relaxed) &&
            this->audio_task_idle_.load(std::memory_order_relaxed) &&
-           !this->teardown_pending_.load(std::memory_order_relaxed);
+           !this->teardown_pending_.load(std::memory_order_relaxed) &&
+           this->i2s_hardware_state_.load(std::memory_order_acquire) == static_cast<uint8_t>(I2SHardwareState::UNPREPARED);
   }
   bool has_i2s_error() const { return this->has_i2s_error_.load(std::memory_order_relaxed); }
   template<typename F> void add_on_start_callback(F &&callback) {
@@ -476,6 +484,9 @@ class ESPAudioStack final : public Component {
   // cycle. Created once in setup(), never destroyed, so subsequent cycles can't trip
   // a FreeRTOS xTaskCreate race on a lingering TCB.
   void audio_task_();
+  void service_audio_lifecycle_();
+  void finish_audio_lifecycle_();
+  void apply_pending_hardware_volume_();
   // One audio session: populate ctx, enter the processing loop, and return when
   // stop() flips audio_stack_running_ off or the processor's frame_spec changes.
   void audio_session_();
@@ -625,8 +636,6 @@ class ESPAudioStack final : public Component {
 #ifdef USE_AUDIO_PROCESSOR
   void run_processor_(AudioTaskCtx &ctx);
 #endif
-  bool wait_audio_task_state_(bool idle, uint32_t timeout_ms);
-  bool wait_audio_task_idle_(uint32_t timeout_ms) { return this->wait_audio_task_state_(true, timeout_ms); }
 
   struct TxCompletionRecord {
     uint32_t real_frames{0};
@@ -724,6 +733,18 @@ class ESPAudioStack final : public Component {
 
   // State
   std::atomic<bool> audio_stack_running_{false};
+  // Requests originate in the component loop. Only the permanent audio task
+  // opens/closes I2S; READY is committed back on the main loop before callbacks.
+  std::atomic<bool> start_requested_{false};
+  std::atomic<bool> speaker_requested_{false};
+  std::atomic<AudioStartPhase> start_phase_{AudioStartPhase::STOPPED};
+  std::atomic<uint32_t> start_generation_{0};
+  std::atomic<uint32_t> ready_generation_{0};
+  std::atomic<uint32_t> lifecycle_events_{0};
+  uint32_t handled_lifecycle_events_{0};
+  std::atomic<bool> hardware_volume_dirty_{true};
+  std::atomic<bool> hardware_volume_curve_dirty_{true};
+  LazyCallbackManager<void()> lifecycle_callback_;
   // Cached presence flag read by audio_task_ on the hot path; kept in sync
   // with mic_consumers_ (below) under mic_consumers_mutex_ on register/unregister.
   std::atomic<bool> has_mic_consumers_{false};
@@ -745,10 +766,8 @@ class ESPAudioStack final : public Component {
   LazyCallbackManager<void()> speaker_start_callback_;
   LazyCallbackManager<void()> speaker_idle_callback_;
   // audio_task_idle_: true while the task is parked in its outer wait loop
-  //                   (not owning I2S). Waiters use audio_state_waiter_ instead
-  //                   of polling when maintenance needs a specific task state.
+  // Hardware readiness and teardown are tracked separately from task activity.
   std::atomic<bool> audio_task_idle_{true};
-  std::atomic<TaskHandle_t> audio_state_waiter_{nullptr};
   TaskHandle_t audio_task_handle_{nullptr};
 
   // Cross-thread buffer operation request (main thread -> audio task, avoids concurrent ring buffer access)
@@ -862,7 +881,7 @@ class ESPAudioStack final : public Component {
   std::atomic<int32_t> output_volume_q31_{INT32_MAX};      // media_player/speaker abstraction volume
   std::atomic<int32_t> master_volume_q31_{INT32_MAX};      // board master volume
   std::atomic<float> master_volume_linear_{1.0f};          // unclipped user value for hardware codec volume APIs
-  float master_volume_min_db_{-49.0f};                     // 0..100% master curve floor; 0% remains hard mute
+  std::atomic<float> master_volume_min_db_{-49.0f};                     // 0..100% master curve floor; 0% remains hard mute
   void *mic_alc_handle_{nullptr};
   int8_t mic_alc_gain_db_{0};
   bool use_stereo_aec_ref_{false};  // ES8311 digital feedback: RX stereo with L=mic, R=ref

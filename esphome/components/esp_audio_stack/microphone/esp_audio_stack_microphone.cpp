@@ -15,6 +15,8 @@ static const char *const TAG = "audio_stack.mic";
 void ESPAudioStackMicrophone::setup() {
   ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack Microphone...");
 
+  this->parent_->add_on_lifecycle_callback([this]() { this->enable_loop_soon_any_context(); });
+
   // Configure audio stream info for 16-bit mono PCM at output rate
   // When rate conversion is active, mic delivers data at output_sample_rate (e.g. 16 kHz).
   // AudioStreamInfo constructor: (bits_per_sample, channels, sample_rate)
@@ -136,19 +138,27 @@ void ESPAudioStackMicrophone::loop() {
         break;
       }
       if (this->active_listeners_.load(std::memory_order_acquire) == 0) {
+        if (this->parent_registered_) this->parent_->unregister_mic_consumer(this);
+        this->parent_registered_ = false;
         this->state_ = microphone::STATE_STOPPED;
         break;
       }
       ESP_LOGI(TAG, "Microphone started");
-      if (!this->parent_->register_mic_consumer(this)) {
+      if (!this->parent_registered_ && !this->parent_->register_mic_consumer(this)) {
         ESP_LOGW(TAG, "Parent audio stack refused mic consumer registration");
         this->release_listener_();
         this->state_ = microphone::STATE_STOPPED;
         break;
       }
+      this->parent_registered_ = true;
+      if (this->parent_->is_starting()) {
+        this->disable_loop();
+        break;
+      }
       if (!this->parent_->is_running()) {
         ESP_LOGW(TAG, "Parent audio stack failed to start; aborting microphone start");
         this->parent_->unregister_mic_consumer(this);
+        this->parent_registered_ = false;
         this->release_listener_();
         this->state_ = microphone::STATE_STOPPED;
         break;
@@ -162,6 +172,7 @@ void ESPAudioStackMicrophone::loop() {
     case microphone::STATE_STOPPING:
       ESP_LOGI(TAG, "Microphone stopped");
       this->parent_->unregister_mic_consumer(this);
+      this->parent_registered_ = false;
       this->state_ = microphone::STATE_STOPPED;
       break;
 

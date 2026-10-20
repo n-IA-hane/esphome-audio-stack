@@ -482,27 +482,26 @@ void ESPAudioStack::audio_task(void *param) {
 
 void ESPAudioStack::audio_task_() {
   // Component lifetime is process-wide (no destructor in ESPHome), so
-  // this task lives forever; stop()/start() just toggle audio_stack_running_
-  // to park/wake the inner session loop.
+  // this task owns hardware initialization, sessions and teardown. Commands
+  // and completion events park/wake it without a second task or periodic retry.
   while (true) {
     this->audio_task_idle_.store(true, std::memory_order_relaxed);
-    TaskHandle_t waiter = this->audio_state_waiter_.load(std::memory_order_acquire);
-    if (waiter != nullptr) {
-      xTaskNotifyGive(waiter);
-    }
     if (this->prealloc_requested_.exchange(false, std::memory_order_acq_rel)) {
       this->preallocate_audio_buffers_from_task_();
     }
     this->service_speaker_reset_();
-    if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
+    this->service_audio_lifecycle_();
+    this->audio_task_idle_.store(true, std::memory_order_release);
+    if (!this->audio_stack_running_.load(std::memory_order_acquire) ||
+        this->start_phase_.load(std::memory_order_acquire) != AudioStartPhase::RUNNING) {
+      // A cancellation followed by another start can supersede a slow open.
+      // Service that new request immediately, without losing its notification.
+      if (this->start_requested_.load(std::memory_order_acquire) &&
+          this->start_phase_.load(std::memory_order_acquire) == AudioStartPhase::STOPPED) continue;
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       continue;
     }
     this->audio_task_idle_.store(false, std::memory_order_relaxed);
-    waiter = this->audio_state_waiter_.load(std::memory_order_acquire);
-    if (waiter != nullptr) {
-      xTaskNotifyGive(waiter);
-    }
 
     // Run one audio session. Returns on stop() (audio_stack_running_ cleared)
     // or on processor frame_spec change (session restarts in the next outer
@@ -756,6 +755,7 @@ void ESPAudioStack::audio_session_() {
 #endif
     // Service ring buffer operations requested by main thread
     this->service_speaker_reset_();
+    this->apply_pending_hardware_volume_();
     this->drain_tx_completion_events_();
     // Reset per-frame state
     ctx.output_buffer = nullptr;

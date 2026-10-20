@@ -19,6 +19,8 @@ void ESPAudioStackSpeaker::setup() {
   this->audio_stream_info_ =
       audio::AudioStreamInfo(16, this->parent_->get_speaker_channels(), this->parent_->get_sample_rate());
 
+  this->parent_->add_on_lifecycle_callback([this]() { this->enable_loop_soon_any_context(); });
+
   // Forward frame-played notifications from I2S audio task to mixer callbacks.
   // Without this, mixer source speakers can't track pending_playback_frames.
   if (!this->parent_->add_speaker_output_callback(ESPAudioStackSpeaker::speaker_output_callback, this)) {
@@ -205,12 +207,23 @@ void ESPAudioStackSpeaker::loop() {
         break;
       }
       if (!this->listener_registered_.load(std::memory_order_acquire)) {
+        if (this->parent_requested_) this->parent_->stop_speaker();
+        this->parent_requested_ = false;
         this->state_ = speaker::STATE_STOPPED;
         break;
       }
-      this->parent_->start_speaker();
+      if (!this->parent_requested_) {
+        this->parent_->start_speaker();
+        this->parent_requested_ = true;
+      }
+      if (this->parent_->is_starting()) {
+        this->disable_loop();
+        break;
+      }
       if (!this->parent_->is_running()) {
         ESP_LOGW(TAG, "Parent audio stack failed to start; aborting speaker start");
+        this->parent_->stop_speaker();
+        this->parent_requested_ = false;
         this->stop();
         this->state_ = speaker::STATE_STOPPED;
         break;
@@ -231,6 +244,7 @@ void ESPAudioStackSpeaker::loop() {
 
     case speaker::STATE_STOPPING:
       this->parent_->stop_speaker();
+      this->parent_requested_ = false;
       this->state_ = speaker::STATE_STOPPED;
       break;
 
