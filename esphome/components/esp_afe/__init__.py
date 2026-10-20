@@ -302,8 +302,8 @@ async def to_code(config):
         add_idf_component(
             name="espressif/gmf_ai_audio",
             repo="https://github.com/n-IA-hane/esp-gmf.git",
-            # Pin immediate external PCM delivery and the existing P4 stack placement.
-            # An older lock must not retain the input-paced output bridge.
+            # Keep ESP-SR 2.6.0: upstream GMF 1.1.1 still requires ESP-SR 2.5.*.
+            # The direct manager path uses only official runtime APIs.
             ref="b1e077aa5fd34e937752712f94b1a515d459b116",
             path="elements/gmf_ai_audio",
         )

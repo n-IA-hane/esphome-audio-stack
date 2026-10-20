@@ -11,7 +11,8 @@ audio-processor interface used by `esp_audio_stack`.
 It provides AEC, noise suppression, VAD, AGC and optional dual-mic Speech
 Enhancement/BSS.
 
-Single- and dual-microphone profiles use the GMF AFE manager/pipeline.
+Single- and dual-microphone profiles use the GMF AFE manager directly through
+its read and result callbacks.
 Input staging assembles ESP-SR processing blocks, while an output byte stream
 retains partial reads independently of the hardware audio frame.
 

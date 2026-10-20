@@ -861,7 +861,7 @@ switch controls echo cancellation while leaving other AFE stages active.
 - **Task Priority**: 19 (above lwIP at 18, below WiFi at 23). Configurable via `task_priority` YAML option.
 - **Core Affinity**: Pinned to Core 0 by default for the non-network realtime
   I2S bridge. The dual-mic GMF AFE path normally keeps manager feed on Core 0
-  and manager fetch/pipeline work on Core 1. Other consumers may still run on
+  and manager fetch on Core 1. Other consumers may still run on
   either core. `task_core` is configurable, but change it only from measured
   contention/deadline evidence.
 - **Processor Surface**: Mono, stereo and TDM processor modes all keep callbacks on the processed surface. Mono software-reference mode zero-fills the reference when playback is idle instead of switching around the processor.

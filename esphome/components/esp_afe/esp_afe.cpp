@@ -9,9 +9,7 @@
 #include "esphome/core/log.h"
 
 #include <esp_heap_caps.h>
-#if defined(USE_ESP_AFE_GMF_PATH) && !defined(CLANG_TIDY)
-#include <esp_gmf_obj.h>
-#endif
+#include <esp_err.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -403,85 +401,6 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     afe_config_free(cfg);
     return false;
   }
-  // DEFAULT_GMF_AFE_CFG uses C designated initializers in an order GCC rejects
-  // in C++ mode, so keep the same official defaults but initialize in struct
-  // declaration order.
-  esp_gmf_afe_cfg_t gmf_afe_cfg{};
-  gmf_afe_cfg.afe_manager = manager;
-  // ESPHome handles Micro Wake Word and Voice Assistant state externally. Keep
-  // the official AFE element's output latency at zero so the ESPHome-facing
-  // bridge preserves the processor cadence expected by microphone consumers.
-  gmf_afe_cfg.delay_samples = 0;
-  gmf_afe_cfg.models = nullptr;
-  gmf_afe_cfg.wakeup_time = ESP_GMF_AFE_DEFAULT_WAKEUP_TIME_MS;
-  gmf_afe_cfg.wakeup_end = ESP_GMF_AFE_DEFAULT_WAKEUP_END_MS;
-  gmf_afe_cfg.vcmd_detect_en = false;
-  gmf_afe_cfg.vcmd_timeout = ESP_GMF_AFE_DEFAULT_VCMD_TIMEOUT_MS;
-  gmf_afe_cfg.mn_language = "cn";
-  gmf_afe_cfg.event_cb = &EspAfe::gmf_event_cb_;
-  gmf_afe_cfg.event_ctx = this;
-  esp_gmf_obj_handle_t element = nullptr;
-  esp_gmf_err_t element_ret = esp_gmf_afe_init(&gmf_afe_cfg, &element);
-  if (element_ret != ESP_GMF_ERR_OK || element == nullptr) {
-    ESP_LOGE(TAG, "esp_gmf_afe_init failed (ret=%d)", static_cast<int>(element_ret));
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-
-  const esp_gmf_err_t output_ret = esp_gmf_afe_set_output_callback(
-      static_cast<esp_gmf_element_handle_t>(element), &EspAfe::gmf_processed_output_cb_, this);
-  if (output_ret != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "Failed to bind realtime AFE output (ret=%d)", static_cast<int>(output_ret));
-    esp_gmf_obj_delete(element);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-
-  esp_gmf_pipeline_handle_t pipeline = nullptr;
-  esp_gmf_err_t pipeline_ret = esp_gmf_pipeline_create(&pipeline);
-  if (pipeline_ret != ESP_GMF_ERR_OK || pipeline == nullptr) {
-    ESP_LOGE(TAG, "esp_gmf_pipeline_create failed (ret=%d)", static_cast<int>(pipeline_ret));
-    esp_gmf_obj_delete(element);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-  pipeline_ret = esp_gmf_pipeline_register_el(pipeline, static_cast<esp_gmf_element_handle_t>(element));
-  if (pipeline_ret != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "esp_gmf_pipeline_register_el failed (ret=%d)", static_cast<int>(pipeline_ret));
-    esp_gmf_obj_delete(element);
-    esp_gmf_pipeline_destroy(pipeline);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-
-  esp_gmf_task_cfg_t task_cfg = DEFAULT_ESP_GMF_TASK_CONFIG();
-  task_cfg.thread.prio = this->fetch_task_priority_;
-  task_cfg.thread.core = this->fetch_task_core_;
-  task_cfg.thread.stack = this->fetch_task_stack_size_;
-  task_cfg.name = "esp_afe_gmf";
-  esp_gmf_task_handle_t task = nullptr;
-  esp_gmf_err_t task_ret = esp_gmf_task_init(&task_cfg, &task);
-  if (task_ret != ESP_GMF_ERR_OK || task == nullptr) {
-    ESP_LOGE(TAG, "esp_gmf_task_init failed (ret=%d)", static_cast<int>(task_ret));
-    esp_gmf_pipeline_destroy(pipeline);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-  pipeline_ret = esp_gmf_pipeline_bind_task(pipeline, task);
-  if (pipeline_ret != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "esp_gmf_pipeline_bind_task failed (ret=%d)", static_cast<int>(pipeline_ret));
-    esp_gmf_task_deinit(task);
-    esp_gmf_pipeline_destroy(pipeline);
-    esp_gmf_afe_manager_destroy(manager);
-    afe_config_free(cfg);
-    return false;
-  }
-
   size_t feed_chunk_size = 0;
   uint8_t total_channels_u8 = 0;
   if (esp_gmf_afe_manager_get_chunk_size(manager, &feed_chunk_size) != ESP_GMF_ERR_OK ||
@@ -490,8 +409,6 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
       cfg->pcm_config.mic_num != afe_mic_channels || cfg->pcm_config.ref_num != 1 ||
       cfg->pcm_config.mic_ids == nullptr || cfg->pcm_config.ref_ids == nullptr) {
     ESP_LOGE(TAG, "Failed to query GMF AFE manager frame shape");
-    esp_gmf_task_deinit(task);
-    esp_gmf_pipeline_destroy(pipeline);
     esp_gmf_afe_manager_destroy(manager);
     afe_config_free(cfg);
     return false;
@@ -526,8 +443,6 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     }
     if (feed_buf == nullptr) {
       ESP_LOGE(TAG, "Failed to allocate staged feed buffer (%u bytes)", static_cast<unsigned>(feed_bytes));
-      esp_gmf_task_deinit(task);
-      esp_gmf_pipeline_destroy(pipeline);
       esp_gmf_afe_manager_destroy(manager);
       afe_config_free(cfg);
       return false;
@@ -535,9 +450,6 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   }
 
   instance->manager = manager;
-  instance->element = element;
-  instance->pipeline = pipeline;
-  instance->task = task;
   instance->config = cfg;
   instance->feed_buf = feed_buf;
   instance->feed_chunksize = feed_chunksize;
@@ -558,18 +470,6 @@ void EspAfe::destroy_instance_(AfeInstance *instance) {
     return;
   }
 #ifdef USE_ESP_AFE_GMF_PATH
-  if (instance->task != nullptr) {
-    esp_gmf_task_deinit(instance->task);
-    instance->task = nullptr;
-  }
-  if (instance->pipeline != nullptr) {
-    esp_gmf_pipeline_destroy(instance->pipeline);
-    instance->pipeline = nullptr;
-    instance->element = nullptr;
-  } else if (instance->element != nullptr) {
-    esp_gmf_obj_delete(instance->element);
-    instance->element = nullptr;
-  }
   if (instance->manager != nullptr) {
     esp_gmf_afe_manager_destroy(instance->manager);
     instance->manager = nullptr;
@@ -592,9 +492,6 @@ void EspAfe::destroy_instance_(AfeInstance *instance) {
 bool EspAfe::install_instance_(AfeInstance *instance) {
 #ifdef USE_ESP_AFE_GMF_PATH
   this->afe_manager_ = instance->manager;
-  this->afe_element_ = instance->element;
-  this->afe_pipeline_ = instance->pipeline;
-  this->afe_task_ = instance->task;
 #endif
   this->afe_config_ = instance->config;
   this->feed_buf_ = instance->feed_buf;
@@ -607,9 +504,6 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 
 #ifdef USE_ESP_AFE_GMF_PATH
   instance->manager = nullptr;
-  instance->element = nullptr;
-  instance->pipeline = nullptr;
-  instance->task = nullptr;
 #endif
   instance->config = nullptr;
   instance->feed_buf = nullptr;
@@ -622,9 +516,6 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
     AfeInstance failed;
 #ifdef USE_ESP_AFE_GMF_PATH
     failed.manager = this->afe_manager_;
-    failed.element = this->afe_element_;
-    failed.pipeline = this->afe_pipeline_;
-    failed.task = this->afe_task_;
 #endif
     failed.config = this->afe_config_;
     failed.feed_buf = this->feed_buf_;
@@ -634,9 +525,6 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
     failed.total_channels = this->total_channels_;
 #ifdef USE_ESP_AFE_GMF_PATH
     this->afe_manager_ = nullptr;
-    this->afe_element_ = nullptr;
-    this->afe_pipeline_ = nullptr;
-    this->afe_task_ = nullptr;
 #endif
     this->afe_config_ = nullptr;
     this->afe_pipeline_running_ = false;
@@ -661,58 +549,20 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 #endif
 
 #ifdef USE_ESP_AFE_GMF_PATH
-  const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
-  const size_t output_bytes = static_cast<size_t>(this->fetch_chunksize_) * sizeof(int16_t);
-  esp_gmf_port_handle_t in_port = static_cast<esp_gmf_port_handle_t>(
-      NEW_ESP_GMF_PORT_IN_BYTE(reinterpret_cast<void *>(&EspAfe::gmf_input_acquire_cb_),
-                               reinterpret_cast<void *>(&EspAfe::gmf_input_release_cb_), nullptr, this,
-                               static_cast<int>(feed_bytes), ESP_GMF_MAX_DELAY));
-  esp_gmf_port_handle_t out_port = static_cast<esp_gmf_port_handle_t>(NEW_ESP_GMF_PORT_OUT_BYTE(
-      reinterpret_cast<void *>(&EspAfe::gmf_output_acquire_cb_),
-      reinterpret_cast<void *>(&EspAfe::gmf_output_release_cb_), nullptr, this, static_cast<int>(output_bytes), 0));
-  if (in_port == nullptr || out_port == nullptr) {
-    ESP_LOGE(TAG, "Failed to register GMF AFE ports");
-    if (in_port != nullptr) {
-      esp_gmf_port_deinit(in_port);
-    }
-    if (out_port != nullptr) {
-      esp_gmf_port_deinit(out_port);
-    }
+  if (esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC,
+                                          this->aec_enabled_.load(std::memory_order_relaxed)) < 0 ||
+      esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD,
+                                          this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
+    ESP_LOGE(TAG, "Failed to apply AFE feature state");
     return cleanup_failed_install();
   }
-  if (esp_gmf_element_register_in_port(this->afe_element_, in_port) != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "Failed to register GMF AFE input port");
-    esp_gmf_port_deinit(in_port);
-    esp_gmf_port_deinit(out_port);
-    return cleanup_failed_install();
-  }
-  if (esp_gmf_element_register_out_port(this->afe_element_, out_port) != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "Failed to register GMF AFE output port");
-    esp_gmf_element_unregister_in_port(this->afe_element_, in_port);
-    esp_gmf_port_deinit(out_port);
-    return cleanup_failed_install();
-  }
-  esp_gmf_err_t load_ret = esp_gmf_pipeline_loading_jobs(this->afe_pipeline_);
-  if (load_ret != ESP_GMF_ERR_OK) {
-    ESP_LOGE(TAG, "GMF AFE pipeline loading_jobs failed (ret=%d)", static_cast<int>(load_ret));
-    return cleanup_failed_install();
-  }
-  // GMF keeps AEC initialized for manager-level runtime toggles. Disable the
-  // feature through the manager if config says off.
-  if (!this->aec_enabled_.load(std::memory_order_relaxed)) {
-    esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, false);
-  }
-  // VAD must stay enabled when the GMF AFE element opens. GMF creates its
-  // wake/VAD monitor lock only when feat.vad is true during esp_gmf_afe_open();
-  // disabling it here leaves wake_st_lock null, and a later VAD enable crashes
-  // in esp_gmf_afe_result_proc()->wakeup_state_update().
 
   // Runtime buffers are already prepared above. Apply the configured feature
   // state before resuming GMF tasks so an active reconfigure never runs even
   // one frame with stale AEC/VAD state.
   if (this->processing_active_.load(std::memory_order_acquire)) {
     if (!this->start_pipeline_()) {
-      ESP_LOGE(TAG, "Reconfigure: GMF AFE element failed to open");
+      ESP_LOGE(TAG, "Reconfigure: AFE manager failed to start");
       return cleanup_failed_install();
     }
   }
@@ -725,23 +575,14 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 }
 
 EspAfe::AfeInstance EspAfe::detach_instance_() {
-  // Drain protocol has already quiesced process() before detach is called, so
-  // no more enqueues can race. Close the official GMF AFE element first: this
-  // detaches manager read/result callbacks and releases its data buses.
-#ifdef USE_ESP_AFE_GMF_PATH
-  if (!this->afe_pipeline_paused_) {
-    this->flush_pipeline_before_stop_();
-  }
-#endif
+  // The drain handshake has quiesced process(). Detach manager callbacks before
+  // handing ownership to destroy_instance_ or reusing the output buffers.
   this->stop_pipeline_();
   this->instance_ready_.store(false, std::memory_order_release);
 
   AfeInstance instance;
 #ifdef USE_ESP_AFE_GMF_PATH
   instance.manager = this->afe_manager_;
-  instance.element = this->afe_element_;
-  instance.pipeline = this->afe_pipeline_;
-  instance.task = this->afe_task_;
 #endif
   instance.config = this->afe_config_;
   instance.feed_buf = this->feed_buf_;
@@ -752,9 +593,6 @@ EspAfe::AfeInstance EspAfe::detach_instance_() {
 
 #ifdef USE_ESP_AFE_GMF_PATH
   this->afe_manager_ = nullptr;
-  this->afe_element_ = nullptr;
-  this->afe_pipeline_ = nullptr;
-  this->afe_task_ = nullptr;
 #endif
   this->afe_config_ = nullptr;
   this->afe_pipeline_running_ = false;
@@ -978,8 +816,8 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   if (was_stopped) {
     ESP_LOGI(TAG, "AFE restarted (feature re-enabled)");
   }
-  // Release drain: new instance is fully installed. The GMF pipeline/task
-  // already exists and is either started by install_instance_ or left stopped
+  // Release drain: new instance is fully installed. The manager's tasks
+  // already exist and are either started by install_instance_ or left suspended
   // until the next mic consumer attaches. process() can resume real work on
   // the next frame.
   release_drain();
@@ -1095,14 +933,8 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
     const char *backend = "unknown";
 #ifdef USE_ESP_AFE_GMF_PATH
     if (this->afe_manager_ != nullptr) {
-      // Fresh element open needs structural VAD until it creates wake_st_lock.
-      // Keep runtime toggles pending too, not just the YAML initial OFF state.
-      if (this->gmf_vad_state_pending_.load(std::memory_order_acquire)) {
-        backend = "GMF AFE pending open";
-      } else {
-        ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, enabled));
-        backend = "GMF AFE manager";
-      }
+      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, enabled));
+      backend = "GMF AFE manager";
     } else
 #endif
     {
@@ -1210,7 +1042,7 @@ void EspAfe::dump_config() {
                 this->input_format_override_[0] ? this->input_format_override_ : "auto");
   if (this->mic_num_ >= 2) {
     ESP_LOGCONFIG(TAG, "  AEC-off dual-mic fallback: unavailable on official "
-                       "GMF element path");
+                       "GMF manager callback path");
   }
   ESP_LOGCONFIG(TAG, "  Alloc: %s, linear_gain=%.2f", this->memory_alloc_mode_to_str_(), this->afe_linear_gain_);
   ESP_LOGCONFIG(TAG, "  SE Task: core=%d, priority=%d, ringbuf=%d", this->task_core_, this->task_priority_,
@@ -1512,15 +1344,15 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
       this->output_prebuffer_ready_ = queued_frames >= required_frames;
     }
   }
-  // Only this consumer removes bytes. GMF can append a partial frame, so
-  // leave it queued until a complete output frame is available.
+  // Only this consumer removes bytes. Manager results and consumer frames can
+  // have different sizes; leave bytes queued until a complete frame is ready.
   if (this->fetch_output_ring_ && this->output_prebuffer_ready_ &&
       (!gmf_path || this->fetch_output_ring_->available() >= output_bytes)) {
     size_t got = this->fetch_output_ring_->read(reinterpret_cast<uint8_t *>(out), output_bytes, 0);
     if (got == output_bytes) {
 #ifdef USE_ESP_AFE_POST_AGC
-      // GMF output payloads are an arbitrary byte stream in v2026.9.x. Run
-      // post-AFE AGC here, only after a complete consumer frame is assembled.
+      // Run post-AFE AGC only after a complete consumer frame is assembled,
+      // independently of the manager's native output block size.
       if (this->post_afe_agc_ != nullptr &&
           !this->process_post_afe_agc_frame_(out, out, static_cast<size_t>(os))) {
         ESP_LOGW(TAG, "Post-AFE AGC failed; affected 10ms blocks bypassed");
@@ -1541,8 +1373,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   this->clear_process_busy_();
 
   // Output-side RMS depends on the samples handed to the caller. Input volume
-  // is computed before feeding GMF, and VAD state comes from esp_gmf_afe
-  // events.
+  // is computed before feeding GMF, and VAD state comes from the manager result.
   if (processed && sample_rms && this->output_rms_sensor_enabled_) {
     this->output_rms_dbfs_.store(esp_audio_stack::compute_rms_dbfs_i16(out, os), std::memory_order_relaxed);
   }
@@ -1667,43 +1498,38 @@ bool EspAfe::enable_agc() {
 bool EspAfe::disable_agc() { return this->set_reinit_flag_(this->agc_enabled_, false, "agc_enabled"); }
 
 #ifdef USE_ESP_AFE_GMF_PATH
-esp_gmf_err_io_t EspAfe::gmf_input_acquire_cb_(void *ctx, esp_gmf_payload_t *load, uint32_t wanted_size,
-                                               int wait_ticks) {
+int32_t EspAfe::manager_read_cb_(void *buffer, int bytes, void *ctx, uint32_t ticks) {
   auto *self = static_cast<EspAfe *>(ctx);
-  return self == nullptr ? ESP_GMF_IO_FAIL : self->gmf_input_acquire_(load, wanted_size, wait_ticks);
-}
-
-esp_gmf_err_io_t EspAfe::gmf_input_release_cb_(void *ctx, esp_gmf_payload_t *load, int wait_ticks) {
-  (void) ctx;
-  (void) load;
-  (void) wait_ticks;
-  return ESP_GMF_IO_OK;
-}
-
-esp_gmf_err_io_t EspAfe::gmf_output_acquire_cb_(void *ctx, esp_gmf_payload_t *load, uint32_t wanted_size,
-                                                int wait_ticks) {
-  (void) ctx;
-  (void) load;
-  (void) wanted_size;
-  (void) wait_ticks;
-  return ESP_GMF_IO_OK;
-}
-
-void EspAfe::gmf_processed_output_cb_(const int16_t *data, size_t bytes, void *ctx) {
-  auto *self = static_cast<EspAfe *>(ctx);
-  if (self == nullptr) {
-    return;
+  if (self == nullptr || buffer == nullptr || bytes <= 0) {
+    return 0;
   }
   esp_gmf_payload_t payload{};
-  payload.buf = reinterpret_cast<uint8_t *>(const_cast<int16_t *>(data));
-  payload.valid_size = bytes;
-  payload.buf_length = bytes;
-  self->gmf_output_release_(&payload, 0);
+  payload.buf = static_cast<uint8_t *>(buffer);
+  payload.buf_length = static_cast<uint32_t>(bytes);
+  if (self->gmf_input_acquire_(&payload, static_cast<uint32_t>(bytes), static_cast<int>(ticks)) != ESP_GMF_IO_OK) {
+    return 0;
+  }
+  return static_cast<int32_t>(payload.valid_size);
 }
 
-esp_gmf_err_io_t EspAfe::gmf_output_release_cb_(void *ctx, esp_gmf_payload_t *load, int wait_ticks) {
+void EspAfe::manager_result_cb_(afe_fetch_result_t *result, void *ctx) {
   auto *self = static_cast<EspAfe *>(ctx);
-  return self == nullptr ? ESP_GMF_IO_FAIL : self->gmf_output_release_(load, wait_ticks);
+  // Follow ESP-SR's documented fetch contract: ESP_FAIL denotes failure.
+  if (self == nullptr || result == nullptr || result->ret_value == ESP_FAIL || result->data == nullptr ||
+      result->data_size <= 0 || result->data_size % sizeof(int16_t) != 0) {
+    return;
+  }
+  if (!self->processing_active_.load(std::memory_order_acquire) ||
+      self->drain_request_.load(std::memory_order_acquire)) {
+    return;
+  }
+  self->voice_present_.store(self->vad_enabled_.load(std::memory_order_relaxed) && result->vad_state == VAD_SPEECH,
+                             std::memory_order_relaxed);
+  esp_gmf_payload_t payload{};
+  payload.buf = reinterpret_cast<uint8_t *>(result->data);
+  payload.valid_size = result->data_size;
+  payload.buf_length = result->data_size;
+  self->gmf_output_release_(&payload, 0);
 }
 
 esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wanted_size, int wait_ticks) {
@@ -1719,11 +1545,11 @@ esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wa
   const bool active_at_entry = accepting_input();
   TickType_t read_wait = static_cast<TickType_t>(wait_ticks);
   if (!active_at_entry) {
-    // GMF treats IO_ABORT as a cooperative interruption, not valid PCM. Do
-    // not synthesize an unlimited stream of zero frames while the caller is
-    // trying to pause: its higher-priority feed task would starve that caller.
+    // The read callback maps interruption to no bytes, not valid PCM. Do not
+    // synthesize zero frames while the caller is trying to pause: the manager's
+    // higher-priority feed task could starve that caller.
     // The existing flush item wakes this read. Bound an otherwise infinite
-    // wait by one 16-kHz AFE frame so the pipeline can observe its pause action.
+    // wait by one 16-kHz AFE frame so callback detachment can finish.
     const uint32_t frame_ms = static_cast<uint32_t>(std::max(1, this->feed_chunksize_) + 15) / 16;
     const TickType_t frame_wait = std::max<TickType_t>(1, pdMS_TO_TICKS(frame_ms));
     read_wait = std::min(read_wait, frame_wait);
@@ -1774,9 +1600,6 @@ esp_gmf_err_io_t EspAfe::gmf_output_release_(esp_gmf_payload_t *load, int wait_t
   if (!this->processing_active_.load(std::memory_order_acquire)) {
     return ESP_GMF_IO_OK;
   }
-  // esp_gmf_afe_open() has completed before this callback can run, so its
-  // wake-state mutex now exists and the requested initial state is safe.
-  this->apply_pending_gmf_vad_state_();
   if (load == nullptr || load->buf == nullptr || load->valid_size == 0) {
     diag_add(this->fetch_timeout_);
     return ESP_GMF_IO_OK;
@@ -1790,7 +1613,7 @@ esp_gmf_err_io_t EspAfe::gmf_output_release_(esp_gmf_payload_t *load, int wait_t
     return ESP_GMF_IO_FAIL;
   }
 
-  // GMF drains a byte stream, not necessarily whole fetch frames. Preserve
+  // Native AFE output blocks need not match the consumer frame size. Preserve
   // every sample in the single bridge; process() consumes complete frames.
 
   const size_t pending_bytes = this->fetch_output_ring_->available() % frame_bytes;
@@ -1804,10 +1627,6 @@ esp_gmf_err_io_t EspAfe::gmf_output_release_(esp_gmf_payload_t *load, int wait_t
     update_peak_atomic(this->fetch_queue_peak_, queued);
   }
   this->update_fetch_ring_free_pct_();
-  TaskHandle_t waiter = this->pipeline_flush_waiter_.load(std::memory_order_acquire);
-  if (waiter != nullptr) {
-    xTaskNotifyGive(waiter);
-  }
   return ESP_GMF_IO_OK;
 }
 
@@ -1829,68 +1648,9 @@ void EspAfe::update_fetch_ring_free_pct_() {
   }
 }
 
-#ifdef USE_ESP_AFE_GMF_PATH
-bool EspAfe::apply_pending_gmf_vad_state_() {
-  if (!this->gmf_vad_state_pending_.load(std::memory_order_acquire))
-    return true;
-  // Never block media output behind a configuration command. The next output
-  // retries, and the existing configuration owner serializes runtime toggles.
-  esp_audio_stack::ScopedLock lock(this->config_mutex_, 0);
-  if (!lock)
-    return false;
-  if (!this->gmf_vad_state_pending_.exchange(false, std::memory_order_acq_rel)) {
-    return true;
-  }
-  if (this->afe_manager_ == nullptr || this->vad_enabled_.load(std::memory_order_relaxed)) {
-    return true;
-  }
-  const esp_gmf_err_t ret =
-      esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, false);
-  if (ret < 0) {
-    this->gmf_vad_state_pending_.store(true, std::memory_order_release);
-    ESP_LOGW(TAG, "Failed to apply initial GMF VAD=OFF state (ret=%d)", static_cast<int>(ret));
-    return false;
-  }
-  this->voice_present_.store(false, std::memory_order_relaxed);
-  ESP_LOGI(TAG, "Initial GMF VAD state applied: OFF");
-  return true;
-}
-
-void EspAfe::gmf_event_cb_(esp_gmf_element_handle_t el, esp_gmf_afe_evt_t *event, void *user_data) {
-  (void) el;
-  auto *self = static_cast<EspAfe *>(user_data);
-  if (self == nullptr || event == nullptr) {
-    return;
-  }
-  if (!self->vad_enabled_.load(std::memory_order_relaxed)) {
-    self->voice_present_.store(false, std::memory_order_relaxed);
-    return;
-  }
-
-  bool new_voice = self->voice_present_.load(std::memory_order_relaxed);
-  switch (event->type) {
-    case ESP_GMF_AFE_EVT_VAD_START:
-    case ESP_GMF_AFE_EVT_WAKEUP_START:
-      new_voice = true;
-      break;
-    case ESP_GMF_AFE_EVT_VAD_END:
-    case ESP_GMF_AFE_EVT_WAKEUP_END:
-      new_voice = false;
-      break;
-    default:
-      return;
-  }
-  const bool prev_voice = self->voice_present_.exchange(new_voice, std::memory_order_relaxed);
-  if (new_voice != prev_voice) {
-    ESP_LOGD(TAG, "GMF AFE voice transition: %s -> %s (event=%d)", prev_voice ? "speech" : "silence",
-             new_voice ? "speech" : "silence", static_cast<int>(event->type));
-  }
-}
-#endif
-
 bool EspAfe::start_pipeline_() {
 #ifdef USE_ESP_AFE_GMF_PATH
-  if (this->afe_pipeline_ == nullptr) {
+  if (this->afe_manager_ == nullptr) {
     return false;
   }
   if (this->afe_pipeline_running_) {
@@ -1907,45 +1667,14 @@ bool EspAfe::start_pipeline_() {
 #ifdef USE_ESP_AFE_POST_AGC
   this->reset_post_afe_agc_();
 #endif
-  if (this->afe_pipeline_paused_) {
-    esp_gmf_err_t ret = esp_gmf_pipeline_resume(this->afe_pipeline_);
-    if (ret != ESP_GMF_ERR_OK) {
-      ESP_LOGW(TAG, "GMF AFE pipeline resume failed (ret=%d)", static_cast<int>(ret));
-      if (this->afe_manager_ != nullptr) {
-        esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-      }
-      return false;
-    }
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, false);
-    }
-    this->afe_pipeline_paused_ = false;
-    this->afe_pipeline_running_ = true;
-    return true;
-  }
-  // VAD must be present while esp_gmf_afe_open() creates its wake-state lock.
-  // Restore that structural state for a fresh run and defer a configured OFF
-  // state until the first output callback after open.
-  if (this->afe_manager_ != nullptr) {
-    const esp_gmf_err_t vad_ret =
-        esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, true);
-    if (vad_ret < 0) {
-      ESP_LOGW(TAG, "Unable to prepare structural GMF VAD before open (ret=%d)", static_cast<int>(vad_ret));
-      return false;
-    }
-    this->gmf_vad_state_pending_.store(true, std::memory_order_release);
-  }
-  esp_gmf_err_t ret = esp_gmf_pipeline_run(this->afe_pipeline_);
-  if (ret != ESP_GMF_ERR_OK) {
-    ESP_LOGW(TAG, "GMF AFE pipeline run failed (ret=%d)", static_cast<int>(ret));
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-    }
+  // Installing the read callback resumes the manager, so install output first.
+  if (esp_gmf_afe_manager_set_result_cb(this->afe_manager_, &EspAfe::manager_result_cb_, this) != ESP_GMF_ERR_OK) {
     return false;
   }
-  // Opening the GMF element installs its input/result callbacks. The manager's
-  // set_read_cb() resumes workers only after that input is usable. Resuming
-  // here races the asynchronous open and can spin a worker with no callback.
+  if (esp_gmf_afe_manager_set_read_cb(this->afe_manager_, &EspAfe::manager_read_cb_, this) != ESP_GMF_ERR_OK) {
+    esp_gmf_afe_manager_set_result_cb(this->afe_manager_, nullptr, nullptr);
+    return false;
+  }
   this->afe_pipeline_running_ = true;
   this->afe_pipeline_paused_ = false;
   return true;
@@ -1956,65 +1685,32 @@ bool EspAfe::start_pipeline_() {
 
 bool EspAfe::pause_pipeline_() {
 #ifdef USE_ESP_AFE_GMF_PATH
-  if (this->afe_pipeline_ == nullptr) {
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-    }
-    return true;
-  }
-  if (this->afe_pipeline_paused_) {
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-    }
-    return true;
-  }
-  if (!this->afe_pipeline_running_) {
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-    }
-    return true;
-  }
-  this->flush_pipeline_before_stop_();
-  esp_gmf_err_t ret = esp_gmf_pipeline_pause(this->afe_pipeline_);
-  if (ret != ESP_GMF_ERR_OK) {
-    ESP_LOGW(TAG, "GMF AFE pipeline pause failed (ret=%d)", static_cast<int>(ret));
-    return false;
-  }
-  this->afe_pipeline_running_ = false;
-  this->afe_pipeline_paused_ = true;
   if (this->afe_manager_ != nullptr) {
-    esp_gmf_afe_manager_suspend(this->afe_manager_, true);
+    if (esp_gmf_afe_manager_suspend(this->afe_manager_, true) != ESP_GMF_ERR_OK) {
+      return false;
+    }
+    this->flush_pipeline_before_stop_();
+    // These setters wait for any in-flight callback before clearing its context.
+    const esp_gmf_err_t read_ret = esp_gmf_afe_manager_set_read_cb(this->afe_manager_, nullptr, nullptr);
+    const esp_gmf_err_t result_ret = esp_gmf_afe_manager_set_result_cb(this->afe_manager_, nullptr, nullptr);
+    if (read_ret != ESP_GMF_ERR_OK || result_ret != ESP_GMF_ERR_OK) {
+      return false;
+    }
   }
-  return true;
-#else
+#endif
   this->afe_pipeline_running_ = false;
   this->afe_pipeline_paused_ = true;
   return true;
-#endif
 }
 
 void EspAfe::stop_pipeline_() {
-#ifdef USE_ESP_AFE_GMF_PATH
-  this->gmf_vad_state_pending_.store(false, std::memory_order_release);
-  if (this->afe_pipeline_ != nullptr && (this->afe_pipeline_running_ || this->afe_pipeline_paused_)) {
-    const bool was_paused = this->afe_pipeline_paused_;
-    if (this->afe_pipeline_paused_ && this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, false);
-    }
-    esp_gmf_err_t ret = esp_gmf_pipeline_stop(this->afe_pipeline_);
-    ESP_LOGI(TAG, "GMF AFE pipeline stopped (was_paused=%d, ret=%d)", was_paused, static_cast<int>(ret));
-    if (this->afe_manager_ != nullptr) {
-      esp_gmf_afe_manager_suspend(this->afe_manager_, true);
-    }
-    this->afe_pipeline_running_ = false;
-    this->afe_pipeline_paused_ = false;
-  } else if (this->afe_manager_ != nullptr) {
-    esp_gmf_afe_manager_suspend(this->afe_manager_, true);
+  if (!this->pause_pipeline_()) {
+    ESP_LOGW(TAG, "AFE manager pause failed during stop");
   }
-  this->drain_feed_input_ring_();
-#else
   this->afe_pipeline_running_ = false;
   this->afe_pipeline_paused_ = false;
+#ifdef USE_ESP_AFE_GMF_PATH
+  this->drain_feed_input_ring_();
 #endif
   if (this->fetch_output_ring_) {
     this->fetch_output_ring_->reset();
@@ -2026,25 +1722,17 @@ void EspAfe::stop_pipeline_() {
 
 #ifdef USE_ESP_AFE_GMF_PATH
 void EspAfe::flush_pipeline_before_stop_() {
-  if (this->afe_manager_ == nullptr || this->feed_input_ring_ == nullptr || this->feed_chunksize_ <= 0 ||
-      this->total_channels_ <= 0 || this->afe_stopped_.load(std::memory_order_acquire)) {
+  if (this->feed_input_ring_ == nullptr || this->feed_chunksize_ <= 0 || this->total_channels_ <= 0) {
     return;
   }
-
-  const size_t feed_bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
-  TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
-  ulTaskNotifyTake(pdTRUE, 0);
-  this->pipeline_flush_waiter_.store(waiter, std::memory_order_release);
-  void *slot = this->acquire_gmf_feed_slot_(feed_bytes, pdMS_TO_TICKS(10));
+  // Wake a blocked reader so callback detachment need not wait for its timeout.
+  // Input is discarded once processing is inactive or the drain has begun.
+  const size_t bytes = static_cast<size_t>(this->feed_chunksize_) * this->total_channels_ * sizeof(int16_t);
+  void *slot = this->acquire_gmf_feed_slot_(bytes, 0);
   if (slot != nullptr) {
-    memset(slot, 0, feed_bytes);
+    memset(slot, 0, bytes);
+    this->commit_gmf_feed_slot_(slot);
   }
-  if (slot != nullptr && this->commit_gmf_feed_slot_(slot)) {
-    uint32_t queued = diag_increment_and_get(this->feed_queue_frames_);
-    update_peak_atomic(this->feed_queue_peak_, queued);
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
-  }
-  this->pipeline_flush_waiter_.store(nullptr, std::memory_order_release);
 }
 
 void *EspAfe::acquire_gmf_feed_slot_(size_t feed_bytes, TickType_t ticks_to_wait) {

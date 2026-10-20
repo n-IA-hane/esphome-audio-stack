@@ -624,7 +624,9 @@ Dependencies selected by the current component sources:
   [the component configuration](esphome/components/esp_afe/__init__.py) to
   `b1e077aa5fd34e937752712f94b1a515d459b116` by default.
 
-The development preview now pins the validated GMF AI Audio 1.1.1 source.
+The development dependency set pins GMF AI Audio 1.1.1 with a manifest compatible
+with ESP-SR 2.6.0. The AFE adapter now uses official manager callbacks directly;
+it no longer needs the fork's separate AFE-element output callback.
 `gmf_source` remains available for explicitly identified local experiments. See
 [development dependency identity](esphome/components/esp_afe/README.md#dependency-identity-for-development-builds).
 Published stable releases retain their own recorded dependency set.

@@ -19,8 +19,6 @@ def test_gmf_partial_payloads_preserve_every_sample(tmp_path):
 #include <vector>
 using esp_gmf_err_io_t = int;
 constexpr int ESP_GMF_IO_OK=0, ESP_GMF_IO_FAIL=-1;
-using TaskHandle_t = void *;
-void xTaskNotifyGive(TaskHandle_t) {}
 #define ESP_LOGW(...)
 struct esp_gmf_payload_t { void *buf; size_t valid_size; };
 void diag_add(std::atomic<uint32_t>& n, uint32_t v=1) { n += v; }
@@ -40,8 +38,6 @@ struct EspAfe {
  Ring storage;
  Ring *fetch_output_ring_=&storage;
  std::atomic<uint32_t> fetch_timeout_{0}, output_ring_drop_{0},fetch_ok_{0},fetch_queue_frames_{0},fetch_queue_peak_{0};
- std::atomic<TaskHandle_t> pipeline_flush_waiter_{nullptr};
- void apply_pending_gmf_vad_state_() {}
  void update_fetch_ring_free_pct_() {}
  esp_gmf_err_io_t gmf_output_release_(esp_gmf_payload_t *,int);
 };

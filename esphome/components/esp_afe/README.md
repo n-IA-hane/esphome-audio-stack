@@ -6,7 +6,7 @@
 > arbitrary standalone filter.
 
 ESPHome component wrapping Espressif's **ESP-SR AFE** (Audio Front End)
-through the official `esp_gmf_afe` element and GMF manager/pipeline tasks
+through the official `esp_gmf_afe_manager` read and result callbacks
 for both single-mic and dual-mic profiles. The component provides
 AEC, Speech Enhancement on dual-mic targets, optional NS/VAD/AGC stages,
 runtime controls and diagnostic sensors.
@@ -19,21 +19,27 @@ produces cleaned microphone audio. Audio Stack hands that result to the consumer
 already attached to its microphone, such as wake word detection, Voice Assistant
 or a call.
 
-Starting with 2026.10.2, a ready result is delivered by the existing AFE fetch task.
-Previously, GMF could leave it waiting for the next input-processing iteration.
-Removing that wait helps consumers receive audio on time under a heavy workload;
-it does not change the AEC algorithm or microphone sample rate.
+The manager owns its feed and fetch tasks. Its result callback copies processed
+PCM into the component's existing bounded output FIFO as soon as a result is
+ready. Audio Stack reads that FIFO at its normal frame cadence. Ready output does
+not wait for another input block, and the AEC algorithm, microphone rate and
+speaker-reference processing are unchanged.
 
-Processed PCM is copied from the existing GMF fetch task into the component's
-bounded output FIFO as soon as it is available. Microphone consumers keep their
-normal frame cadence. Delivery no longer waits for the GMF input job to acquire
-its next block, which could leave a consumer without audio even while processed
-samples were already waiting. VAD and command-event monitoring remain in GMF.
+The adapter uses the manager directly, so it does not create an additional GMF
+AFE element, pipeline task, output data bus or wake/command state machine. VAD
+comes from the manager's result; ESPHome Micro Wake Word remains the separate
+wake-word consumer. ESP-SR can still create its own algorithm worker, for example
+for dual-microphone Speech Enhancement.
 
-This uses the optional external-output callback in the pinned GMF fork. It adds
-no task or audio buffer and omits GMF's intermediate output data bus. The callback
-uses the existing nonblocking FIFO writer; normal manager shutdown detaches and
-drains the callback before releasing its resources.
+Starting installs the output callback before the input callback can resume the
+manager. Stopping gates new work, wakes any blocked input callback and detaches
+both callbacks through the manager's synchronization APIs before resetting or
+releasing buffers. The input and output FIFOs remain bounded.
+
+WakeNet is disabled through the official AFE configuration and no WakeNet model
+is selected. Some inert WakeNet symbols can remain linked by Espressif's supplied
+AFE library. This component does not patch the vendor library or add linker stubs
+to remove them.
 
 ## Microphone layout
 
@@ -101,7 +107,7 @@ interface, but the AFE feed/fetch task model needs the steady producer that
 | Automatic Gain Control | No | Yes (ESP-SR WebRTC for one mic; post-AFE WebRTC for two mics) |
 | Runtime switches in HA | Parent-stack processor bypass | AEC and VAD live through the active AFE API; NS/AGC by AFE reinit; SE/BSS is structural |
 | Diagnostic sensors | No | Input volume, output RMS, voice presence |
-| Runtime shape | Synchronous on the parent audio task | GMF manager/pipeline for both one and two microphones |
+| Runtime shape | Synchronous on the parent audio task | GMF manager feed/fetch tasks for both one and two microphones |
 | Relative footprint | Lower | Higher and target/graph dependent |
 | Supported platforms | ESP32-S3, ESP32-P4 | ESP32-S3, ESP32-P4 |
 
@@ -171,9 +177,9 @@ esp_afe:
   feed_task_core: 0           # GMF manager feed task core
   feed_task_priority: 5       # GMF manager feed task priority
   feed_task_stack_size: 3072  # GMF manager feed task stack
-  fetch_task_core: 1          # GMF fetch and pipeline task core
-  fetch_task_priority: 5      # GMF fetch/pipeline priority
-  fetch_task_stack_size: 3072 # GMF fetch/pipeline stack
+  fetch_task_core: 1          # GMF manager fetch task core
+  fetch_task_priority: 5      # GMF manager fetch priority
+  fetch_task_stack_size: 3072 # GMF manager fetch stack
 ```
 
 ### Configuration Options
@@ -211,9 +217,9 @@ esp_afe:
 | `feed_task_core` | int | `0` | GMF manager feed-task core. |
 | `feed_task_priority` | int | `5` | GMF manager feed-task priority. |
 | `feed_task_stack_size` | int | `3072` | GMF manager feed-task stack size in bytes. |
-| `fetch_task_core` | int | `1` | GMF manager fetch-task core; also used for its single-element pipeline task. |
-| `fetch_task_priority` | int | `5` | GMF manager fetch/pipeline priority. |
-| `fetch_task_stack_size` | int | `3072` | GMF manager fetch/pipeline stack size in bytes. |
+| `fetch_task_core` | int | `1` | GMF manager fetch-task core. |
+| `fetch_task_priority` | int | `5` | GMF manager fetch-task priority. |
+| `fetch_task_stack_size` | int | `3072` | GMF manager fetch-task stack size in bytes. |
 | `feed_buf_in_psram` | bool | `false` | Place the input staging scratch buffer in PSRAM. GMF profiles whose process frame equals the feed frame write directly into the feed ring and do not allocate this buffer. |
 | `feed_ring_in_psram` | bool | `false` | Place the complete-frame feed bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
 | `fetch_ring_in_psram` | bool | `false` | Place the complete-frame output bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
@@ -231,7 +237,7 @@ esp_afe:
 > **Defaults are designed so that a minimal config already enables AEC + NS + AGC.** You only need to declare options that differ from the defaults. In particular:
 > - `aec_enabled`, `ns_enabled`, `agc_enabled` are **true** by default. Only set them if you want to **disable** a feature.
 > - `se_enabled` and `vad_enabled` are **false** by default. Set `se_enabled: true` for every dual-mic AFE target; set `vad_enabled: true` only when the product explicitly needs VAD active at boot.
-> - `memory_alloc_mode` defaults to `more_psram`, SE/BSS worker defaults to `task_core: 1` / `task_priority: 5`, and the GMF path keeps manager feed on Core 0 while manager fetch and the GMF pipeline task run on Core 1. Override only if telemetry shows task starvation or a board-specific scheduling issue.
+> - `memory_alloc_mode` defaults to `more_psram`, SE/BSS worker defaults to `task_core: 1` / `task_priority: 5`, and the manager keeps feed on Core 0 and fetch on Core 1. Override only if telemetry shows task starvation or a board-specific scheduling issue.
 >
 > **Minimal single-mic** (AEC + NS + AGC out of the box):
 >
@@ -320,10 +326,10 @@ that. If `Voice Detected` should keep working in standby, set
 
 Dual-mic packages keep the feed sent to ESP-SR fixed: both microphone channels
 plus the playback reference are always present. The public bridge consumes the
-official `esp_gmf_afe` output port, so Espressif owns the manager callbacks and
-internal output buffer. That element path does not expose
-`afe_fetch_result_t::raw_data[n]`; keep AEC enabled by default on dual-mic
-SE/BSS boards because AEC-off output may sound metallic.
+processed mono `afe_fetch_result_t::data` supplied to the manager's result
+callback. It does not switch to raw microphone channels when AEC is disabled.
+Keep AEC enabled by default on dual-mic SE/BSS boards because AEC-off processed
+output may sound metallic.
 
 ```text
 TDM / codec input
@@ -444,13 +450,16 @@ cannot allocate the contiguous DMA-capable internal block).
 
 AEC, VAD, and NS/AGC use different controls provided by Espressif:
 
-| Feature | Toggle Method | Audio Gap | Notes |
+| Feature | Toggle Method | Effect on audio | Notes |
 |---------|-------------|-----------|-------|
-| AEC | GMF feature control | No pipeline restart | Switches echo cancellation on/off in the existing AFE instance, including single-mic input |
+| AEC | GMF feature control | No AFE graph rebuild | Switches echo cancellation on/off in the existing AFE instance, including single-mic input |
 | SE | Boot-time graph choice | N/A | Structural on dual-mic builds; single-mic users should use a single-mic config or `esp_aec` |
 | NS | AFE reinit | hundreds of ms plus possible audio-task restart | ESP-SR exposes low-level vtable entries, but `esp_gmf_afe_manager` does not expose an NS feature enum. Not exposed on dual-mic SE/BSS builds because `afe_config_check()` prioritizes BSS over NS |
 | AGC | AFE reinit | hundreds of ms plus possible audio-task restart | Rebuilds ESP-SR's AGC for one mic or the explicit post-AFE WebRTC AGC for two mics. Avoid toggling while real-time audio is active. |
-| VAD | Live AFE control | None | `vad_init` stays structural. On GMF, VAD remains enabled while the element creates its wake-state lock, then the configured OFF state is applied from the first output callback after open. |
+| VAD | Manager feature control | No AFE graph rebuild | `vad_init` stays structural. The selected initial state is applied before callbacks start; later changes use the same manager API. |
+
+Live controls preserve the AFE graph. This does not guarantee zero scheduling
+delay or an inaudible transition under every device workload.
 
 AEC stays initialized while disabled so switching it during a call preserves
 the microphone format, worker tasks and buffers. Disabling AEC therefore does
@@ -463,9 +472,9 @@ switching only AEC off in a full profile.
 `enable_ns()`, `disable_ns()`, `enable_agc()`, and `disable_agc()`, but the
 stock GMF manager keeps the AFE iface/data private and only publishes runtime
 feature toggles for AEC, VAD, and SE that are relevant to this component.
-For consistent behavior across the direct and GMF implementations, this wrapper
-represents NS/AGC changes as config changes and rebuilds the AFE instance. On
-dual-mic builds the rebuild also creates or destroys the post-AFE WebRTC AGC.
+The adapter represents NS/AGC changes as config changes and rebuilds the AFE
+instance. On dual-mic builds the rebuild also creates or destroys the post-AFE
+WebRTC AGC.
 
 The reinit is safe: the previous AFE is destroyed first (ESP-SR's FFT resources are a global singleton, only one instance can exist), then the new one is built. While an AFE instance is active, missing processed output is emitted as silence rather than raw pre-AFE microphone audio.
 
@@ -683,7 +692,7 @@ omit NS/AGC runtime switches, although dual-mic AGC can remain enabled at boot.
 
 The component logs under the tag `esp_afe`.
 
-- `WARN` - GMF pipeline start failures, GMF manager toggle failures, AFE config failures, esp-sr allocation failures, mode-switch rebuild failure
+- `WARN` - AFE manager start failures, GMF manager toggle failures, AFE config failures, esp-sr allocation failures, mode-switch rebuild failure
 - `INFO` - GMF AFE lifecycle, live feature state and rebuild messages for runtime mode switches
 - `DEBUG` - bridge feed/fetch instrumentation (only when `esp_audio_stack.telemetry: true`), per-stage enable/disable acks
 
@@ -741,11 +750,13 @@ see the repository `THIRD_PARTY_NOTICES.md`.
 
 ## Dependency identity for development builds
 
-AEC and AFE select ESP-SR 2.6.0 explicitly. The GMF AI Audio 1.1.1 integration has
-been prepared against that same library, preserving the immediate external PCM
-callback and GMF's suspend/abort ordering during close. The new manager settings
-keep feed/fetch stacks internal on P4 and in PSRAM on S3. Existing channel mapping,
-mode choices and external MWW processing are unchanged.
+AEC and AFE select ESP-SR 2.6.0 explicitly. Direct manager callbacks are official
+GMF APIs and do not require the fork's external-output callback extension.
+The pinned GMF source remains because its dependency manifest allows the selected
+ESP-SR 2.6.0; the upstream GMF AI Audio 1.1.1 manifest currently requests
+ESP-SR 2.5.*. Removing that pin requires a separately validated dependency update.
+The manager settings keep feed/fetch stacks internal on P4 and in PSRAM on S3.
+Existing channel mapping, mode choices and external MWW processing are unchanged.
 
 For an unpublished GMF candidate, `gmf_source` accepts the local directory that
 contains its `idf_component.yml` (the `elements/gmf_ai_audio` directory). Record
@@ -754,6 +765,7 @@ Omit it for the published pinned dependency. This override changes the source of
 the same GMF component; it does not select a second AFE implementation.
 
 The development preview pins GMF commit
-`b1e077aa5fd34e937752712f94b1a515d459b116`. This publishes the validated component
-source; no local `gmf_source` override is needed for this preview. Keep an immutable
-remote pin when preparing later updates.
+`b1e077aa5fd34e937752712f94b1a515d459b116`. No local `gmf_source` override is
+needed for this dependency set. Native callback/lifecycle tests exercise the
+adapter, but they do not qualify device scheduling, acoustic cancellation or
+playback quality. Keep firmware and device evidence tied to the exact source set.

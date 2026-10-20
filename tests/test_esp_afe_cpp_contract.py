@@ -22,7 +22,7 @@ def read_aec(name: str) -> str:
 def test_aec_is_initialized_for_live_control() -> None:
     cpp = read("esp_afe.cpp")
     assert "cfg->aec_init = true;" in cpp
-    assert "ESP_AFE_FEATURE_AEC, false" in cpp
+    assert "ESP_AFE_FEATURE_AEC, enabled" in cpp
 
 
 def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
@@ -104,29 +104,29 @@ def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:
     assert "write_without_replacement(load->buf, load->valid_size" in output
 
 
-def test_gmf_initial_vad_off_is_applied_only_after_element_open() -> None:
+def test_manager_features_are_ready_before_callbacks_can_run() -> None:
     cpp = read("esp_afe.cpp")
     header = read("esp_afe.h")
 
     assert "cfg->vad_init = true;" in cpp
-    assert "std::atomic<bool> gmf_vad_state_pending_{false};" in header
+    assert "gmf_vad_state_pending_" not in header + cpp
+    install = cpp[cpp.index("bool EspAfe::install_instance_(") : cpp.index("EspAfe::AfeInstance EspAfe::detach_instance_")]
+    assert install.index("ESP_AFE_FEATURE_VAD") < install.index("this->start_pipeline_()")
+    assert install.index("ESP_AFE_FEATURE_AEC") < install.index("this->start_pipeline_()")
+    assert "cfg->wakenet_init = false;" in cpp
+    assert "cfg->wakenet_model_name = nullptr;" in cpp
+    assert "cfg->wakenet_model_name_2 = nullptr;" in cpp
 
-    start = cpp[cpp.index("bool EspAfe::start_pipeline_()") : cpp.index("\nbool EspAfe::pause_pipeline_()")]
-    assert start.index("ESP_AFE_FEATURE_VAD, true") < start.index("esp_gmf_pipeline_run")
-    assert "gmf_vad_state_pending_.store(true," in start
 
-    output_start = cpp.index("esp_gmf_err_io_t EspAfe::gmf_output_release_(")
-    output = cpp[output_start : cpp.index("\n#endif", output_start)]
-    assert "apply_pending_gmf_vad_state_();" in output
-
-    apply_start = cpp.index("bool EspAfe::apply_pending_gmf_vad_state_()")
-    apply = cpp[apply_start : cpp.index("\nvoid EspAfe::gmf_event_cb_", apply_start)]
-    assert "ESP_AFE_FEATURE_VAD, false" in apply
-    assert "Initial GMF VAD state applied: OFF" in apply
-
-    callback_start = cpp.index("void EspAfe::gmf_event_cb_(")
-    callback = cpp[callback_start : cpp.index("\n#endif", callback_start)]
-    assert callback.index("!self->vad_enabled_.load") < callback.index("GMF AFE voice transition")
+def test_manager_has_no_parallel_gmf_element_or_wakeup_pipeline() -> None:
+    cpp = read("esp_afe.cpp")
+    header = read("esp_afe.h")
+    for forbidden in ("esp_gmf_afe_init", "esp_gmf_afe_set_output_callback", "esp_gmf_pipeline_",
+                      "esp_gmf_task_", "esp_gmf_port_", "esp_gmf_element_", "gmf_event_cb_",
+                      "vcmd_detect_en", "mn_language"):
+        assert forbidden not in cpp + header
+    assert "esp_gmf_afe_manager_set_read_cb" in cpp
+    assert "esp_gmf_afe_manager_set_result_cb" in cpp
 
 
 def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:

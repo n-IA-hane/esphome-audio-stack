@@ -13,10 +13,11 @@ It provides AEC, noise suppression, VAD, AGC and optional dual-mic Speech
 Enhancement/BSS. Use it when a product needs more than standalone echo
 cancellation.
 
-Single-mic and dual-mic profiles use the GMF AFE manager/pipeline. Its feed
-worker owns DSP processing, while the parent audio task retains its hardware
-cadence. Input staging and the existing output byte stream adapt changes in
-ESP-SR block sizes without resizing the live I2S/DMA frame.
+Single-mic and dual-mic profiles use the GMF AFE manager directly. Its feed and
+fetch workers exchange audio with ESP-SR, which may create its own algorithm
+worker. The parent audio task retains its hardware cadence. Input staging and
+the existing output byte stream adapt changes in ESP-SR block sizes without
+resizing the live I2S/DMA frame.
 
 .. code-block:: yaml
 
@@ -73,7 +74,7 @@ Configuration variables:
 - **task_core** / **task_priority** (*Optional*, int): ESP-SR SE/BSS worker
   placement.
 - **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
-  matching ``fetch_task_*`` options (*Optional*, int): GMF manager/pipeline
+  matching ``fetch_task_*`` options (*Optional*, int): GMF manager feed/fetch
   task settings.
 - **feed_buf_in_psram**, **feed_ring_in_psram**, **fetch_ring_in_psram**
   (*Optional*, boolean): Wrapper scratch/bridge placement controls.
