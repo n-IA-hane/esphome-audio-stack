@@ -80,3 +80,23 @@ button:
     parents = re.findall(r"->set_parent\(([^)]+)\)", generated)
     assert len(parents) >= 6
     assert len(set(parents)) == 1
+
+
+def test_component_rejects_retired_builder_before_hardware_validation(monkeypatch):
+    """A standalone consumer gets the promised version error, not a C++ failure."""
+    import importlib.util
+    import esphome.config_validation as cv
+
+    spec = importlib.util.spec_from_file_location(
+        'audio_stack_minimum_config', ROOT / 'esphome/components/esp_audio_stack/__init__.py'
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    minimum = module.CONFIG_SCHEMA.validators[0]
+    monkeypatch.setattr(cv, 'ESPHOME_VERSION', '2026.9.1')
+    with pytest.raises(cv.Invalid, match='at least ESPHome version 2026.10.0'):
+        minimum({})
+    for version in ('2026.10.0', '2026.10.1', '2026.11.0'):
+        monkeypatch.setattr(cv, 'ESPHOME_VERSION', version)
+        value = {}
+        assert minimum(value) is value

@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 2026.10.0-dev
+
+> **Attention: ESPHome 2026.10.0 or newer is required.**
+>
+> ESPHome 2026.10 brings substantial audio changes, including several of our
+> accepted contributions. Thank you to the ESPHome team for your work, reviews
+> and accepted PRs! <3
+>
+> We have aligned Audio Stack, ESP VoIP Stack, Runtime Controller and the
+> maintained device packages with this release. Older ESPHome versions are no
+> longer supported and their operation is not guaranteed. Upgrade the builder
+> before compiling the new firmware.
+
+
+- Require **ESPHome 2026.10.0 or newer** for the upcoming release. Use the native
+  ring-buffer handle representation instead of detecting the 2026.9 layout.
+  Existing processor, codec and media ownership are unchanged. Maintained
+  full profiles use ESPHome's Sendspin 0.9.3 and its native pairing with Music
+  Assistant 2.10.7 or newer.
 
 - Request codec/I2S startup through the existing audio task instead of blocking
   the ESPHome loop. Readiness, cancellation and cleanup remain tied to the

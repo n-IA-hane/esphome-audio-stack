@@ -382,6 +382,7 @@ def _validate_dual_bus_config(config):
 
 
 CONFIG_SCHEMA = cv.All(
+    cv.require_esphome_version(2026, 10, 0),
     cv.only_with_framework(Framework.ESP_IDF),
     cv.requires_component(psram.DOMAIN),
     cv.Schema(

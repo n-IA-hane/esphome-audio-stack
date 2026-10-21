@@ -42,11 +42,11 @@ struct FakeRing {
   uint8_t *storage; size_t capacity, read=0, write=0, queued=0, borrowed=0;
 };
 using RingbufHandle_t = FakeRing *;
-struct StaticRingbuffer_t {};
-inline RingbufHandle_t xRingbufferCreateStatic(size_t size, int, uint8_t *storage, StaticRingbuffer_t *) {
-  return new FakeRing{storage,size};
+using StaticRingbuffer_t = FakeRing;
+inline RingbufHandle_t xRingbufferCreateStatic(size_t size, int, uint8_t *storage, StaticRingbuffer_t *structure) {
+  *structure=FakeRing{storage,size};return structure;
 }
-inline void vRingbufferDelete(RingbufHandle_t ring) { delete ring; }
+inline void vRingbufferDelete(RingbufHandle_t) {}
 inline size_t xRingbufferGetCurFreeSize(RingbufHandle_t ring) {
   return ring->capacity-ring->queued-ring->borrowed;
 }

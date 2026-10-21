@@ -38,7 +38,7 @@ For devices that need only capture/playback, omit the optional processor.
 [Stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 
-Use ESPHome **2026.9.0 or newer**,
+Use ESPHome **2026.10.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
 pins from your board's schematic.
 
@@ -559,7 +559,7 @@ live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/dev/yamls)
 
 ## Upgrading to 2026.10.0
 
-Use ESPHome 2026.9.0 or newer with the maintained profiles, then rebuild and
+Use ESPHome 2026.10.0 or newer with the maintained profiles, then rebuild and
 upload the firmware. Audio Stack runs on the ESP, so component updates take
 effect after a firmware rebuild and upload.
 

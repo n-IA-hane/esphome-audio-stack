@@ -75,7 +75,7 @@ def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> 
     assert "write_without_replacement(load->buf, load->valid_size, 0, false)" in output
     assert "output size is not frame-aligned" not in output
     assert "size_t nosplit_items_waiting() const;" in ring
-    assert "vRingbufferGetInfo(this->ring_handle_()" in ring
+    assert "vRingbufferGetInfo(this->handle_()" in ring
 
 
 def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:

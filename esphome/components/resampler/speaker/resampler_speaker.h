@@ -92,7 +92,7 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
 
   speaker::Speaker *output_speaker_{nullptr};
 
-  ScheduledTask<> task_;
+  ScheduledTask task_;
 
   audio::AudioStreamInfo target_stream_info_;
 

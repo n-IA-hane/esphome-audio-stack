@@ -60,10 +60,10 @@ class CapsRingBuffer final : public ring_buffer::RingBuffer {
 #ifdef ESP_AFE_RING_INTEGRITY_DEBUG
   bool debug_metadata_valid(RingbufferType_t expected_type) const {
     const auto expected_handle = reinterpret_cast<RingbufHandle_t>(const_cast<StaticRingbuffer_t *>(&this->structure_));
-    return this->ring_handle_() == expected_handle && this->storage_ != nullptr && this->size_ > 0 &&
+    return this->handle_() == expected_handle && this->storage_ != nullptr && this->size_ > 0 &&
            this->type_ == expected_type;
   }
-  RingbufHandle_t debug_handle() const { return this->ring_handle_(); }
+  RingbufHandle_t debug_handle() const { return this->handle_(); }
   RingbufHandle_t debug_expected_handle() const {
     return reinterpret_cast<RingbufHandle_t>(const_cast<StaticRingbuffer_t *>(&this->structure_));
   }
@@ -73,24 +73,6 @@ class CapsRingBuffer final : public ring_buffer::RingBuffer {
 #endif
 
  protected:
-  // ESPHome 2026.9.1 stores a handle; newer versions derive it from the static
-  // structure. Select the existing base-class representation at compile time.
-  template<typename Buffer = CapsRingBuffer> RingbufHandle_t ring_handle_() const {
-    const auto *self = static_cast<const Buffer *>(this);
-    if constexpr (requires { self->handle_(); }) {
-      return self->handle_();
-    } else {
-      return self->handle_;
-    }
-  }
-
-  template<typename Buffer = CapsRingBuffer> void set_legacy_handle_(RingbufHandle_t handle) {
-    auto *self = static_cast<Buffer *>(this);
-    if constexpr (requires { self->handle_ = handle; }) {
-      self->handle_ = handle;
-    }
-  }
-
   bool discard_bytes_(size_t discard_bytes);
 
  private:
@@ -143,9 +125,8 @@ inline const char *policy_str(RingBufferPolicy p) {
 
 inline CapsRingBuffer::~CapsRingBuffer() {
   if (this->storage_ != nullptr) {
-    vRingbufferDelete(this->ring_handle_());
+    vRingbufferDelete(this->handle_());
     heap_caps_free(this->storage_);
-    this->set_legacy_handle_(nullptr);
     this->storage_ = nullptr;
     this->size_ = 0;
   }
@@ -159,7 +140,6 @@ inline bool CapsRingBuffer::install(size_t len, uint32_t caps, RingbufferType_t 
   this->size_ = len;
   this->type_ = type;
   const auto handle = xRingbufferCreateStatic(len, type, mem, &this->structure_);
-  this->set_legacy_handle_(handle);
   if (handle == nullptr) {
     heap_caps_free(mem);
     this->storage_ = nullptr;
@@ -175,13 +155,13 @@ inline size_t CapsRingBuffer::read(void *data, size_t len, TickType_t ticks_to_w
     return ring_buffer::RingBuffer::read(data, len, ticks_to_wait);
 
   size_t item_len = 0;
-  void *item = xRingbufferReceive(this->ring_handle_(), &item_len, ticks_to_wait);
+  void *item = xRingbufferReceive(this->handle_(), &item_len, ticks_to_wait);
   if (item == nullptr)
     return 0;
 
   const size_t copied = std::min(item_len, len);
   std::memcpy(data, item, copied);
-  vRingbufferReturnItem(this->ring_handle_(), item);
+  vRingbufferReturnItem(this->handle_(), item);
   return copied;
 }
 
@@ -201,7 +181,7 @@ inline size_t CapsRingBuffer::write_without_replacement(const void *data, size_t
   if (!this->is_nosplit_())
     return ring_buffer::RingBuffer::write_without_replacement(data, len, ticks_to_wait, write_partial);
 
-  if (xRingbufferSend(this->ring_handle_(), data, len, ticks_to_wait))
+  if (xRingbufferSend(this->handle_(), data, len, ticks_to_wait))
     return len;
   return 0;
 }
@@ -212,10 +192,10 @@ inline BaseType_t CapsRingBuffer::reset() {
 
   while (true) {
     size_t item_len = 0;
-    void *item = xRingbufferReceive(this->ring_handle_(), &item_len, 0);
+    void *item = xRingbufferReceive(this->handle_(), &item_len, 0);
     if (item == nullptr)
       return pdPASS;
-    vRingbufferReturnItem(this->ring_handle_(), item);
+    vRingbufferReturnItem(this->handle_(), item);
   }
 }
 
@@ -223,7 +203,7 @@ inline size_t CapsRingBuffer::nosplit_items_waiting() const {
   if (!this->is_nosplit_())
     return 0;
   UBaseType_t items_waiting = 0;
-  vRingbufferGetInfo(this->ring_handle_(), nullptr, nullptr, nullptr, nullptr, &items_waiting);
+  vRingbufferGetInfo(this->handle_(), nullptr, nullptr, nullptr, nullptr, &items_waiting);
   return static_cast<size_t>(items_waiting);
 }
 
@@ -234,11 +214,11 @@ inline bool CapsRingBuffer::discard_bytes_(size_t discard_bytes) {
   size_t discarded = 0;
   while (discarded < discard_bytes) {
     size_t item_len = 0;
-    void *item = xRingbufferReceive(this->ring_handle_(), &item_len, 0);
+    void *item = xRingbufferReceive(this->handle_(), &item_len, 0);
     if (item == nullptr)
       break;
     discarded += item_len;
-    vRingbufferReturnItem(this->ring_handle_(), item);
+    vRingbufferReturnItem(this->handle_(), item);
   }
   return discarded >= discard_bytes;
 }

@@ -5,10 +5,10 @@ Speaker scheduling follows PR #21055, patch revision
 `71b816a3f6247685415cf49ed911ad6c928d2ea0`.
 
 Both native speaker and microphone resamplers are present. The speaker task
-keeps upstream ownership and lifecycle. task_compat.h uses native core-affinity
-creation when available; on ESPHome 2026.9.1 it adapts creation while the same
-StaticTask object still owns the stack, TCB and teardown. No installed core
-files need modification, and the provider no longer depends on Audio Stack.
+keeps upstream ownership and lifecycle. ESPHome 2026.10.0 still lacks the native
+core-affinity create parameter. The creation adapter uses that released API's
+known layout; the same StaticTask owns its TCB, stack and teardown. No
+old/new API selector or installed-core patch is used.
 
 Bounded-prefix writes retain progress with older ring buffers until PR #21058
 is included in the selected release. Stable log declarations remain compatible.

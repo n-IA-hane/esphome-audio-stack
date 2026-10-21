@@ -1,4 +1,4 @@
-"""Compile the actual adapter against both ESPHome handle representations.
+"""Compile the actual allocator against the ESPHome 2026.10 handle representation.
 
 The small base/SDK doubles model layout and ownership, not audio or scheduling.
 Full real-ESP-IDF and hardware tests remain separate evidence.
@@ -7,15 +7,13 @@ from pathlib import Path
 import shutil
 import subprocess
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = "esp_audio_stack"
 NAMESPACE = "esp_audio_stack"
 
 
-@pytest.mark.parametrize("accessor", [False, True], ids=["esphome_2026_9_1", "upstream_accessor"])
-def test_ring_buffer_handle_ownership(tmp_path: Path, accessor: bool) -> None:
+def test_ring_buffer_handle_ownership(tmp_path: Path) -> None:
     compiler = shutil.which("g++")
     assert compiler is not None, "C++ runtime tests require g++"
     include = tmp_path / "include"
@@ -69,12 +67,9 @@ inline void vRingbufferGetInfo(RingbufHandle_t,void *,void *,void *,void *,unsig
 #define ESP_LOGI(...) do {} while (0)
 """,
     }
-    handle = (
-        "RingbufHandle_t handle_() const { return const_cast<StaticRingbuffer_t *>(&structure_); }"
-        if accessor else "RingbufHandle_t handle_{nullptr};"
-    )
-    predicate = "storage_ != nullptr" if accessor else "handle_ != nullptr"
-    expression = "handle_()" if accessor else "handle_"
+    handle = "RingbufHandle_t handle_() const { return const_cast<StaticRingbuffer_t *>(&structure_); }"
+    predicate = "storage_ != nullptr"
+    expression = "handle_()"
     files["esphome/components/ring_buffer/ring_buffer.h"] = r"""
 #pragma once
 #include <memory>
