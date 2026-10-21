@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.10.0-dev
+## 2026.11.0-dev
 
 > **Attention: ESPHome 2026.10.0 or newer is required.**
 >

@@ -2,7 +2,7 @@
 
 *Developed and maintained by n-IA-hane, with community contributions and support. [❤️ Sponsor the project](https://github.com/sponsors/n-IA-hane)*
 
-[Development preview 2026.10.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.0-dev) uses the coordinated `dev` sources.
+[Development preview 2026.11.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.11.0-dev) uses the coordinated `dev` sources.
 
 **Capture the microphone and play the speaker at the same time, even on a
 single shared I2S bus. Feed echo-cancelled microphone audio to Micro Wake Word,
