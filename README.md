@@ -86,16 +86,20 @@ single mic, stereo L/R, TDM, analog codecs, downmix and separate RX/TX buses.
 ## 1. Start with a microphone and speaker
 
 Start with Audio Stack alone; add processing and application components as needed.
+This example deliberately uses **48 kHz for the physical bus and speaker** and
+**16 kHz for the public microphone**. Audio Stack converts capture from 48 to
+16 kHz. These are separate choices: the hardware does not become a 16 kHz
+speaker just because a speech processor consumes a 16 kHz microphone.
 For example, an I2S MEMS microphone and an I2S amplifier can share clock wires
 while using separate data wires:
 
 ```text
-                              ┌──▶ Microphone BCLK / WS
+                              ┌──→ Microphone BCLK / WS
 ESP BCLK / WS ────────────────┤
-                              └──▶ Amplifier BCLK / WS
+                              └──→ Amplifier BCLK / WS
 
-Microphone DATA ─────────────▶ ESP DIN  ──▶ microphone consumers
-Amplifier DATA ◀────────────── ESP DOUT ◀── speaker PCM
+Microphone DATA ─────────────→ ESP DIN  ──→ microphone consumers
+Amplifier DATA ←────────────── ESP DOUT ←── speaker PCM
 ```
 
 BCLK clocks individual bits. WS (also called LRCLK) identifies the audio frame
@@ -115,28 +119,65 @@ It uses a local component source. If copying it outside the repository, replace
 that source as instructed in the example. This first example declares audio
 endpoints; it has no network, Voice Assistant or player, and does not record or
 play anything by itself. Use a complete device profile for a ready-to-use
-application. Its audio section is:
+application. Every arrow below is a valid YAML comment, so the example remains
+copyable. Its audio section is:
 
 ```yaml
-esp_audio_stack:
-  sample_rate: 16000
-  bits_per_sample: 32
-  slot_bit_width: 32
-  rx_slot_mode: stereo
-  mic_channel: left
-  i2s_bclk_pin: GPIO6
-  i2s_lrclk_pin: GPIO7
-  i2s_din_pin: GPIO4
-  i2s_dout_pin: GPIO8
+esp_audio_stack:                 # <-- One capture/playback hardware owner.
+  sample_rate: 48000             # <-- Physical bus and speaker: 48 kHz.
+  output_sample_rate: 16000      # <-- Public mic: convert 48 kHz to 16 kHz.
+  bits_per_sample: 32            # <-- Captured I2S sample width.
+  slot_bit_width: 32             # <-- Width of each physical I2S slot.
+  rx_slot_mode: stereo           # <-- Read both Left/Right bus slots.
+  mic_channel: left              # <-- Keep the slot selected by the mic's L/R pin.
+  i2s_bclk_pin: GPIO6            # <-- Shared BCLK output to microphone and amp.
+  i2s_lrclk_pin: GPIO7           # <-- Shared WS/LRCLK frame-clock output.
+  i2s_din_pin: GPIO4             # <-- Mic DATA enters the ESP here.
+  i2s_dout_pin: GPIO8            # <-- Speaker DATA leaves the ESP here.
 
-microphone:
-  - platform: esp_audio_stack
-    id: board_mic
+microphone:                      # <-- Mono, 16-bit PCM at 16 kHz.
+  - platform: esp_audio_stack    # <-- Use the parent's capture and conversion.
+    id: board_mic                # <-- Input ID for Assist, MWW or VoIP.
 
-speaker:
-  - platform: esp_audio_stack
-    id: board_speaker
+speaker:                         # <-- PCM destination for playback.
+  - platform: esp_audio_stack    # <-- Use the same parent's output hardware.
+    id: board_speaker            # <-- Reference this ID from a player or mixer.
+    sample_rate: 48000           # <-- Incoming playback PCM must be 48 kHz.
+    bits_per_sample: 16          # <-- Public PCM is 16-bit, bus slots are 32-bit.
+    num_channels: 1              # <-- One mono playback channel.
 ```
+
+The resulting rates are visible without inspecting another package:
+
+```text
+48 kHz playback PCM → [board_speaker] → I2S TX at 48 kHz → amplifier
+
+Microphone → I2S RX at 48 kHz → [Audio Stack: 48 → 16 kHz]
+                                             │
+                                             └──→ [board_mic: 16 kHz]
+```
+
+`sample_rate` sets the bus/playback rate. `output_sample_rate` sets the mic
+rate after conversion. Neither is a fixed project-wide 16 kHz limit. The
+configured hardware must support the bus rate; capture conversion accepts
+integer downsampling ratios up to six. The example's 48-to-16 kHz ratio is three.
+
+`bits_per_sample` and `slot_bit_width` describe bus samples and slots,
+not the sample rate. The public mic and speaker interfaces use 16-bit PCM.
+Configure the mic rate on the parent through `output_sample_rate`, not on the
+`microphone:` child, whose format comes from the parent.
+
+The optional [standalone AEC](#4-add-echo-cancellation) and
+[AFE](#7-add-afe-speech-processing) paths process this 16 kHz capture while
+playback stays at 48 kHz. This first example has no processor yet, so converted
+capture still includes speaker echo. The
+[complete AEC example](examples/02-esp-audio-stack-aec.yaml) adds the processor
+and playback reference for a codec board.
+
+If a playback source supplies 16 kHz PCM, use a speaker resampler to convert it
+to 48 kHz before `board_speaker`; `output_sample_rate` does not resample playback.
+The [playback-source section](#8-combine-different-rates-and-playback-sources)
+shows where that resampler and a mixer belong.
 
 **One stack per device:** the component currently supports a single
 `esp_audio_stack` instance on each ESP. Its microphone, speaker, level sensors,
@@ -182,22 +223,23 @@ that peripheral to a native `i2s_audio` component.
 wires. Replace the top-level I2S pin fields in the first example with:
 
 ```yaml
-esp_audio_stack:
-  sample_rate: 16000
-  bits_per_sample: 32
-  slot_bit_width: 32
-  rx_slot_mode: stereo
-  mic_channel: left
-  rx_bus:
-    i2s_num: 0
-    i2s_bclk_pin: GPIO6
-    i2s_lrclk_pin: GPIO7
-    i2s_din_pin: GPIO4
-  tx_bus:
-    i2s_num: 1
-    i2s_bclk_pin: GPIO9
-    i2s_lrclk_pin: GPIO10
-    i2s_dout_pin: GPIO8
+esp_audio_stack:                 # <-- One owner also manages two separate buses.
+  sample_rate: 48000             # <-- Both physical buses and speaker: 48 kHz.
+  output_sample_rate: 16000      # <-- Convert microphone capture to 16 kHz.
+  bits_per_sample: 32            # <-- Microphone bus sample width.
+  slot_bit_width: 32             # <-- Physical I2S slot width.
+  rx_slot_mode: stereo           # <-- Capture both Left/Right slots.
+  mic_channel: left              # <-- Select the mic's occupied slot.
+  rx_bus:                        # <-- Separate capture bus.
+    i2s_num: 0                   # <-- First I2S peripheral.
+    i2s_bclk_pin: GPIO6          # <-- Microphone bit-clock output.
+    i2s_lrclk_pin: GPIO7         # <-- Microphone frame-clock output.
+    i2s_din_pin: GPIO4           # <-- Microphone data input.
+  tx_bus:                        # <-- Separate playback bus.
+    i2s_num: 1                   # <-- Different I2S peripheral.
+    i2s_bclk_pin: GPIO9          # <-- Amplifier bit-clock output.
+    i2s_lrclk_pin: GPIO10        # <-- Amplifier frame-clock output.
+    i2s_dout_pin: GPIO8          # <-- Amplifier data output.
 ```
 
 Both bus blocks are required and their port numbers must differ. This backend
@@ -221,10 +263,10 @@ The I2C connection configures the codec. I2S carries audio. Some codecs also
 require MCLK, a higher-frequency master clock:
 
 ```text
-ESP I2C SDA/SCL ◀─────────────▶ Codec registers (gain, format, volume)
-ESP MCLK/BCLK/WS ─────────────▶ Codec clocks
-ESP DIN ◀────────────────────── Codec ADC ◀─── microphone
-ESP DOUT ─────────────────────▶ Codec DAC ───▶ amplifier ───▶ speaker
+ESP I2C SDA/SCL ←─────────────→ Codec registers (gain, format, volume)
+ESP MCLK/BCLK/WS ─────────────→ Codec clocks
+ESP DIN ←────────────────────── Codec ADC ←─── microphone
+ESP DOUT ─────────────────────→ Codec DAC ───→ amplifier ───→ speaker
 ```
 
 Use the [ES8311 audio-only example](examples/01-esp-audio-stack-only.yaml) for
@@ -232,13 +274,13 @@ the declaration structure. Replace its GPIOs, I2C address and clock settings
 with those of your board. The codec block is added to `esp_audio_stack`:
 
 ```yaml
-codec:
-  input:
-    type: es8311
-    address: 0x18
-  output:
-    type: es8311
-    address: 0x18
+codec:                           # <-- Add inside the existing esp_audio_stack.
+  input:                         # <-- Analog microphone capture through the ADC.
+    type: es8311                 # <-- Supported hardware codec chip.
+    address: 0x18                # <-- Its actual I2C control address.
+  output:                        # <-- Playback through the DAC.
+    type: es8311                 # <-- Same codec's output side.
+    address: 0x18                # <-- Same chip and control address.
 ```
 
 The driver, through Espressif `esp_codec_dev`, owns codec configuration. Avoid
@@ -259,23 +301,23 @@ speaker, enclosure and room, then uses that estimate to reduce the echo. Clippin
 or excessive delay can prevent useful cancellation.
 
 ```text
-Playback PCM ──▶ speaker path ─────────────────────▶ loudspeaker
+Playback PCM ──→ speaker path ─────────────────────→ loudspeaker
                      │
-                     └──▶ reference ────┐
+                     └──→ reference ────┐
                                         │
-                                        ▼
-Microphone ──▶ capture ─────────────▶ [AEC] ──▶ processed microphone
+                                        ↓
+Microphone ──→ capture ─────────────→ [AEC] ──→ processed microphone
 ```
 
 Add `esp_aec` to your `external_components` list, declare it, and add
 `processor_id: aec` to the existing audio stack:
 
 ```yaml
-esp_aec:
-  id: aec
-  sample_rate: 16000
-  mode: sr_low_cost
-  filter_length: 4
+esp_aec:                         # <-- Optional standalone echo canceller.
+  id: aec                        # <-- Bind with esp_audio_stack.processor_id: aec.
+  sample_rate: 16000             # <-- Matches output_sample_rate, not the 48 kHz bus.
+  mode: sr_low_cost              # <-- Speech/wake-word-oriented starting profile.
+  filter_length: 4               # <-- ESP-SR tuning parameter (1-8), not milliseconds.
 ```
 
 Use `output_sample_rate: 16000` if the bus runs faster: the processor works at
@@ -306,18 +348,18 @@ ES8311 I2S RX frame
 └───────────┬──────────┴───────────┬──────────┘
             │                      │
             │                      │
-            └───────▶ [AEC] ◀──────┘
+            └───────→ [AEC] ←──────┘
                         │
-                        ▼
+                        ↓
                  mono microphone
 ```
 
 On the ES8311 example, add these fields to the existing `esp_audio_stack` block:
 
 ```yaml
-num_channels: 2
-use_stereo_aec_reference: true
-reference_channel: right
+num_channels: 2                  # <-- Capture the codec's two physical slots.
+use_stereo_aec_reference: true   # <-- Separate microphone and DAC feedback.
+reference_channel: right         # <-- Right carries playback, not another mic.
 ```
 
 Set `no_dac_ref: false` in **both** the ES8311 input and output codec blocks to
@@ -349,23 +391,23 @@ RX frame (4 physical slots):
 │ 0: mic A   │ 1: ref     │ 2: mic B   │ 3: unused  │
 └─────┬──────┴─────┬──────┴─────┬──────┴────────────┘
       │            │            │
-      └────────────┴────────────┴──▶ select and convert ──▶ AFE
+      └────────────┴────────────┴──→ select and convert ──→ AFE
 
 TX frame (4 physical slots):
 ┌────────────┬────────────┬────────────┬────────────┐
 │ 0: audio   │ 1: unused  │ 2: unused  │ 3: unused  │
 └─────┬──────┴────────────┴────────────┴────────────┘
-      └──▶ DAC ──▶ speaker
+      └──→ DAC ──→ speaker
 ```
 
 After choosing the board's pins and codecs, this fragment selects that layout:
 
 ```yaml
-tdm_total_slots: 4
-tdm_mic_slots: [0, 2]
-use_tdm_reference: true
-tdm_ref_slot: 1
-tdm_tx_slot: 0
+tdm_total_slots: 4               # <-- Four physical slots per bus frame.
+tdm_mic_slots: [0, 2]            # <-- Two microphone inputs, in this order.
+use_tdm_reference: true          # <-- Use a physically wired feedback input.
+tdm_ref_slot: 1                  # <-- Feedback occupies slot 1, not a mic slot.
+tdm_tx_slot: 0                   # <-- Send speaker PCM through output slot 0.
 ```
 
 These fields select the inputs inside `esp_audio_stack`. Pair them with the
@@ -401,15 +443,15 @@ existing stack's `processor_id` to the AFE ID. Do not declare both processors.
 A single-microphone starting point is:
 
 ```yaml
-esp_afe:
-  id: afe
-  type: sr
-  mode: low_cost
-  mic_num: 1
-  aec_enabled: true
-  ns_enabled: true
-  agc_enabled: true
-  vad_enabled: false
+esp_afe:                         # <-- Optional speech-processing front end.
+  id: afe                        # <-- Bind with esp_audio_stack.processor_id: afe.
+  type: sr                       # <-- Speech-recognition-oriented AFE profile.
+  mode: low_cost                 # <-- Lower processing cost starting point.
+  mic_num: 1                     # <-- One delivered mic channel, excluding REF.
+  aec_enabled: true              # <-- Reduce echo using the playback reference.
+  ns_enabled: true               # <-- Reduce microphone background noise.
+  agc_enabled: true              # <-- Adjust speech level automatically.
+  vad_enabled: false             # <-- Optional speech-activity detection is off.
 ```
 
 [Complete single-mic AFE example](examples/03-esp-audio-stack-afe.yaml).
@@ -458,13 +500,13 @@ Supported conversion uses integer ratios up to six, not arbitrary input/output
 rate pairs. Omitting `output_sample_rate` keeps the bus rate.
 
 ```text
-Media / TTS ──▶ resampler ────┐
-                              ├──▶ mixer ──▶ 48 kHz speaker ──▶ I2S TX
-Call audio ──▶ resampler ─────┘
+Media / TTS ──→ resampler ────┐
+                              ├──→ mixer ──→ 48 kHz speaker ──→ I2S TX
+Call audio ──→ resampler ─────┘
 
-I2S RX ──▶ select mic/reference ──▶ 48-to-16 kHz ──▶ [AEC / AFE]
+I2S RX ──→ select mic/reference ──→ 48-to-16 kHz ──→ [AEC / AFE]
                                                           │
-                                                          └──▶ 16 kHz microphone
+                                                          └──→ 16 kHz microphone
 ```
 
 Declare rates on the parent Audio Stack. Use an ESPHome resampler before the
@@ -555,24 +597,24 @@ the processor.** AEC and AFE do not need separate microphone drivers:
 ```text
                     [Physical microphone(s)]
                                 │
-                                ▼
+                                ↓
               [Audio Stack: capture/select/convert]
                                 │
                        Choose ONE delivery
             ┌───────────────────┴───────────────────┐
-            ▼                                       ▼
+            ↓                                       ↓
       [passthrough]                             [average]
      1 or 2 channels                          mono (A+B)/2
             │                                       │
             └───────────────────┬───────────────────┘
-                                ▼
+                                ↓
                        [AEC / AFE / none]
                                 │
-                                ▼
+                                ↓
                         [Mono microphone]
                                 │
                     ┌───────────┼───────────┐
-                    ▼           ▼           ▼
+                    ↓           ↓           ↓
                    MWW       Assist       VoIP
 ```
 
@@ -595,12 +637,12 @@ ground and module supply requirements; do not combine their pin maps.
 ### A. One digital I2S microphone
 
 ```text
-ESP GPIO5 (BCLK) ─────────────▶ mic BCLK
-ESP GPIO6 (WS) ───────────────▶ mic WS
-ESP GPIO4 (DIN) ◀────────────── mic DATA
+ESP GPIO5 (BCLK) ─────────────→ mic BCLK
+ESP GPIO6 (WS) ───────────────→ mic WS
+ESP GPIO4 (DIN) ←────────────── mic DATA
                                 L/R selects Left
 
-Selected Left samples ──▶ mono AEC / mono AFE / no processor
+Selected Left samples ──→ mono AEC / mono AFE / no processor
 ```
 
 ```yaml
@@ -619,16 +661,16 @@ available with the matching hardware format.
 ### B. Two compatible digital microphones on one data line
 
 ```text
-                             ┌──▶ mic A BCLK
+                             ┌──→ mic A BCLK
 ESP GPIO5 (BCLK) ────────────┤
-                             └──▶ mic B BCLK
+                             └──→ mic B BCLK
 
-                             ┌──▶ mic A WS
+                             ┌──→ mic A WS
 ESP GPIO6 (WS) ──────────────┤
-                             └──▶ mic B WS
+                             └──→ mic B WS
 
 mic A DATA (Left) ───────────┐
-                             ├──▶ ESP GPIO4 (DIN)
+                             ├──→ ESP GPIO4 (DIN)
 mic B DATA (Right) ──────────┘
 
 RX frame: [ Left = mic A │ Right = mic B ]
@@ -651,9 +693,9 @@ order determines the processor's microphone order.
 ### C. Keep both microphones independent for AFE/BSS
 
 ```text
-I2S Left / TDM mic slot A ───▶ mic A ──┐
-                                       ├──▶ AFE (two mics, SE/BSS) ──▶ mono
-I2S Right / TDM mic slot B ──▶ mic B ──┤
+I2S Left / TDM mic slot A ───→ mic A ──┐
+                                       ├──→ AFE (two mics, SE/BSS) ──→ mono
+I2S Right / TDM mic slot B ──→ mic B ──┤
 Playback reference ────────────────────┘
 ```
 
@@ -679,7 +721,7 @@ remove the channel separation needed by this dual-microphone processing.
 
 ```text
 mic A ──┐
-        ├──▶ Audio Stack: (A + B) / 2 ──▶ one mono channel
+        ├──→ Audio Stack: (A + B) / 2 ──→ one mono channel
 mic B ──┘
 ```
 
@@ -710,13 +752,13 @@ microphone average; use the reference route actually configured for your board.
 
 ```text
 AEC option:
-[Mic A, Mic B] ──▶ [Audio Stack average] ──▶ [esp_aec] ──▶ mono mic
-                                                 ▲
+[Mic A, Mic B] ──→ [Audio Stack average] ──→ [esp_aec] ──→ mono mic
+                                                 ↑
 [Playback reference] ────────────────────────────┘
 
 AFE option:
-[Mic A, Mic B] ──▶ [Audio Stack average] ──▶ [esp_afe] ──▶ mono mic
-                                                 ▲
+[Mic A, Mic B] ──→ [Audio Stack average] ──→ [esp_afe] ──→ mono mic
+                                                 ↑
 [Playback reference] ────────────────────────────┘
 ```
 
@@ -765,15 +807,15 @@ declaration. The microphone then includes any echo from the local speaker.
 ### F. TDM microphones, with a codec or another compatible TDM source
 
 ```text
-ESP GPIO12 (MCLK) ────────────▶ codec MCLK
-ESP GPIO13 (BCLK) ────────────▶ codec BCLK
-ESP GPIO14 (WS) ──────────────▶ codec WS
-ESP GPIO15 (DIN) ◀───────────── TDM DATA
-ESP GPIO16 (DOUT) ────────────▶ output DAC DATA
+ESP GPIO12 (MCLK) ────────────→ codec MCLK
+ESP GPIO13 (BCLK) ────────────→ codec BCLK
+ESP GPIO14 (WS) ──────────────→ codec WS
+ESP GPIO15 (DIN) ←───────────── TDM DATA
+ESP GPIO16 (DOUT) ────────────→ output DAC DATA
 
-mic A ────────▶ ADC input ──┐
-mic B ────────▶ ADC input ──┼──▶ one TDM DATA line ──▶ ESP DIN
-Speaker feedback ─▶ ADC ────┘
+mic A ────────→ ADC input ──┐
+mic B ────────→ ADC input ──┼──→ one TDM DATA line ──→ ESP DIN
+Speaker feedback ─→ ADC ────┘
 
 Example RX frame:
 ┌────────────┬────────────┬────────────┬────────────┐
@@ -781,7 +823,7 @@ Example RX frame:
 │ mic A      │ reference  │ mic B      │ unused     │
 └────────────┴────────────┴────────────┴────────────┘
        │            │            │
-       ▼            ▼            ▼
+       ↓            ↓            ↓
      Mic A         REF         Mic B
 
 Mic A + Mic B: independent channels OR mono average.
@@ -815,12 +857,12 @@ hardware-reference slot or analog gain from another board's schematic.
 ### G. Analog microphones connected through a hardware codec
 
 ```text
-ESP GPIO11 (SDA) ◀────────────▶ codec SDA
-ESP GPIO10 (SCL) ─────────────▶ codec SCL
+ESP GPIO11 (SDA) ←────────────→ codec SDA
+ESP GPIO10 (SCL) ─────────────→ codec SCL
 
 Analog mic A ─────┐
-                  ├──▶ [Codec ADC] ──▶ STD I2S or TDM ──▶ Audio Stack
-Analog mic B ─────┘         ▲
+                  ├──→ [Codec ADC] ──→ STD I2S or TDM ──→ Audio Stack
+Analog mic B ─────┘         ↑
                             │
 ESP I2C ────────────────────┘ codec setup and analog gain
 ```
@@ -835,7 +877,7 @@ analog capture through an ESP GPIO.
 ### H. ES8311 microphone plus DAC feedback is not a dual-mic input
 
 ```text
-ESP GPIO4 (DIN) ◀───────────── ES8311 I2S RX
+ESP GPIO4 (DIN) ←───────────── ES8311 I2S RX
 
 ES8311 I2S RX frame
 ┌──────────────────────┬──────────────────────┐
@@ -843,9 +885,9 @@ ES8311 I2S RX frame
 └───────────┬──────────┴───────────┬──────────┘
             │                      │
             │                      │
-            └─────▶ [AEC/AFE] ◀────┘
+            └─────→ [AEC/AFE] ←────┘
                         │
-                        ▼
+                        ↓
                  mono microphone
 ```
 
@@ -867,15 +909,15 @@ feedback connection that the codec or board does not provide.
 
 ```text
 SHARED BUS (I2S port 0):
-Mic DATA ──▶ GPIO4 (DIN)  ──▶ [RX]
-Amp DATA ◀── GPIO7 (DOUT) ◀── [TX]
+Mic DATA ──→ GPIO4 (DIN)  ──→ [RX]
+Amp DATA ←── GPIO7 (DOUT) ←── [TX]
 Both devices: GPIO5 (BCLK), GPIO6 (WS).
 
 SPLIT RX/TX BUSES:
-Mic DATA   ──▶ GPIO4 (DIN) ──▶ [I2S port 0 RX]
-Mic clocks ◀── GPIO5 (BCLK), GPIO6 (WS)
-Amp DATA   ◀── GPIO7 (DOUT) ◀── [I2S port 1 TX]
-Amp clocks ◀── GPIO10 (BCLK), GPIO11 (WS)
+Mic DATA   ──→ GPIO4 (DIN) ──→ [I2S port 0 RX]
+Mic clocks ←── GPIO5 (BCLK), GPIO6 (WS)
+Amp DATA   ←── GPIO7 (DOUT) ←── [I2S port 1 TX]
+Amp clocks ←── GPIO10 (BCLK), GPIO11 (WS)
 ```
 
 For standard I2S, keep the chosen microphone selection and `mic_mix`, then
@@ -902,10 +944,10 @@ Stack owns both. Split-bus TDM is not currently supported.
 ### J. Choose the playback reference independently of microphone delivery
 
 ```text
-Software reference: playback PCM ───────────┬──▶ I2S TX ──▶ speaker
-                                            └──▶ reference ──▶ AEC/AFE
+Software reference: playback PCM ───────────┬──→ I2S TX ──→ speaker
+                                            └──→ reference ──→ AEC/AFE
 
-Hardware reference: codec feedback or wired ADC slot ──────▶ AEC/AFE
+Hardware reference: codec feedback or wired ADC slot ──────→ AEC/AFE
 ```
 
 Without hardware feedback, `aec_reference: ring_buffer` is the default software

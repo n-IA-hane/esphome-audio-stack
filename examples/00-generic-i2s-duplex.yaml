@@ -1,49 +1,50 @@
-# Generic S3 prototype: I2S microphone and amplifier, no codec or processing.
-# Change GPIOs and PSRAM mode for your board. Match the mic L/R strap to mic_channel.
-# This declares audio endpoints; add a consumer/player to record or play sound.
-#
-# ESP BCLK/WS --+--> microphone clocks
-#              +--> amplifier clocks
-# Microphone --DATA--> ESP DIN --> microphone consumer
-# Amplifier <--DATA--- ESP DOUT <-- PCM playback
-esphome:
-  min_version: 2026.10.0
-  name: generic-i2s-duplex
+# Generic S3 prototype: shared I2S microphone + amplifier, no codec or DSP.
+# Example wiring only: adapt GPIOs, supply, PSRAM and mic L/R to your board.
+# The bus and speaker run at 48 kHz; Audio Stack converts the mic to 16 kHz.
+# Add a consumer/player to record/play. This example does not start either.
+# Adding AEC/AFE later processes that 16 kHz mic without slowing the bus.
+esphome:                         # <-- Firmware identity and builder requirement.
+  min_version: 2026.10.0         # <-- Minimum supported ESPHome release.
+  name: generic-i2s-duplex       # <-- Unique device/node name.
 
-esp32:
-  board: esp32-s3-devkitc-1
-  variant: esp32s3
-  framework:
-    type: esp-idf
+esp32:                           # <-- Target hardware, adapt to the actual board.
+  board: esp32-s3-devkitc-1      # <-- Example development board.
+  variant: esp32s3               # <-- ESP32-S3 chip family.
+  framework:                     # <-- ESP-IDF provides the I2S/codec APIs.
+    type: esp-idf                # <-- This component requires ESP-IDF.
 
-psram:
-  mode: octal
-  speed: 80MHz
+psram:                           # <-- Required external RAM, match your module.
+  mode: octal                    # <-- Use quad instead for quad-PSRAM hardware.
+  speed: 80MHz                   # <-- Must be supported by the board/module.
 
-logger:
-  level: INFO
+logger:                          # <-- ESPHome logging for setup and errors.
+  level: INFO                    # <-- Ordinary operation, no per-frame logging.
 
 # Local checkout example. For a standalone YAML, replace this source with
 # github://n-IA-hane/esphome-audio-stack@main for the stable version.
-external_components:
-  - source: ../esphome/components
-    components: [esp_audio_stack]
+external_components:             # <-- Load the maintained audio component.
+  - source: ../esphome/components# <-- Local checkout, see standalone URL above.
+    components: [esp_audio_stack]# <-- No optional DSP is enabled in this example.
 
-esp_audio_stack:
-  sample_rate: 16000
-  bits_per_sample: 32
-  slot_bit_width: 32
-  rx_slot_mode: stereo
-  mic_channel: left
-  i2s_bclk_pin: GPIO6
-  i2s_lrclk_pin: GPIO7
-  i2s_din_pin: GPIO4
-  i2s_dout_pin: GPIO8
+esp_audio_stack:                 # <-- One owner of capture and playback hardware.
+  sample_rate: 48000             # <-- Physical I2S bus and speaker rate: 48 kHz.
+  output_sample_rate: 16000      # <-- Mic rate: convert 48 kHz capture to 16 kHz.
+  bits_per_sample: 32            # <-- Captured I2S sample width, not public PCM.
+  slot_bit_width: 32             # <-- Each physical bus slot carries 32 clock bits.
+  rx_slot_mode: stereo           # <-- Read Left/Right slots, even with one mic.
+  mic_channel: left              # <-- Select the slot matching the mic's L/R strap.
+  i2s_bclk_pin: GPIO6            # <-- ESP clock output to mic and amplifier BCLK.
+  i2s_lrclk_pin: GPIO7           # <-- Shared WS/LRCLK frame clock output.
+  i2s_din_pin: GPIO4             # <-- Mic DATA enters the ESP through DIN.
+  i2s_dout_pin: GPIO8            # <-- Speaker DATA leaves the ESP through DOUT.
 
-microphone:
-  - platform: esp_audio_stack
-    id: board_mic
+microphone:                      # <-- Public mono, signed 16-bit, 16 kHz PCM.
+  - platform: esp_audio_stack    # <-- Reuse capture; do not create another I2S reader.
+    id: board_mic                # <-- Input ID used by Assist, MWW, VoIP, etc.
 
-speaker:
-  - platform: esp_audio_stack
-    id: board_speaker
+speaker:                         # <-- Public speaker input at the bus rate.
+  - platform: esp_audio_stack    # <-- Reuse the same I2S hardware owner.
+    id: board_speaker            # <-- Output ID used by a player/mixer/resampler.
+    sample_rate: 48000           # <-- Supply 48 kHz PCM to this endpoint.
+    bits_per_sample: 16          # <-- Public PCM is 16-bit, bus slots remain 32-bit.
+    num_channels: 1              # <-- One mono playback channel.
