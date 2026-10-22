@@ -608,12 +608,13 @@ available with the matching hardware format.
                        +--> mic A BCLK
 ESP BCLK --------------+
                        +--> mic B BCLK
+
                        +--> mic A WS
 ESP WS ----------------+
                        +--> mic B WS
 
 mic A DATA (Left) ------+
-                       +--> ESP DIN
+                        +--> ESP DIN
 mic B DATA (Right) -----+
 
 RX frame: [ Left = mic A | Right = mic B ]
@@ -637,9 +638,9 @@ order determines the processor's microphone order.
 
 ```text
 I2S Left / TDM mic slot A ---> mic A --+
-                                      +--> AFE (two mics, SE/BSS) --> mono
+                                       +--> AFE (two mics, SE/BSS) --> mono
 I2S Right / TDM mic slot B --> mic B --+
-Playback reference ------------------+
+Playback reference --------------------+
 ```
 
 ```yaml
@@ -733,7 +734,7 @@ configured conversion and gain, including any echo from the local speaker.
 ```text
 mic A --------> ADC input --+
 mic B --------> ADC input --+--> one TDM DATA line --> ESP DIN
-Speaker feedback -> ADC ---+
+Speaker feedback -> ADC ----+
 
 Example RX frame:
 +------------+------------+------------+------------+
@@ -774,8 +775,8 @@ hardware-reference slot or analog gain from another board's schematic.
 ```text
 Analog mic A --> codec ADC --+
 Analog mic B --> codec ADC --+--> STD I2S or TDM --> Audio Stack
-                            ^
-ESP I2C --------------------+ codec setup and supported analog gains
+                             ^
+ESP I2C ---------------------+ codec setup and supported analog gains
 ```
 
 Use the supported codec driver and the digital layout it actually outputs:
@@ -841,7 +842,7 @@ Stack owns both. Split-bus TDM is not currently supported.
 
 ```text
 Software reference: playback PCM -----------+--> I2S TX --> speaker
-                                           +--> reference --> AEC/AFE
+                                            +--> reference --> AEC/AFE
 
 Hardware reference: codec feedback or wired ADC slot ------> AEC/AFE
 ```
