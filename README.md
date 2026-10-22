@@ -80,6 +80,9 @@ Read in order for a first custom build, or jump to the relevant hardware:
 8. [Combine different rates and playback sources](#8-combine-different-rates-and-playback-sources)
 9. [Tune and diagnose the finished device](#9-tune-and-diagnose-the-finished-device)
 
+For a wiring-focused view, see [Microphone wiring and delivery, illustrated](#microphone-wiring-and-delivery-illustrated):
+single mic, stereo L/R, TDM, analog codecs, downmix and separate RX/TX buses.
+
 ## 1. Start with a microphone and speaker
 
 Start with Audio Stack alone; add processing and application components as needed.
@@ -541,6 +544,338 @@ see [lifecycle and runtime controls](esphome/components/esp_audio_stack/README.m
 Keep diagnostics optional. Enable `telemetry` for a focused measurement instead
 of leaving per-frame logs on during normal use. Avoid increasing queues or
 watchdog limits to hide a blocked producer or consumer.
+
+## Microphone wiring and delivery, illustrated
+
+**Choose the physical inputs first, then choose what Audio Stack delivers to
+the processor.** AEC and AFE do not need separate microphone drivers:
+
+```text
+Physical microphone(s)
+        |
+        v
+Audio Stack: capture -> select channels -> rate conversion
+        |
+        +-- passthrough --> one mic or two independent mic channels
+        |
+        +-- average ----> (mic A + mic B) / 2, one mono channel
+                                 |
+                                 v
+                   AEC, AFE or no processor
+                                 |
+                                 v
+                   One public mono microphone
+                                 |
+                    +------------+------------+
+                    |            |            |
+                   MWW        Assist        VoIP
+```
+
+The following YAML blocks are **fragments to merge into an existing board
+configuration**, not complete firmwares. Keep its pins, codecs, clocks and
+component declarations. Include the selected processor in `external_components`
+and declare it once. GPIOs and TDM mappings below are examples, not universal
+wiring instructions. [Complete codec-free stereo example](examples/05-stereo-i2s-downmix.yaml)
+and [complete TDM example](examples/04-dual-mic-downmix.yaml) are available.
+
+### A. One digital I2S microphone
+
+```text
+ESP BCLK ------------------> mic BCLK
+ESP WS --------------------> mic WS
+ESP DIN <------------------- mic DATA
+                             L/R selects Left
+
+Selected Left samples --> mono AEC / mono AFE / no processor
+```
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  mic_channel: left
+  mic_mix: passthrough
+```
+
+Reading stereo slots can be necessary even with only one physical microphone.
+Select the occupied slot with `mic_channel`; use `right` if that is how the
+microphone is wired. Without `rx_mic_slots`, Audio Stack selects one microphone.
+For a microphone that supports a true mono frame, `rx_slot_mode: mono` is also
+available with the matching hardware format.
+
+### B. Two compatible digital microphones on one data line
+
+```text
+                       +--> mic A BCLK
+ESP BCLK --------------+
+                       +--> mic B BCLK
+                       +--> mic A WS
+ESP WS ----------------+
+                       +--> mic B WS
+
+mic A DATA (Left) ------+
+                       +--> ESP DIN
+mic B DATA (Right) -----+
+
+RX frame: [ Left = mic A | Right = mic B ]
+```
+
+This requires microphones whose datasheets permit sharing DATA: each must
+release the line outside its selected slot. Strap one to Left and the other
+to Right. Do not join two outputs that drive the line at the same time.
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+```
+
+No input codec or TDM mode is needed. Left/Right describes **two captured
+microphones**, not a requirement for stereo speakers. The configured slot
+order determines the processor's microphone order.
+
+### C. Keep both microphones independent for AFE/BSS
+
+```text
+I2S Left / TDM mic slot A ---> mic A --+
+                                      +--> AFE (two mics, SE/BSS) --> mono
+I2S Right / TDM mic slot B --> mic B --+
+Playback reference ------------------+
+```
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  mic_mix: passthrough
+  processor_id: afe
+
+esp_afe:
+  id: afe
+  mic_num: 2
+  se_enabled: true
+```
+
+For TDM, replace the two `rx_*` fields with the board's `tdm_mic_slots`, as
+shown below. AFE receives two separate, interleaved microphone channels and
+the playback reference. Its public output remains mono. Averaging first would
+remove the channel separation needed by this dual-microphone processing.
+
+### D. Average both microphones before mono AEC
+
+```text
+mic A --+
+        +--> Audio Stack: (A + B) / 2 --> mono AEC --> mono microphone
+mic B --+                                  ^
+                                           |
+Playback reference ------------------------+
+```
+
+```yaml
+esp_audio_stack:
+  sample_rate: 48000
+  output_sample_rate: 16000
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  mic_mix: average
+  processor_id: aec
+
+esp_aec:
+  id: aec
+  sample_rate: 16000
+  mode: sr_low_cost
+```
+
+AEC receives one ordinary microphone channel containing the mean of both
+physical microphones. The same `mic_mix: average` works with two TDM microphone
+slots. It runs in Audio Stack's existing conversion pass, without an extra task,
+wait or DSP queue. The bus can remain at 48 kHz while AEC receives 16 kHz;
+downmix does not fix the whole firmware at 16 kHz.
+
+`passthrough` remains the default and excludes the averaging implementation
+from compilation. Standalone AEC consumes one microphone channel; merely
+capturing two does not average them automatically. The average is not
+beamforming, and opposite-polarity signals can cancel each other.
+
+### E. Average both microphones before mono AFE
+
+```text
+mic A --+
+        +--> Audio Stack average --> AFE (one mic) --> mono microphone
+mic B --+                              ^
+                                       |
+Playback reference --------------------+
+```
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  mic_mix: average
+  processor_id: afe
+
+esp_afe:
+  id: afe
+  mic_num: 1
+  se_enabled: false
+```
+
+AFE sees an ordinary single-microphone source, just as it would with one
+physical microphone. Its enabled AEC, NS, VAD and other stages keep their
+normal behavior. It does not become the standalone AEC component. Native YAML
+validation rejects `mic_mix: average` with `mic_num: 2` or dual-mic SE/BSS.
+
+To use the average without DSP, omit `processor_id` and the processor
+declaration. The public microphone then supplies the averaged signal with the
+configured conversion and gain, including any echo from the local speaker.
+
+### F. TDM microphones, with a codec or another compatible TDM source
+
+```text
+mic A --------> ADC input --+
+mic B --------> ADC input --+--> one TDM DATA line --> ESP DIN
+Speaker feedback -> ADC ---+
+
+Example RX frame:
++------------+------------+------------+------------+
+| slot 0     | slot 1     | slot 2     | slot 3     |
+| mic A      | reference  | mic B      | unused     |
++------------+------------+------------+------------+
+       |            |            |
+       +------------|------------+--> independent channels OR mono average
+                    +--------------> AEC/AFE reference only
+```
+
+```yaml
+esp_audio_stack:
+  tdm_total_slots: 4
+  tdm_mic_slots: [0, 2]
+  use_tdm_reference: true
+  tdm_ref_slot: 1
+  tdm_tx_slot: 0
+  mic_mix: average  # Or passthrough for dual-microphone AFE.
+```
+
+Keep the processor configuration from D or E for an average, or C for two
+separate channels. The same capture, conversion and delivery path is reused.
+With one TDM microphone, use `tdm_mic_slots: [0]`, `mic_mix: passthrough` and
+a mono processor.
+
+An ES7210 can digitize analog microphones and serialize them this way. A
+compatible native TDM source can also provide slots without an input codec.
+Audio Stack does not turn ordinary I2S microphones into TDM devices.
+
+Slot numbers follow the actual board frame, not the order of samples packed
+into DMA memory. If no physical reference is wired, set
+`use_tdm_reference: false` and use the software reference. Do not copy a
+hardware-reference slot or analog gain from another board's schematic.
+
+### G. Analog microphones connected through a hardware codec
+
+```text
+Analog mic A --> codec ADC --+
+Analog mic B --> codec ADC --+--> STD I2S or TDM --> Audio Stack
+                            ^
+ESP I2C --------------------+ codec setup and supported analog gains
+```
+
+Use the supported codec driver and the digital layout it actually outputs:
+one selected mic, two STD slots or TDM slots. Once captured, separate channels
+and averaging work the same way as in C, D and E. The codec must really expose
+those channels; its name or analog input count alone does not establish a
+supported two-channel serial layout. This is an external ADC path, not direct
+analog capture through an ESP GPIO.
+
+### H. ES8311 microphone plus DAC feedback is not a dual-mic input
+
+```text
+ES8311 RX: [ Left = microphone ADC | Right = DAC playback reference ]
+                         |                    |
+                         +--> mono AEC/AFE <--+
+```
+
+```yaml
+esp_audio_stack:
+  num_channels: 2
+  use_stereo_aec_reference: true
+  reference_channel: right
+  mic_mix: passthrough
+```
+
+Configure `no_dac_ref: false` in both ES8311 codec blocks, as described in
+[the stereo-reference section](#5-use-the-codec-stereo-channel-as-a-reference).
+Do not add `rx_mic_slots` or average these slots: the second signal is playback,
+not another microphone. A hardware-reference flag cannot create a physical
+feedback connection that the codec or board does not provide.
+
+### I. One shared RX/TX bus or two separate buses
+
+```text
+Shared bus:                        Separate buses:
+Mic(s) --> ESP I2S RX               Mic(s) --> ESP I2S port 0 RX
+Speaker <-- ESP I2S TX              Speaker <-- ESP I2S port 1 TX
+          same BCLK/WS                        separate BCLK/WS
+```
+
+For standard I2S, keep the chosen microphone selection and `mic_mix`, then
+replace top-level bus pins with:
+
+```yaml
+esp_audio_stack:
+  rx_bus:
+    i2s_num: 0
+    i2s_bclk_pin: GPIO5
+    i2s_lrclk_pin: GPIO6
+    i2s_din_pin: GPIO4
+  tx_bus:
+    i2s_num: 1
+    i2s_bclk_pin: GPIO10
+    i2s_lrclk_pin: GPIO11
+    i2s_dout_pin: GPIO7
+```
+
+Both buses use the stack's configured sample rate. These are separate capture
+and playback buses, **not two independent microphone receivers**. One Audio
+Stack owns both. Split-bus TDM is not currently supported.
+
+### J. Choose the playback reference independently of microphone delivery
+
+```text
+Software reference: playback PCM -----------+--> I2S TX --> speaker
+                                           +--> reference --> AEC/AFE
+
+Hardware reference: codec feedback or wired ADC slot ------> AEC/AFE
+```
+
+Without hardware feedback, `aec_reference: ring_buffer` is the default software
+route; `previous_frame` is the other supported choice. With physical TDM or
+ES8311 stereo feedback, select the matching hardware route instead. Never
+average the playback reference into the microphones.
+
+### Supported combinations and present limits
+
+| Physical microphones | Delivery | Processor input |
+| --- | --- | --- |
+| One selected STD I2S or TDM microphone | Passthrough | Mono AEC, mono AFE or no DSP |
+| Two STD L/R microphones sharing DATA | Passthrough | Two independent AFE/BSS inputs |
+| Two STD L/R microphones sharing DATA | Average | Mono AEC, mono AFE or no DSP |
+| Two selected TDM microphone slots | Passthrough | Two independent AFE/BSS inputs |
+| Two selected TDM microphone slots | Average | Mono AEC, mono AFE or no DSP |
+| ES8311 mic plus DAC reference | Separate roles | One mic plus reference, never dual-mic BSS |
+
+The current public microphone endpoint delivers **mono**. Keeping two input
+channels for AFE does not expose a stereo recording endpoint; optional raw PCM
+capture can inspect both input channels separately from that public endpoint.
+Selecting two microphones with a mono processor and passthrough uses the first
+selected microphone, not an implicit average.
+
+The current implementation supports **one or two selected physical microphones**.
+It does not provide three-or-more-microphone AFE, PDM/USB acquisition or two
+independent DIN lines. Two DIN receivers would require their own supported
+acquisition and sample-alignment design; setting `mic_mix` or calling them TDM
+cannot create that support.
+
+For analog gain controls and optional recordings before/after processing, see
+[Audio tuning and PCM capture](docs/AUDIO_TUNING.md).
 
 ## Configuration reference
 

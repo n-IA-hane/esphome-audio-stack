@@ -4,6 +4,9 @@ Use the maintained device profile first. The options below add tools for a
 specific board or experiment; none changes the existing profile defaults.
 ESPHome 2026.10.0 or newer is required.
 
+For wiring diagrams and YAML fragments covering each supported input layout,
+start with [Microphone wiring and delivery, illustrated](../README.md#microphone-wiring-and-delivery-illustrated).
+
 ## 1. Choose how microphones reach the processor
 
 Audio Stack owns slot extraction, rate conversion and microphone delivery.

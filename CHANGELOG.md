@@ -2,6 +2,10 @@
 
 ## 2026.11.0-dev
 
+- Add an illustrated microphone wiring guide: one mic, shared-data Left/Right,
+  TDM, analog codecs, mono downmix, dual AFE/BSS and separate RX/TX buses. Show
+  the YAML choices and distinguish microphone channels from playback reference.
+
 - Document and compile codec-free stereo I2S delivery, including shared and split
   RX/TX buses. Reuse the same two-channel extraction/downmix for AEC, mono AFE
   and dual AFE. Point incompatible channel-count errors at the native YAML field.
