@@ -550,7 +550,26 @@ watchdog limits to hide a blocked producer or consumer.
 **Choose the physical inputs first, then choose what Audio Stack delivers to
 the processor.** AEC and AFE do not need separate microphone drivers:
 
-![Audio Stack captures once, then delivers separate microphone channels or their mono average to the selected processor.](docs/images/mic-wiring-overview.svg)
+```text
+Physical microphone(s)
+        |
+        v
+Audio Stack: capture -> select channels -> rate conversion
+        |
+        +-- passthrough --> one mic or two independent mic channels
+        |
+        +-- average ----> (mic A + mic B) / 2, one mono channel
+                                 |
+                                 v
+                   AEC, AFE or no processor
+                                 |
+                                 v
+                   One public mono microphone
+                                 |
+                    +------------+------------+
+                    |            |            |
+                   MWW        Assist        VoIP
+```
 
 The following YAML blocks are **fragments to merge into an existing board
 configuration**, not complete firmwares. Keep its pins, codecs, clocks and
@@ -561,7 +580,14 @@ and [complete TDM example](examples/04-dual-mic-downmix.yaml) are available.
 
 ### A. One digital I2S microphone
 
-![One digital microphone receives BCLK and WS; its selected audio slot reaches ESP DIN.](docs/images/mic-wiring-single-i2s.svg)
+```text
+ESP BCLK ------------------> mic BCLK
+ESP WS --------------------> mic WS
+ESP DIN <------------------- mic DATA
+                             L/R selects Left
+
+Selected Left samples --> mono AEC / mono AFE / no processor
+```
 
 ```yaml
 esp_audio_stack:
@@ -578,7 +604,20 @@ available with the matching hardware format.
 
 ### B. Two compatible digital microphones on one data line
 
-![Two compatible microphones share clocks and DATA with opposite Left and Right selections.](docs/images/mic-wiring-stereo-i2s.svg)
+```text
+                       +--> mic A BCLK
+ESP BCLK --------------+
+                       +--> mic B BCLK
+                       +--> mic A WS
+ESP WS ----------------+
+                       +--> mic B WS
+
+mic A DATA (Left) ------+
+                       +--> ESP DIN
+mic B DATA (Right) -----+
+
+RX frame: [ Left = mic A | Right = mic B ]
+```
 
 This requires microphones whose datasheets permit sharing DATA: each must
 release the line outside its selected slot. Strap one to Left and the other
@@ -596,7 +635,12 @@ order determines the processor's microphone order.
 
 ### C. Keep both microphones independent for AFE/BSS
 
-![Two microphone channels and a separate playback reference feed distinct dual-microphone AFE inputs.](docs/images/mic-wiring-dual-afe.svg)
+```text
+I2S Left / TDM mic slot A ---> mic A --+
+                                      +--> AFE (two mics, SE/BSS) --> mono
+I2S Right / TDM mic slot B --> mic B --+
+Playback reference ------------------+
+```
 
 ```yaml
 esp_audio_stack:
@@ -618,7 +662,13 @@ remove the channel separation needed by this dual-microphone processing.
 
 ### D. Average both microphones before mono AEC
 
-![Audio Stack averages Mic A and Mic B before mono AEC; playback reference remains separate.](docs/images/mic-wiring-average-aec.svg)
+```text
+mic A --+
+        +--> Audio Stack: (A + B) / 2 --> mono AEC --> mono microphone
+mic B --+                                  ^
+                                           |
+Playback reference ------------------------+
+```
 
 ```yaml
 esp_audio_stack:
@@ -648,7 +698,13 @@ beamforming, and opposite-polarity signals can cancel each other.
 
 ### E. Average both microphones before mono AFE
 
-![Audio Stack averages two microphones before single-microphone AFE with dual-mic SE/BSS disabled.](docs/images/mic-wiring-average-afe.svg)
+```text
+mic A --+
+        +--> Audio Stack average --> AFE (one mic) --> mono microphone
+mic B --+                              ^
+                                       |
+Playback reference --------------------+
+```
 
 ```yaml
 esp_audio_stack:
@@ -674,7 +730,20 @@ configured conversion and gain, including any echo from the local speaker.
 
 ### F. TDM microphones, with a codec or another compatible TDM source
 
-![The example TDM frame keeps microphone slots zero and two separate from reference slot one.](docs/images/mic-wiring-tdm.svg)
+```text
+mic A --------> ADC input --+
+mic B --------> ADC input --+--> one TDM DATA line --> ESP DIN
+Speaker feedback -> ADC ---+
+
+Example RX frame:
++------------+------------+------------+------------+
+| slot 0     | slot 1     | slot 2     | slot 3     |
+| mic A      | reference  | mic B      | unused     |
++------------+------------+------------+------------+
+       |            |            |
+       +------------|------------+--> independent channels OR mono average
+                    +--------------> AEC/AFE reference only
+```
 
 ```yaml
 esp_audio_stack:
@@ -702,7 +771,12 @@ hardware-reference slot or analog gain from another board's schematic.
 
 ### G. Analog microphones connected through a hardware codec
 
-![An external codec ADC captures analog microphones and supplies I2S or TDM while ESP I2C controls the codec.](docs/images/mic-wiring-analog-codec.svg)
+```text
+Analog mic A --> codec ADC --+
+Analog mic B --> codec ADC --+--> STD I2S or TDM --> Audio Stack
+                            ^
+ESP I2C --------------------+ codec setup and supported analog gains
+```
 
 Use the supported codec driver and the digital layout it actually outputs:
 one selected mic, two STD slots or TDM slots. Once captured, separate channels
@@ -713,7 +787,11 @@ analog capture through an ESP GPIO.
 
 ### H. ES8311 microphone plus DAC feedback is not a dual-mic input
 
-![ES8311 microphone ADC and DAC reference have separate roles; this is a single-microphone input.](docs/images/mic-wiring-es8311-reference.svg)
+```text
+ES8311 RX: [ Left = microphone ADC | Right = DAC playback reference ]
+                         |                    |
+                         +--> mono AEC/AFE <--+
+```
 
 ```yaml
 esp_audio_stack:
@@ -731,7 +809,12 @@ feedback connection that the codec or board does not provide.
 
 ### I. One shared RX/TX bus or two separate buses
 
-![Shared and separate capture/playback buses retain one Audio Stack owner.](docs/images/mic-wiring-buses.svg)
+```text
+Shared bus:                        Separate buses:
+Mic(s) --> ESP I2S RX               Mic(s) --> ESP I2S port 0 RX
+Speaker <-- ESP I2S TX              Speaker <-- ESP I2S port 1 TX
+          same BCLK/WS                        separate BCLK/WS
+```
 
 For standard I2S, keep the chosen microphone selection and `mic_mix`, then
 replace top-level bus pins with:
@@ -756,7 +839,12 @@ Stack owns both. Split-bus TDM is not currently supported.
 
 ### J. Choose the playback reference independently of microphone delivery
 
-![Software and hardware playback references remain independent of microphone delivery.](docs/images/mic-wiring-reference.svg)
+```text
+Software reference: playback PCM -----------+--> I2S TX --> speaker
+                                           +--> reference --> AEC/AFE
+
+Hardware reference: codec feedback or wired ADC slot ------> AEC/AFE
+```
 
 Without hardware feedback, `aec_reference: ring_buffer` is the default software
 route; `previous_frame` is the other supported choice. With physical TDM or
