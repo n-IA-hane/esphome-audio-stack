@@ -23,7 +23,7 @@ For example, while the device plays music or a spoken reply:
 - **A VoIP call** sends processed microphone audio to the other party, reducing
   the echo of their voice returning through your speaker and microphone.
 
-![Speaker playback continues while AEC reduces its echo in microphone audio supplied to Micro Wake Word, Voice Assistant and VoIP.](docs/images/listen-while-playing-n-ia-hane.png)
+![Audio Stack captures voice and speaker echo, applies optional AEC or AFE using the playback reference, and supplies echo-reduced microphone audio to Micro Wake Word, Voice Assistant and VoIP while playback continues.](docs/images/audio-stack-overview-dark.png)
 
 AEC reduces echo in **microphone capture while the speaker keeps playing**. Correct reference routing, levels and
 microphone/speaker placement still matter; cancellation and wake-word detection
