@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="535" viewBox="0 0 620 535" role="img" aria-labelledby="title description">
+  <title id="title">One digital I2S microphone</title>
+  <desc id="description">BCLK and WS travel from ESP to the microphone. DATA travels from the selected microphone slot to ESP DIN.</desc>
+  <defs>
+    <marker id="arrow-audio" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2563eb" />
+    </marker>
+    <marker id="arrow-reference" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b45309" />
+    </marker>
+    <marker id="arrow-clock" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#596579" />
+    </marker>
+  </defs>
+  <rect width="620" height="535" rx="14" fill="#f6f8fa" />
+  <text x="310" y="35" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" text-anchor="middle" dominant-baseline="middle">One digital I2S microphone</text>
+  <rect x="40" y="90" width="210" height="250" rx="10" fill="#edf0f5" stroke="#a9b8c9" stroke-width="2" />
+  <rect x="370" y="90" width="210" height="250" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="145" y="120" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">ESP I2S</text>
+  <text x="475" y="120" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Microphone</text>
+  <text x="475" y="315" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">L/R = Left</text>
+  <path d="M250,170 L370,170" fill="none" stroke="#596579" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-clock)" />
+  <text x="310" y="152" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="500" text-anchor="middle" dominant-baseline="middle">BCLK</text>
+  <path d="M250,230 L370,230" fill="none" stroke="#596579" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-clock)" />
+  <text x="310" y="212" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="500" text-anchor="middle" dominant-baseline="middle">WS</text>
+  <path d="M370,280 L250,280" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <text x="310" y="262" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="500" text-anchor="middle" dominant-baseline="middle">DATA</text>
+  <rect x="80" y="435" width="460" height="75" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="310.0" y="457.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Selected Left microphone</text>
+  <text x="310.0" y="488.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mono AEC / mono AFE / no DSP</text>
+  <path d="M145,340 L145,385 L310,385 L310,435" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+</svg>

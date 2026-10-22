@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="605" viewBox="0 0 620 605" role="img" aria-labelledby="title description">
+  <title id="title">Two microphones into mono AFE</title>
+  <desc id="description">Audio Stack averages Mic A and Mic B before mono processing. Playback reference remains a distinct input.</desc>
+  <defs>
+    <marker id="arrow-audio" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2563eb" />
+    </marker>
+    <marker id="arrow-reference" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b45309" />
+    </marker>
+    <marker id="arrow-clock" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#596579" />
+    </marker>
+  </defs>
+  <rect width="620" height="605" rx="14" fill="#f6f8fa" />
+  <text x="310" y="35" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" text-anchor="middle" dominant-baseline="middle">Two microphones into mono AFE</text>
+  <rect x="40" y="80" width="240" height="70" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="160.0" y="115.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic A</text>
+  <rect x="340" y="80" width="240" height="70" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="460.0" y="115.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic B</text>
+  <rect x="100" y="220" width="420" height="80" rx="10" fill="#dcf5e8" stroke="#a9b8c9" stroke-width="2" />
+  <text x="310.0" y="244.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Audio Stack average</text>
+  <text x="310.0" y="275.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">(A + B) / 2</text>
+  <path d="M160,150 L160,220" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <path d="M460,150 L460,220" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <rect x="40" y="365" width="170" height="75" rx="10" fill="#fff1cb" stroke="#a9b8c9" stroke-width="2" />
+  <text x="125.0" y="387.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Playback</text>
+  <text x="125.0" y="418.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">reference</text>
+  <rect x="270" y="355" width="310" height="95" rx="10" fill="#dcf5e8" stroke="#a9b8c9" stroke-width="2" />
+  <text x="425.0" y="387.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">AFE: one microphone</text>
+  <text x="425.0" y="418.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Dual-mic SE/BSS off</text>
+  <path d="M310,300 L310,325 L425,325 L425,355" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <path d="M210,402.5 L270,402.5" fill="none" stroke="#b45309" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-reference)" />
+  <rect x="270" y="525" width="310" height="60" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="425.0" y="555.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mono microphone</text>
+  <path d="M425,450 L425,525" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+</svg>

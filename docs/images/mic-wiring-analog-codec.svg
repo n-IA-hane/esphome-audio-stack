@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="525" viewBox="0 0 620 525" role="img" aria-labelledby="title description">
+  <title id="title">Analog microphones through a codec</title>
+  <desc id="description">An external codec ADC digitizes the microphones. I2C controls the codec while I2S or TDM carries PCM to Audio Stack.</desc>
+  <defs>
+    <marker id="arrow-audio" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2563eb" />
+    </marker>
+    <marker id="arrow-reference" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b45309" />
+    </marker>
+    <marker id="arrow-clock" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#596579" />
+    </marker>
+  </defs>
+  <rect width="620" height="525" rx="14" fill="#f6f8fa" />
+  <text x="310" y="35" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" text-anchor="middle" dominant-baseline="middle">Analog microphones through a codec</text>
+  <rect x="40" y="80" width="240" height="75" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="160.0" y="117.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Analog mic A</text>
+  <rect x="340" y="80" width="240" height="75" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="460.0" y="117.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Analog mic B</text>
+  <rect x="40" y="240" width="540" height="85" rx="10" fill="#dcf5e8" stroke="#a9b8c9" stroke-width="2" />
+  <text x="310.0" y="282.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">External codec ADC</text>
+  <path d="M160,155 L160,240" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <path d="M460,155 L460,240" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <rect x="40" y="405" width="170" height="80" rx="10" fill="#edf0f5" stroke="#a9b8c9" stroke-width="2" />
+  <text x="125.0" y="429.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">ESP I2C</text>
+  <text x="125.0" y="460.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Codec control</text>
+  <path d="M125,405 L125,325" fill="none" stroke="#596579" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-clock)" />
+  <rect x="270" y="405" width="310" height="80" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="425.0" y="429.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">STD I2S or TDM</text>
+  <text x="425.0" y="460.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Audio Stack</text>
+  <path d="M425,325 L425,405" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+</svg>

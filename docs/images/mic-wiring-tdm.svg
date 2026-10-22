@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="680" viewBox="0 0 620 680" role="img" aria-labelledby="title description">
+  <title id="title">TDM: microphones and playback reference</title>
+  <desc id="description">An example four-slot TDM frame contains Mic A in 0, reference in 1 and Mic B in 2. The reference is never averaged as a microphone.</desc>
+  <defs>
+    <marker id="arrow-audio" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2563eb" />
+    </marker>
+    <marker id="arrow-reference" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b45309" />
+    </marker>
+    <marker id="arrow-clock" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#596579" />
+    </marker>
+  </defs>
+  <rect width="620" height="680" rx="14" fill="#f6f8fa" />
+  <text x="310" y="35" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" text-anchor="middle" dominant-baseline="middle">TDM: microphones and playback reference</text>
+  <rect x="40" y="70" width="240" height="65" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="160.0" y="102.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic A</text>
+  <rect x="340" y="70" width="240" height="65" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="460.0" y="102.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic B</text>
+  <rect x="205" y="165" width="210" height="60" rx="10" fill="#fff1cb" stroke="#a9b8c9" stroke-width="2" />
+  <text x="310.0" y="195.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Speaker feedback</text>
+  <rect x="40" y="265" width="540" height="80" rx="10" fill="#dcf5e8" stroke="#a9b8c9" stroke-width="2" />
+  <text x="310.0" y="305.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">ADC / compatible TDM source</text>
+  <path d="M160,135 L160,265" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <path d="M460,135 L460,265" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <path d="M310,225 L310,265" fill="none" stroke="#b45309" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-reference)" />
+  <rect x="40" y="420" width="135" height="90" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="107.5" y="449.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Slot 0</text>
+  <text x="107.5" y="480.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic A</text>
+  <rect x="175" y="420" width="135" height="90" rx="10" fill="#fff1cb" stroke="#a9b8c9" stroke-width="2" />
+  <text x="242.5" y="449.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Slot 1</text>
+  <text x="242.5" y="480.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Reference</text>
+  <rect x="310" y="420" width="135" height="90" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="377.5" y="449.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Slot 2</text>
+  <text x="377.5" y="480.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic B</text>
+  <rect x="445" y="420" width="135" height="90" rx="10" fill="#edf0f5" stroke="#a9b8c9" stroke-width="2" />
+  <text x="512.5" y="449.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Slot 3</text>
+  <text x="512.5" y="480.5" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Unused</text>
+  <path d="M310,345 L310,420" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <text x="310" y="385" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="500" text-anchor="middle" dominant-baseline="middle">One TDM DATA line</text>
+  <rect x="40.0" y="570" width="135" height="60" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="107.5" y="600.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic A</text>
+  <path d="M107.5,510 L107.5,570" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <rect x="175.0" y="570" width="135" height="60" rx="10" fill="#fff1cb" stroke="#a9b8c9" stroke-width="2" />
+  <text x="242.5" y="600.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Reference</text>
+  <path d="M242.5,510 L242.5,570" fill="none" stroke="#b45309" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-reference)" />
+  <rect x="310.0" y="570" width="135" height="60" rx="10" fill="#e5efff" stroke="#a9b8c9" stroke-width="2" />
+  <text x="377.5" y="600.0" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" text-anchor="middle" dominant-baseline="middle">Mic B</text>
+  <path d="M377.5,510 L377.5,570" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-audio)" />
+  <text x="310" y="658" fill="#172335" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="500" text-anchor="middle" dominant-baseline="middle">Only the microphone channels may be averaged.</text>
+</svg>
