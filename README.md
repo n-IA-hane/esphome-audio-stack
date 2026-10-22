@@ -223,8 +223,8 @@ require MCLK, a higher-frequency master clock:
 ```text
 ESP I2C SDA/SCL ◀─────────────▶ Codec registers (gain, format, volume)
 ESP MCLK/BCLK/WS ─────────────▶ Codec clocks
-ESP DIN ◀───────────────────── Codec ADC ◀─── microphone
-ESP DOUT ────────────────────▶ Codec DAC ───▶ amplifier ───▶ speaker
+ESP DIN ◀────────────────────── Codec ADC ◀─── microphone
+ESP DOUT ─────────────────────▶ Codec DAC ───▶ amplifier ───▶ speaker
 ```
 
 Use the [ES8311 audio-only example](examples/01-esp-audio-stack-only.yaml) for
@@ -262,6 +262,7 @@ or excessive delay can prevent useful cancellation.
 Playback PCM ──▶ speaker path ─────────────────────▶ loudspeaker
                      │
                      └──▶ reference ────┐
+                                        │
                                         ▼
 Microphone ──▶ capture ─────────────▶ [AEC] ──▶ processed microphone
 ```
@@ -304,12 +305,11 @@ ES8311 I2S RX frame
 │ Left: microphone ADC │ Right: DAC reference │
 └───────────┬──────────┴───────────┬──────────┘
             │                      │
-            └──▶ microphone        └──▶ reference
-                      │                 │
-                      └──────▶ AEC ◀────┘
-                                │
-                                ▼
-                        mono microphone
+            │                      │
+            └───────▶ [AEC] ◀──────┘
+                        │
+                        ▼
+                 mono microphone
 ```
 
 On the ES8311 example, add these fields to the existing `esp_audio_stack` block:
@@ -344,16 +344,18 @@ ADC input is wired to the feedback; a YAML option cannot create that connection.
 Example for a board wired with this physical arrangement:
 
 ```text
-RX frame:  ┌──────────┬───────────┬──────────┬──────────┐
-           │ 0: mic A │ 1: ref    │ 2: mic B │ 3: unused│
-           └────┬─────┴─────┬─────┴────┬─────┴──────────┘
-                │           │          │
-                └───────────┴──────────┴──▶ select and convert ──▶ AFE
+RX frame (4 physical slots):
+┌────────────┬────────────┬────────────┬────────────┐
+│ 0: mic A   │ 1: ref     │ 2: mic B   │ 3: unused  │
+└─────┬──────┴─────┬──────┴─────┬──────┴────────────┘
+      │            │            │
+      └────────────┴────────────┴──▶ select and convert ──▶ AFE
 
-TX frame:  ┌─────────────────────────────────────────────
-           │ 0: audio│ 1: unused │ 2: unused│ 3: unused│
-           └────┬────────────────────────────────────────
-                └──▶ DAC ──▶ speaker
+TX frame (4 physical slots):
+┌────────────┬────────────┬────────────┬────────────┐
+│ 0: audio   │ 1: unused  │ 2: unused  │ 3: unused  │
+└─────┬──────┴────────────┴────────────┴────────────┘
+      └──▶ DAC ──▶ speaker
 ```
 
 After choosing the board's pins and codecs, this fragment selects that layout:
@@ -456,13 +458,13 @@ Supported conversion uses integer ratios up to six, not arbitrary input/output
 rate pairs. Omitting `output_sample_rate` keeps the bus rate.
 
 ```text
-Media / TTS ──▶ resampler ───
-                           ┌──▶ mixer ──▶ 48 kHz speaker ──▶ I2S TX
-Call audio ──▶ resampler ──┘
+Media / TTS ──▶ resampler ────┐
+                              ├──▶ mixer ──▶ 48 kHz speaker ──▶ I2S TX
+Call audio ──▶ resampler ─────┘
 
-I2S RX ──▶ select mic/reference ──▶ 48-to-16 kHz ──▶ AEC or AFE
-                                                       │
-                                                       └──▶ 16 kHz microphone
+I2S RX ──▶ select mic/reference ──▶ 48-to-16 kHz ──▶ [AEC / AFE]
+                                                          │
+                                                          └──▶ 16 kHz microphone
 ```
 
 Declare rates on the parent Audio Stack. Use an ESPHome resampler before the
@@ -551,24 +553,27 @@ watchdog limits to hide a blocked producer or consumer.
 the processor.** AEC and AFE do not need separate microphone drivers:
 
 ```text
-Physical microphone(s)
-        │
-        ▼
-Audio Stack: capture ─▶ select channels ─▶ rate conversion
-        │
-        ├── passthrough ──▶ one mic or two independent mic channels
-        │
-        └── average ────▶ (mic A + mic B) / 2, one mono channel
-                                 │
-                                 ▼
-                   AEC, AFE or no processor
-                                 │
-                                 ▼
-                   One public mono microphone
-                                 │
-                    ┌────────────┼────────────┐
-                    │            │            │
-                   MWW        Assist        VoIP
+                    [Physical microphone(s)]
+                                │
+                                ▼
+              [Audio Stack: capture/select/convert]
+                                │
+                       Choose ONE delivery
+            ┌───────────────────┴───────────────────┐
+            ▼                                       ▼
+      [passthrough]                             [average]
+     1 or 2 channels                          mono (A+B)/2
+            │                                       │
+            └───────────────────┬───────────────────┘
+                                ▼
+                       [AEC / AFE / none]
+                                │
+                                ▼
+                        [Mono microphone]
+                                │
+                    ┌───────────┼───────────┐
+                    ▼           ▼           ▼
+                   MWW       Assist       VoIP
 ```
 
 The following YAML blocks are **fragments to merge into an existing board
@@ -590,10 +595,10 @@ ground and module supply requirements; do not combine their pin maps.
 ### A. One digital I2S microphone
 
 ```text
-ESP GPIO5 (BCLK) ────────────▶ mic BCLK
-ESP GPIO6 (WS) ──────────────▶ mic WS
-ESP GPIO4 (DIN) ◀───────────── mic DATA
-                               L/R selects Left
+ESP GPIO5 (BCLK) ─────────────▶ mic BCLK
+ESP GPIO6 (WS) ───────────────▶ mic WS
+ESP GPIO4 (DIN) ◀────────────── mic DATA
+                                L/R selects Left
 
 Selected Left samples ──▶ mono AEC / mono AFE / no processor
 ```
@@ -810,13 +815,14 @@ hardware-reference slot or analog gain from another board's schematic.
 ### G. Analog microphones connected through a hardware codec
 
 ```text
-ESP GPIO11 (SDA) ◀───────────▶ codec SDA
+ESP GPIO11 (SDA) ◀────────────▶ codec SDA
 ESP GPIO10 (SCL) ─────────────▶ codec SCL
 
-Analog mic A ──▶ codec ADC ──┐
-Analog mic B ──▶ codec ADC ──┼──▶ STD I2S or TDM ──▶ Audio Stack
-                             ▲
-ESP I2C ─────────────────────┘ codec setup and supported analog gains
+Analog mic A ─────┐
+                  ├──▶ [Codec ADC] ──▶ STD I2S or TDM ──▶ Audio Stack
+Analog mic B ─────┘         ▲
+                            │
+ESP I2C ────────────────────┘ codec setup and analog gain
 ```
 
 Use the supported codec driver and the digital layout it actually outputs:
@@ -831,9 +837,16 @@ analog capture through an ESP GPIO.
 ```text
 ESP GPIO4 (DIN) ◀───────────── ES8311 I2S RX
 
-ES8311 RX: [ Left = microphone ADC │ Right = DAC playback reference ]
-                         │                    │
-                         └──▶ mono AEC/AFE ◀──┘
+ES8311 I2S RX frame
+┌──────────────────────┬──────────────────────┐
+│ Left: microphone ADC │ Right: DAC reference │
+└───────────┬──────────┴───────────┬──────────┘
+            │                      │
+            │                      │
+            └─────▶ [AEC/AFE] ◀────┘
+                        │
+                        ▼
+                 mono microphone
 ```
 
 ```yaml
