@@ -17,12 +17,10 @@ def read(name: str) -> str:
 def test_tdm_16bit_rx_extracts_only_selected_channels() -> None:
     cpp = read("audio_effects_rate_converter.cpp")
 
-    prepare = cpp[cpp.index("bool prepare(") : cpp.index("bool process_multi(", cpp.index("bool prepare("))]
-    assert "const uint8_t deintlv_channels = source_32bit ? source_channels : nch;" in prepare
-    assert "ensure_deintlv_buffers_(deintlv_channels, in_count)" in prepare
-
     deinterleave = cpp[cpp.index("bool deinterleave_selected_(") : cpp.index("bool extract_selected_channels_(")]
-    assert "ensure_deintlv_buffers_(static_cast<uint8_t>(stride), in_count)" in deinterleave
+    # Allocation sizes and same-rate paths are executed by
+    # test_mic_downmix_runtime, rather than freezing the old scratch layout.
+    assert "bit_cvt_.process" in deinterleave
     assert "return this->extract_selected_channels_" in deinterleave
 
     extract = cpp[cpp.index("bool extract_selected_channels_(") : cpp.index("bool ensure_bit_conversion_(")]

@@ -45,6 +45,11 @@ void ESPAudioStackSpeaker::dump_config() {
 void ESPAudioStackSpeaker::start() {
   if (this->is_failed())
     return;
+  this->implicit_recovery_used_.store(false, std::memory_order_release);
+  if (this->parent_->has_failed_session()) {
+    this->parent_->start();
+    this->enable_loop_soon_any_context();
+  }
 
   // Clear finishing flag on new stream start
   this->finishing_ = false;
@@ -65,6 +70,7 @@ void ESPAudioStackSpeaker::start() {
 void ESPAudioStackSpeaker::stop() {
   if (this->is_failed())
     return;
+  this->implicit_recovery_used_.store(false, std::memory_order_release);
 
   this->finishing_ = false;
   if (this->pause_state_) {
@@ -96,7 +102,15 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t
     return 0;
   }
 
-  if (this->state_ != speaker::STATE_RUNNING && this->state_ != speaker::STATE_STARTING) {
+  if (this->parent_->has_failed_session() && this->listener_registered_.load(std::memory_order_acquire)) {
+    if (this->implicit_recovery_used_.exchange(true, std::memory_order_acq_rel)) {
+      vTaskDelay(ticks_to_wait);
+      return 0;
+    }
+    this->parent_->start();
+    this->enable_loop_soon_any_context();
+  } else if (!this->listener_registered_.load(std::memory_order_acquire) &&
+             this->state_ != speaker::STATE_RUNNING && this->state_ != speaker::STATE_STARTING) {
     this->start();
   }
 
@@ -189,6 +203,18 @@ void ESPAudioStackSpeaker::loop() {
     this->status_clear_error();
     this->i2s_error_latched_ = false;
     ESP_LOGI(TAG, "I2S audio path recovered");
+  }
+
+  if (this->parent_->has_failed_session()) {
+    this->parent_requested_ = false;
+    this->finishing_ = false;
+    this->state_ = speaker::STATE_STOPPED;
+    this->disable_loop();
+    return;
+  }
+  if (this->state_ == speaker::STATE_RUNNING && this->parent_->is_starting()) {
+    this->parent_requested_ = false;
+    this->state_ = speaker::STATE_STARTING;
   }
 
   const bool requested = this->listener_registered_.load(std::memory_order_acquire);

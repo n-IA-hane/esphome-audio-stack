@@ -38,6 +38,8 @@ namespace speaker {enum {STATE_STOPPED,STATE_STARTING,STATE_RUNNING,STATE_STOPPI
 struct Parent {
  bool ready=false;unsigned starts=0,stops=0;
  bool has_i2s_error(){return false;}
+ bool has_failed_session(){return false;}
+ void start(){++starts;}
  bool register_mic_consumer(void*){assert(ready);++starts;return true;}
  void unregister_mic_consumer(void*){++stops;}
  bool is_running(){return ready;} bool is_starting(){return false;}
@@ -57,6 +59,7 @@ struct ESPAudioStackMicrophone:Base {
  void start();bool release_listener_();void stop();void loop();
 };
 struct ESPAudioStackSpeaker:Base {
+ std::atomic<bool> implicit_recovery_used_{false};
  std::atomic<bool> listener_registered_{false};bool parent_requested_=false;
  bool finishing_=false,pause_state_=false,buffered=false;
  uint32_t last_write_ms_=0;std::optional<uint32_t> timeout_{500};

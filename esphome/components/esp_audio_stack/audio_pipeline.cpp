@@ -490,6 +490,9 @@ void ESPAudioStack::audio_task_() {
       this->preallocate_audio_buffers_from_task_();
     }
     this->service_speaker_reset_();
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+    this->apply_pending_hardware_gains_();
+#endif
     this->service_audio_lifecycle_();
     this->audio_task_idle_.store(true, std::memory_order_release);
     if (!this->audio_stack_running_.load(std::memory_order_acquire) ||
@@ -572,15 +575,23 @@ bool ESPAudioStack::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proce
 #endif
 
 #ifdef USE_ESP_AUDIO_STACK_MULTI_RX
+  uint8_t capture_mic_channels = ctx.processor_mic_channels;
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+  if (ctx.processor_mic_channels != 1) {
+    ESP_LOGE(TAG, "Microphone downmix requires a mono processor");
+    return false;
+  }
+  capture_mic_channels = 2;
+#endif
   // Init multi-channel RX rate converter now that we know channel count
   if (ctx.use_tdm_bus || ctx.use_stereo_aec_ref || ctx.rx_slot_mode_stereo) {
     if (ctx.use_tdm_bus) {
       ctx.rx_rate_converter_channels =
-          (ctx.processor_mic_channels > 1 ? 2 : 1) + (ctx.use_tdm_ref ? 1 : 0);
+          (capture_mic_channels > 1 ? 2 : 1) + (ctx.use_tdm_ref ? 1 : 0);
     } else if (ctx.use_stereo_aec_ref) {
       ctx.rx_rate_converter_channels = 2;  // mic + DAC feedback ref
 #ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
-    } else if (ctx.processor_mic_channels > 1 && ctx.std_second_mic_slot >= 0) {
+    } else if (capture_mic_channels > 1 && ctx.std_second_mic_slot >= 0) {
       ctx.rx_rate_converter_channels = 2;  // both STD Philips slots as mics
 #endif
     } else {
@@ -695,6 +706,12 @@ void ESPAudioStack::audio_session_() {
   const bool have_std_dual_mic = ctx.rx_slot_mode_stereo && ctx.std_second_mic_slot >= 0;
 #else
   const bool have_std_dual_mic = false;
+#endif
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+  if (!have_tdm_dual_mic && !have_std_dual_mic) {
+    alloc_fail("microphone downmix requires two microphone slots");
+    return;
+  }
 #endif
   if (ctx.processor_mic_channels > 1 && !have_tdm_dual_mic && !have_std_dual_mic) {
     alloc_fail("dual-mic processor requires TDM microphone slots or STD rx_mic_slots");
@@ -990,6 +1007,10 @@ void ESPAudioStack::process_rx_path_(AudioTaskCtx &ctx) {
   if (!this->read_rx_frame_(ctx, "audio"))
     return;
 
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_raw_audio_(ctx);
+#endif
+
 #ifdef USE_ESP_AUDIO_STACK_SLOT_LEVELS
   if ((ctx.use_tdm_bus || ctx.rx_slot_mode_stereo) && ctx.any_tdm_slot_level_sensor_enabled) {
     this->update_tdm_slot_levels_(ctx);
@@ -1028,7 +1049,11 @@ bool ESPAudioStack::process_rx_passthrough_(AudioTaskCtx &ctx) {
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
 bool ESPAudioStack::process_rx_tdm_(AudioTaskCtx &ctx) {
   const uint8_t ts = ctx.rx_slot_count;
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+  const bool dual_mic = ctx.tdm_second_mic_slot >= 0;
+#else
   const bool dual_mic = ctx.processor_mic_channels > 1 && ctx.tdm_second_mic_slot >= 0;
+#endif
   uint8_t ch_offsets[MAX_RATE_CVT_CHANNELS];
   uint8_t num_mic_ch = dual_mic ? 2 : 1;
   uint8_t selected_channels = 0;
@@ -1049,15 +1074,16 @@ bool ESPAudioStack::process_rx_tdm_(AudioTaskCtx &ctx) {
   const bool ok = ctx.i2s_bps == 4
                       ? this->rx_rate_converter_.process_multi_32(
                             reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, ts, ch_offsets,
-                            dual_mic ? ctx.processor_mic_buffer : nullptr, ctx.mic_buffer, ref_out, num_mic_ch)
+                            ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
+                            ctx.mic_buffer, ref_out, num_mic_ch)
                       : this->rx_rate_converter_.process_multi(ctx.rx_buffer, ctx.input_frame_size, ts, ch_offsets,
-                                                               dual_mic ? ctx.processor_mic_buffer : nullptr,
+                                                               ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
                                                                ctx.mic_buffer, ref_out, num_mic_ch);
   if (!ok) {
     this->fail_audio_session_("TDM RX audio-effects conversion");
     return false;
   }
-  if (dual_mic) {
+  if (ctx.processor_mic_channels > 1) {
     ctx.processor_input = ctx.processor_mic_buffer;
   }
   return true;
@@ -1101,7 +1127,11 @@ bool ESPAudioStack::process_rx_stereo_slot_(AudioTaskCtx &ctx) {
   // SPH0645 (and similar MEMS) emit 32-bit Philips I2S slots. Dual-mic keeps
   // per-channel DC (dc_primary_ / dc_secondary_) after deinterleave -- never
   // one HPF across interleaved L,R,L,R (that becomes an L-R canceller).
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+  const bool dual_mic = ctx.std_second_mic_slot >= 0;
+#else
   const bool dual_mic = ctx.processor_mic_channels > 1 && ctx.std_second_mic_slot >= 0;
+#endif
   if (dual_mic) {
     uint8_t ch_offsets[2] = {ctx.std_primary_mic_slot, static_cast<uint8_t>(ctx.std_second_mic_slot)};
     if (ctx.rx_rate_converter_channels != 2) {
@@ -1111,15 +1141,17 @@ bool ESPAudioStack::process_rx_stereo_slot_(AudioTaskCtx &ctx) {
     const bool ok = ctx.i2s_bps == 4
                         ? this->rx_rate_converter_.process_multi_32(
                               reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, 2, ch_offsets,
-                              ctx.processor_mic_buffer, ctx.mic_buffer, nullptr, 2)
+                              ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
+                              ctx.mic_buffer, nullptr, 2)
                         : this->rx_rate_converter_.process_multi(ctx.rx_buffer, ctx.input_frame_size, 2, ch_offsets,
-                                                                 ctx.processor_mic_buffer, ctx.mic_buffer, nullptr, 2);
+                                                                 ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
+                                                                 ctx.mic_buffer, nullptr, 2);
     if (!ok) {
       this->fail_audio_session_(ctx.i2s_bps == 4 ? "stereo dual-mic RX 32-bit audio-effects conversion"
                                                  : "stereo dual-mic RX audio-effects conversion");
       return false;
     }
-    ctx.processor_input = ctx.processor_mic_buffer;
+    if (ctx.processor_mic_channels > 1) ctx.processor_input = ctx.processor_mic_buffer;
     return true;
   }
 
@@ -1283,6 +1315,10 @@ void ESPAudioStack::update_tdm_slot_levels_(const AudioTaskCtx &ctx) {
 
 #ifdef USE_AUDIO_PROCESSOR
 void ESPAudioStack::run_processor_(AudioTaskCtx &ctx) {
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_audio_(CapturePoint::REFERENCE, ctx.spk_ref_buffer, ctx.input_frame_size,
+                       this->get_output_sample_rate(), 16, 1, 1);
+#endif
   this->processor_->process(ctx.processor_input, ctx.spk_ref_buffer, ctx.aec_output, ctx.processor_mic_channels);
 
   ctx.output_buffer = ctx.aec_output;
@@ -1301,6 +1337,11 @@ bool ESPAudioStack::can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const {
 void ESPAudioStack::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
   if (!this->can_dispatch_mic_frame_(ctx))
     return;
+
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_audio_(CapturePoint::PROCESSOR_INPUT, ctx.processor_input, ctx.input_frame_size,
+                       this->get_output_sample_rate(), 16, ctx.processor_mic_channels, ctx.processor_mic_channels);
+#endif
 
 #ifdef USE_AUDIO_PROCESSOR
   if (ctx.processor_enabled && (!ctx.processor_ready || ctx.spk_ref_buffer == nullptr || ctx.aec_output == nullptr)) {
@@ -1395,7 +1436,15 @@ void ESPAudioStack::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
   }
 #endif
 
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_audio_(CapturePoint::PROCESSOR_OUTPUT, ctx.output_buffer, ctx.current_output_frame_size,
+                       this->get_output_sample_rate(), 16, 1, 1);
+#endif
   this->apply_post_processor_gain_(ctx);
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_audio_(CapturePoint::OUTPUT, ctx.output_buffer, ctx.current_output_frame_size,
+                       this->get_output_sample_rate(), 16, 1, 1);
+#endif
   this->dispatch_mic_callbacks_(ctx);
 }
 

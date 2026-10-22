@@ -11,6 +11,7 @@
 #define ESP_LOGE(...) ((void)0)
 #define ESP_LOGI(...) ((void)0)
 constexpr int ESP_CODEC_DEV_OK=0;
+#define ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel) (1U << (channel))
 constexpr int ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS=1;
 using i2s_chan_handle_t=void*;
 using i2s_clock_src_t=int;
@@ -29,6 +30,14 @@ struct es8311_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;void *gpio_if;st
 struct es7210_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;struct{bool is_master;}sys_cfg;struct{const char *label;}adc_cfg;};
 std::set<const void*> resources;
 int allocation=0,fail_allocation=0,opens=0,fail_open=0,layouts=0,fail_layout=0,layout_mismatch=0,closes=0;
+int gain_calls=0,fail_gain=0;
+float channel_gains[4]{};
+int esp_codec_dev_set_in_channel_gain(Dev *d,uint16_t mask,float db){
+ assert(d->open);if(++gain_calls==fail_gain)return -1;
+ for(unsigned c=0;c<4;++c)if(mask&(1U<<c))channel_gains[c]=db;
+ return 0;
+}
+int esp_codec_dev_set_in_gain(Dev *d,float db){return esp_codec_dev_set_in_channel_gain(d,15,db);}
 template<class T> T* make(){if(++allocation==fail_allocation)return nullptr;auto *p=new T{};assert(resources.insert(p).second);return p;}
 template<class T> void release(const T*p){assert(resources.erase(p)==1);delete p;}
 int bus_info(const audio_codec_data_if_t*,esp_codec_dev_type_t,esp_codec_dev_bus_info_t *b){
@@ -60,14 +69,12 @@ const char* CodecDevBackend::input_codec_name()const{return "test";}
 const char* CodecDevBackend::output_codec_name()const{return "test";}
 const audio_codec_ctrl_if_t* CodecDevBackend::new_i2c_ctrl_(uint8_t){return make<audio_codec_ctrl_if_t>();}
 void CodecDevBackend::apply_output_volume_curve_(){}
-void CodecDevBackend::set_input_gain(float){}
-void CodecDevBackend::set_input_channel_gain(uint8_t,float){}
 esp_codec_dev_sample_info_t CodecDevBackend::make_sample_info_(const SampleConfig&c){return {c.sample_rate,c.bits_per_sample,c.channels,c.channel_mask,c.mclk_multiple};}
 bool CodecDevBackend::make_tx_sample_info_(const SampleConfig&c,esp_codec_dev_sample_info_t&f){f=make_sample_info_(c);return true;}
 // PRODUCTION_METHODS
 }
 using esphome::esp_audio_stack::CodecDevBackend;
-void reset_faults(){allocation=opens=layouts=closes=0;fail_allocation=fail_open=fail_layout=layout_mismatch=0;}
+void reset_faults(){allocation=opens=layouts=closes=gain_calls=0;fail_allocation=fail_open=fail_layout=layout_mismatch=fail_gain=0;}
 void assert_closed(CodecDevBackend&b){assert(!b.is_open());assert(!b.rx_layout().valid);assert(!b.tx_layout().valid);}
 bool setup(CodecDevBackend&b,bool split,bool rx,bool tx,bool es7210){
  CodecDevBackend::GenericCodecConfig cfg;cfg.enabled=true;cfg.kind=CodecDevBackend::CodecKind::ES8311;
@@ -78,6 +85,26 @@ bool setup(CodecDevBackend&b,bool split,bool rx,bool tx,bool es7210){
  return ok;
 }
 int main(){
+ // Live PGA controls keep microphone and hardware-reference channels isolated.
+ {CodecDevBackend b;reset_faults();assert(setup(b,false,true,true,true));
+  auto adc=b.es7210_;adc.has_ref_channel_gain=true;adc.ref_channel=1;adc.mic_selected=7;b.set_es7210_config(adc);
+  assert(b.set_input_gain(12));assert(b.set_input_channel_gain(1,24));assert(gain_calls==0);
+  CodecDevBackend::SampleConfig cfg;cfg.channels=4;cfg.channel_mask=5;
+  assert(b.open(&cfg,&cfg));assert(channel_gains[0]==12&&channel_gains[2]==12&&channel_gains[1]==24);
+  assert(b.set_input_gain(18));assert(channel_gains[0]==18&&channel_gains[2]==18&&channel_gains[1]==24);
+  assert(b.set_input_channel_gain(1,27));assert(channel_gains[0]==18&&channel_gains[1]==27);
+  assert(!b.set_input_channel_gain(0,30));
+  fail_gain=gain_calls+1;assert(!b.set_input_gain(33));assert(b.es7210_.input_gain_db==18);
+  fail_gain=gain_calls+1;assert(!b.set_input_channel_gain(1,33));assert(b.es7210_.ref_channel_gain_db==27);
+  b.close();const auto calls=gain_calls;assert(b.set_input_gain(21));assert(gain_calls==calls);
+  assert(b.open(&cfg,&cfg));assert(channel_gains[0]==21&&channel_gains[1]==27);b.teardown();assert(resources.empty());
+ }
+ // Initial PGA failures return an error and close both already-open devices.
+ {CodecDevBackend b;reset_faults();assert(setup(b,false,true,true,true));
+  CodecDevBackend::SampleConfig cfg;cfg.channels=4;cfg.channel_mask=5;
+  fail_gain=1;assert(!b.open(&cfg,&cfg));assert_closed(b);assert(closes==2);
+  reset_faults();assert(b.open(&cfg,&cfg));b.teardown();assert(resources.empty());
+ }
  for(bool split:{false,true}) for(bool es7210:{false,true}) for(int sides:{1,2,3}) {
 #ifndef USE_ESP_AUDIO_STACK_DUAL_BUS
   if(split)continue;

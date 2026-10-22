@@ -56,6 +56,18 @@ class CapsRingBuffer final : public ring_buffer::RingBuffer {
                                    bool write_partial = true);
   BaseType_t reset();
   size_t nosplit_items_waiting() const;
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  // Borrowed NOSPLIT items. The producer completes every reservation and the
+  // consumer returns every item before destruction, including on disconnect.
+  void *acquire_item(size_t len) {
+    void *item = nullptr;
+    if (this->is_nosplit_()) xRingbufferSendAcquire(this->handle_(), &item, len, 0);
+    return item;
+  }
+  void complete_item(void *item) { xRingbufferSendComplete(this->handle_(), item); }
+  void *receive_item(size_t *len) { return xRingbufferReceive(this->handle_(), len, 0); }
+  void return_item(void *item) { vRingbufferReturnItem(this->handle_(), item); }
+#endif
 
 #ifdef ESP_AFE_RING_INTEGRITY_DEBUG
   bool debug_metadata_valid(RingbufferType_t expected_type) const {

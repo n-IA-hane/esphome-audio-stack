@@ -51,6 +51,7 @@ void ESPAudioStackMicrophone::start() {
   while (count < MAX_LISTENERS) {
     if (this->active_listeners_.compare_exchange_weak(count, count + 1, std::memory_order_acq_rel,
                                                     std::memory_order_relaxed)) {
+      if (this->parent_->has_failed_session()) this->parent_->start();
       this->enable_loop_soon_any_context();
       return;
     }
@@ -119,6 +120,15 @@ void ESPAudioStackMicrophone::loop() {
     this->i2s_error_latched_ = false;
     ESP_LOGI(TAG, "I2S audio path recovered");
   }
+
+  if (this->parent_->has_failed_session()) {
+    // Consumer intent survives; only this failed hardware session has ended.
+    this->state_ = microphone::STATE_STOPPED;
+    this->disable_loop();
+    return;
+  }
+  if (this->state_ == microphone::STATE_RUNNING && this->parent_->is_starting())
+    this->state_ = microphone::STATE_STARTING;
 
   const uint32_t count = this->active_listeners_.load(std::memory_order_acquire);
 

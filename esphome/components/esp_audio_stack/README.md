@@ -12,6 +12,9 @@ codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,
 hardware and software AEC references, and full AFE processors without each
 profile reimplementing bus ownership.
 
+See [microphone delivery and tuning](../../../docs/AUDIO_TUNING.md) for the optional
+`mic_mix`, analog PGA numbers and diagnostic PCM capture.
+
 ## One stack per device
 
 Only one `esp_audio_stack` instance is currently supported per ESP. Microphone,

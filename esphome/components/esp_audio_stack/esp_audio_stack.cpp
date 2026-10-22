@@ -473,6 +473,13 @@ void ESPAudioStack::request_audio_preallocation_() {
 void ESPAudioStack::loop() {
   this->sync_processor_background_consumer_();
   this->finish_audio_lifecycle_();
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  if (this->hardware_gain_result_pending_.exchange(false, std::memory_order_acq_rel)) {
+    if (this->hardware_gain_failed_[0].load() || this->hardware_gain_failed_[1].load())
+      this->status_momentary_warning("codec_gain", 2000);
+    this->hardware_gain_callback_.call();
+  }
+#endif
   if (!this->audio_stack_running_.load(std::memory_order_relaxed) &&
       this->audio_task_idle_.load(std::memory_order_relaxed)) {
     this->request_audio_preallocation_();
@@ -1465,6 +1472,9 @@ void ESPAudioStack::fail_tx_completion_tracking_(const char *reason) {
 }
 
 void ESPAudioStack::apply_pending_hardware_volume_() {
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  this->apply_pending_hardware_gains_();
+#endif
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   if (!this->hardware_volume_dirty_.exchange(false, std::memory_order_acq_rel)) return;
   // Only a curve configuration request rebuilds the map. Ordinary volume
@@ -1492,6 +1502,11 @@ void ESPAudioStack::service_audio_lifecycle_() {
     this->audio_task_idle_.store(false, std::memory_order_release);
     this->deinit_i2s_();
     this->teardown_pending_.store(false, std::memory_order_release);
+    if (session_failed) {
+      // Only the quiescent audio owner may discard PCM from this generation.
+      this->request_speaker_reset_.store(true, std::memory_order_release);
+      this->service_speaker_reset_();
+    }
     phase = session_failed ? AudioStartPhase::FAILED : AudioStartPhase::STOPPED;
     this->start_phase_.store(phase, std::memory_order_release);
     this->lifecycle_events_.fetch_add(1, std::memory_order_release);
@@ -1510,6 +1525,10 @@ void ESPAudioStack::service_audio_lifecycle_() {
       generation == this->start_generation_.load(std::memory_order_acquire);
   if (!opened || !current) {
     this->deinit_i2s_();
+    if (!opened) {
+      this->request_speaker_reset_.store(true, std::memory_order_release);
+      this->service_speaker_reset_();
+    }
     this->teardown_pending_.store(false, std::memory_order_release);
     this->has_i2s_error_.store(!opened, std::memory_order_release);
     phase = opened ? AudioStartPhase::STOPPED : AudioStartPhase::FAILED;
@@ -1556,6 +1575,13 @@ void ESPAudioStack::finish_audio_lifecycle_() {
   } else if (phase == AudioStartPhase::FAILED && current) {
     this->start_requested_.store(false, std::memory_order_release);
     this->has_i2s_error_.store(true, std::memory_order_release);
+    if (this->speaker_running_.exchange(false, std::memory_order_acq_rel))
+      this->speaker_idle_callback_.call();
+#ifdef USE_AUDIO_PROCESSOR
+    if (this->processor_ != nullptr) this->processor_->set_processing_active(false);
+#endif
+    this->update_runtime_state_();
+    this->idle_callback_.call();
   }
   // Child components are woken by completion, not by periodic STARTING retries.
   this->lifecycle_callback_.call();
@@ -1763,7 +1789,8 @@ void ESPAudioStack::stop_speaker() {
 }
 
 size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
-  if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire)) {
+  if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire) ||
+      this->has_i2s_error_.load(std::memory_order_acquire)) {
     // Reset admission is closed, but the caller still owns its PCM. Respect
     // its wait budget; zero remains nonblocking and does not promise fairness.
     vTaskDelay(ticks_to_wait);

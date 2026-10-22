@@ -37,6 +37,7 @@
 #include <string>
 
 #include "audio_core_processor.h"
+#include "audio_capture_observer.h"
 
 namespace esphome::esp_audio_stack {
 
@@ -250,6 +251,9 @@ class ESPAudioStack final : public Component {
     cfg.ref_channel = ref_channel;
     cfg.ref_channel_gain_db = ref_channel_gain_db;
     this->codec_backend_.set_es7210_config(cfg);
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+    this->configure_hardware_gain_defaults_(input_gain_db, has_ref_channel_gain, ref_channel, ref_channel_gain_db);
+#endif
   }
   void configure_es8311_input_codec(uint8_t address, bool use_mclk, bool no_dac_ref, float input_gain_db) {
     CodecDevBackend::GenericCodecConfig cfg;
@@ -260,6 +264,9 @@ class ESPAudioStack final : public Component {
     cfg.no_dac_ref = no_dac_ref;
     cfg.input_gain_db = input_gain_db;
     this->codec_backend_.set_input_codec_config(cfg);
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+    this->configure_hardware_gain_defaults_(input_gain_db, false, 0, 0);
+#endif
   }
   void configure_input_codec(uint8_t kind, uint8_t address, bool use_mclk, bool no_dac_ref, float input_gain_db) {
     CodecDevBackend::GenericCodecConfig cfg;
@@ -270,6 +277,9 @@ class ESPAudioStack final : public Component {
     cfg.no_dac_ref = no_dac_ref;
     cfg.input_gain_db = input_gain_db;
     this->codec_backend_.set_input_codec_config(cfg);
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+    this->configure_hardware_gain_defaults_(input_gain_db, false, 0, 0);
+#endif
   }
   void configure_es8311_codec(uint8_t address, bool use_mclk, bool no_dac_ref, float pa_gain_db = 0.0f) {
     CodecDevBackend::GenericCodecConfig cfg;
@@ -306,6 +316,14 @@ class ESPAudioStack final : public Component {
   // Input gain before the audio processor, for hot or weak mics.
   void set_input_gain(float gain);
   float get_input_gain() const { return this->input_gain_.load(std::memory_order_relaxed); }
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  bool request_hardware_gain(bool reference, float db);
+  float get_hardware_gain(bool reference) const { return this->hardware_gain_applied_[reference ? 1 : 0].load(); }
+  bool hardware_gain_result(bool reference, float *value) const;
+  template<typename F> void add_on_hardware_gain_callback(F &&callback) {
+    this->hardware_gain_callback_.add(std::forward<F>(callback));
+  }
+#endif
   // Master volume is independent from the speaker abstraction volume used by
   // ESPHome's media_player. The audio task applies media/speaker volume *
   // master volume, so HA media volume and the board master control cascade.
@@ -368,6 +386,11 @@ class ESPAudioStack final : public Component {
   bool register_mic_consumer(void *token);
   void unregister_mic_consumer(void *token);
   bool is_mic_running() const { return this->has_mic_consumers_.load(std::memory_order_relaxed); }
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  // Installed at setup, never replaced while the audio owner can dispatch.
+  void set_capture_observer(AudioCaptureObserver *observer) { this->capture_observer_ = observer; }
+  uint32_t capture_generation() const { return this->start_generation_.load(std::memory_order_acquire); }
+#endif
 
   // Speaker interface: data arrives at bus rate (from mixer/resampler)
   size_t play(const uint8_t *data, size_t len, TickType_t ticks_to_wait = portMAX_DELAY);
@@ -387,6 +410,10 @@ class ESPAudioStack final : public Component {
   void stop();   // Stop both
 
   bool is_running() const { return this->audio_stack_running_.load(std::memory_order_relaxed); }
+  bool has_failed_session() const {
+    return this->start_phase_.load(std::memory_order_acquire) == AudioStartPhase::FAILED &&
+           !this->start_requested_.load(std::memory_order_acquire);
+  }
   bool is_idle() const {
     return !this->start_requested_.load(std::memory_order_acquire) &&
            !this->audio_stack_running_.load(std::memory_order_relaxed) &&
@@ -487,6 +514,20 @@ class ESPAudioStack final : public Component {
   void service_audio_lifecycle_();
   void finish_audio_lifecycle_();
   void apply_pending_hardware_volume_();
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  void configure_hardware_gain_defaults_(float mic, bool has_ref, uint8_t channel, float reference);
+  void apply_pending_hardware_gains_();
+  std::atomic<float> hardware_gain_requested_[2]{};
+  std::atomic<float> hardware_gain_applied_[2]{};
+  std::atomic<uint32_t> hardware_gain_revision_[2]{};
+  std::atomic<uint32_t> hardware_gain_result_revision_[2]{};
+  std::atomic<bool> hardware_gain_failed_[2]{};
+  std::atomic<uint8_t> hardware_gains_dirty_{0};
+  std::atomic<bool> hardware_gain_result_pending_{false};
+  bool hardware_reference_gain_available_{false};
+  uint8_t hardware_reference_gain_channel_{0};
+  LazyCallbackManager<void()> hardware_gain_callback_;
+#endif
   // One audio session: populate ctx, enter the processing loop, and return when
   // stop() flips audio_stack_running_ off or the processor's frame_spec changes.
   void audio_session_();
@@ -625,6 +666,12 @@ class ESPAudioStack final : public Component {
   bool can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const;
   void apply_post_processor_gain_(AudioTaskCtx &ctx);
   void dispatch_mic_callbacks_(const AudioTaskCtx &ctx);
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  void capture_audio_(CapturePoint point, const void *data, size_t frames, uint32_t rate,
+                      uint8_t bits, uint8_t channels, uint8_t stride, uint8_t first = 0, uint8_t second = 1);
+  void capture_raw_audio_(const AudioTaskCtx &ctx);
+  AudioCaptureObserver *capture_observer_{nullptr};
+#endif
   bool apply_mic_alc_gain_(int16_t *samples, size_t sample_count, int8_t gain_db);
 #ifdef USE_ESP_AUDIO_STACK_SLOT_LEVELS
   void update_tdm_slot_levels_(const AudioTaskCtx &ctx);

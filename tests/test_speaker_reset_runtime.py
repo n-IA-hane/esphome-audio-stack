@@ -39,6 +39,7 @@ struct Buffer {
 struct Callback {void call(){}};
 struct ESPAudioStack {
  std::atomic<bool> speaker_requested_{true},speaker_running_{true},has_mic_consumers_{true},request_speaker_reset_{false};
+ std::atomic<bool> has_i2s_error_{false};
  Callback speaker_idle_callback_;Buffer buffer;Buffer *speaker_buffer_=&buffer;
  void update_runtime_state_(){}void stop(){}unsigned get_speaker_channels(){return 1;}
  void stop_speaker();void service_speaker_reset_();

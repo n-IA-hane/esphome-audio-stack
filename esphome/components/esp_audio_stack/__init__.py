@@ -49,6 +49,7 @@ CONF_I2S_DOUT_PIN = "i2s_dout_pin"
 CONF_OUTPUT_SAMPLE_RATE = "output_sample_rate"
 CONF_PROCESSOR_ID = "processor_id"
 CONF_INPUT_GAIN = "input_gain"
+CONF_MIC_MIX = "mic_mix"
 CONF_MASTER_VOLUME_MIN_DB = "master_volume_min_db"
 CONF_USE_STEREO_AEC_REFERENCE = "use_stereo_aec_reference"
 CONF_REFERENCE_CHANNEL = "reference_channel"
@@ -454,6 +455,9 @@ CONFIG_SCHEMA = cv.All(
             # If omitted, equals sample_rate (no rate conversion).
             cv.Optional(CONF_OUTPUT_SAMPLE_RATE): cv.int_range(min=8000, max=48000),
             cv.Optional(CONF_PROCESSOR_ID): cv.use_id(AudioProcessor),
+            cv.Optional(CONF_MIC_MIX, default="passthrough"): cv.one_of(
+                "passthrough", "average", lower=True
+            ),
             # Input gain before the processor: <1.0 attenuates hot mics,
             # >1.0 amplifies weak mics. This is gain staging, not a separate mic output.
             cv.Optional(CONF_INPUT_GAIN, default=1.0): cv.float_range(
@@ -636,6 +640,14 @@ def _final_validate(config):
         {},
     )
     afe_mics = afe_conf.get("mic_num", 1)
+    if config.get(CONF_MIC_MIX, "passthrough") == "average":
+        tdm_dual = use_tdm_bus and len(config.get(CONF_TDM_MIC_SLOTS, [])) == 2
+        std_dual = (not config.get(CONF_USE_STEREO_AEC_REFERENCE, False)
+                    and len(config.get(CONF_RX_MIC_SLOTS, [])) == 2)
+        if not tdm_dual and not std_dual:
+            raise cv.Invalid("mic_mix: average requires two microphone slots; a reference slot is not a microphone")
+        if afe_mics != 1:
+            raise cv.Invalid("mic_mix: average delivers mono: configure the bound AFE with mic_num: 1 and no SE/BSS")
     if afe_mics >= 2:
         tdm_dual = (
             config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config
@@ -660,6 +672,8 @@ def _add_config_setters(var, config, setters):
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
+    if config[CONF_MIC_MIX] == "average":
+        cg.add_define("USE_ESP_AUDIO_STACK_MIC_DOWNMIX")
     use_tdm_bus = config[CONF_USE_TDM_REFERENCE] or CONF_TDM_MIC_SLOTS in config
     use_tdm_ref = config[CONF_USE_TDM_REFERENCE]
     use_stereo_ref = config[CONF_USE_STEREO_AEC_REFERENCE]

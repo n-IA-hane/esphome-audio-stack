@@ -36,11 +36,16 @@ struct Buffer {
 };
 struct ESPAudioStack {
  Buffer *speaker_buffer_=nullptr;std::atomic<bool> request_speaker_reset_{false};
+ std::atomic<bool> has_i2s_error_{false};
+ bool has_failed_session()const{return false;}
+ void start(){}
  unsigned get_speaker_channels(){return 1;}
  size_t play(const uint8_t*,size_t,TickType_t);
 };
 namespace speaker {enum {STATE_STOPPED,STATE_RUNNING,STATE_STARTING};}
 struct ESPAudioStackSpeaker {
+ std::atomic<bool> implicit_recovery_used_{false};
+ void enable_loop_soon_any_context(){}
  bool failed=false;int state_=speaker::STATE_RUNNING;
  std::atomic<bool> listener_registered_{true};unsigned last_write_ms_=0;
  ESPAudioStack *parent_;bool is_failed(){return failed;}

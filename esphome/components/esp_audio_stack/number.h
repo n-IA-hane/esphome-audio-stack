@@ -141,6 +141,46 @@ class MasterVolumeNumber final : public number::Number, public Component {
   ESPPreferenceObject pref_;
 };
 
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+class HardwareGainNumber final : public number::Number, public Component {
+ public:
+  void set_parent(ESPAudioStack *parent) { this->parent_ = parent; }
+  void set_reference(bool reference) { this->reference_ = reference; }
+  void set_initial_db(float db) { this->initial_db_ = db; }
+
+  void setup() override {
+    this->pref_ = global_preferences->make_preference<float>(this->get_object_id_hash());
+    float value;
+    if (!this->pref_.load(&value)) value = this->initial_db_;
+    if (!std::isfinite(value) || value < 0 || value > 37.5f)
+      value = this->parent_->get_hardware_gain(this->reference_);
+    this->parent_->add_on_hardware_gain_callback([this]() {
+      float accepted;
+      if (this->parent_->hardware_gain_result(this->reference_, &accepted)) {
+        this->publish_state(accepted);
+        this->pref_.save(&accepted);
+      }
+    });
+    this->control(value);
+    this->disable_loop();
+  }
+
+ protected:
+  void control(float value) override {
+    if (!this->parent_->request_hardware_gain(this->reference_, value)) return;
+    // This is the requested configuration; an owner-side write failure
+    // republishes the last accepted value through the callback above.
+    this->publish_state(value);
+    this->pref_.save(&value);
+  }
+
+  ESPAudioStack *parent_{nullptr};
+  ESPPreferenceObject pref_;
+  bool reference_{false};
+  float initial_db_{NAN};
+};
+#endif
+
 }  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32 && USE_NUMBER

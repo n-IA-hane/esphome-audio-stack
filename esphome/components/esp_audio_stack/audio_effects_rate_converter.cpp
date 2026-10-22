@@ -22,6 +22,12 @@ static const char *const TAG = "i2s_ae_fx";
 namespace {
 constexpr uint8_t MAX_DEINTLV_CH = 8;
 
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+inline int16_t average_microphones(int16_t first, int16_t second) {
+  return static_cast<int16_t>((static_cast<int32_t>(first) + second) / 2);
+}
+#endif
+
 int16_t *alloc_internal(size_t count, const char *who) {
   auto *p = static_cast<int16_t *>(heap_caps_malloc(count * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   if (p == nullptr) {
@@ -123,8 +129,14 @@ class BitCvtHandle {
                                           int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch) {
   if (nch == 0 || ch[0] == nullptr)
     return false;
-  if (mic_mono != nullptr)
+  if (mic_mono != nullptr) {
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+    if (num_mic_ch >= 2 && nch >= 2) {
+      for (size_t i = 0; i < count; i++) mic_mono[i] = average_microphones(ch[0][i], ch[1][i]);
+    } else
+#endif
     memcpy(mic_mono, ch[0], count * sizeof(int16_t));
+  }
 
   if (num_mic_ch >= 2 && nch >= 2) {
     if (mic_interleaved != nullptr) {
@@ -349,13 +361,14 @@ class MultiChannelAudioEffectsRateConverterImpl {
 
   bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit) {
     const uint8_t nch = std::min<uint8_t>(num_channels, MAX_RATE_CVT_CHANNELS);
-    const uint8_t deintlv_channels = source_32bit ? source_channels : nch;
-    if (!this->ensure_deintlv_buffers_(deintlv_channels, in_count))
+    if (nch == 0 || nch != this->channels_ || source_channels == 0 || source_channels > MAX_DEINTLV_CH)
       return false;
     if (source_32bit && !this->ensure_bit_conversion_(source_channels, in_count))
       return false;
     if (this->ratio_ <= 1)
       return true;
+    if (!this->ensure_deintlv_buffers_(nch, in_count))
+      return false;
     return this->ensure_output_buffers_(nch, out_count) && this->rate_cvt_.ready();
   }
 
@@ -375,16 +388,29 @@ class MultiChannelAudioEffectsRateConverterImpl {
   bool process_multi_t_(const T *in, size_t out_count, size_t stride, const uint8_t *offsets, int16_t *mic_interleaved,
                         int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch, bool source_32bit) {
     const size_t in_count = out_count * this->ratio_;
+    if (in == nullptr || offsets == nullptr || stride == 0 || stride > MAX_DEINTLV_CH || this->channels_ == 0)
+      return false;
+    for (uint8_t c = 0; c < this->channels_; c++) {
+      if (offsets[c] >= stride) return false;
+    }
+    if (this->ratio_ <= 1) {
+      const int16_t *samples;
+      if (source_32bit) {
+        if (!this->ensure_bit_conversion_(static_cast<uint8_t>(stride), in_count) ||
+            !this->bit_cvt_.process(in, static_cast<uint32_t>(in_count), this->bit_scratch_, "multi32")) return false;
+        samples = this->bit_scratch_;
+      } else {
+        samples = reinterpret_cast<const int16_t *>(in);
+      }
+      this->distribute_strided_(samples, out_count, stride, offsets, mic_interleaved, mic_mono, ref_out, num_mic_ch);
+      return true;
+    }
     if (!this->deinterleave_selected_(in, in_count, stride, offsets, source_32bit))
       return false;
 
     int16_t *selected[MAX_RATE_CVT_CHANNELS]{};
     for (uint8_t c = 0; c < this->channels_; c++) {
-      selected[c] = source_32bit ? this->deintlv_ch_[offsets[c]] : this->deintlv_ch_[c];
-    }
-
-    if (this->ratio_ <= 1) {
-      return distribute_channels(selected, this->channels_, out_count, mic_interleaved, mic_mono, ref_out, num_mic_ch);
+      selected[c] = this->deintlv_ch_[c];
     }
 
     if (!this->ensure_output_buffers_(this->channels_, out_count))
@@ -397,41 +423,39 @@ class MultiChannelAudioEffectsRateConverterImpl {
 
   template<typename T>
   bool deinterleave_selected_(const T *in, size_t in_count, size_t stride, const uint8_t *offsets, bool source_32bit) {
-    if (stride == 0 || stride > MAX_DEINTLV_CH) {
-      ESP_LOGE(TAG, "unsupported source channel count for esp_ae_deintlv: %u", static_cast<unsigned>(stride));
-      return false;
-    }
-    for (uint8_t c = 0; c < this->channels_; c++) {
-      if (offsets[c] >= stride) {
-        ESP_LOGE(TAG, "channel offset %u outside source channel count %u", static_cast<unsigned>(offsets[c]),
-                 static_cast<unsigned>(stride));
-        return false;
-      }
-    }
     const void *deintlv_input = in;
     if (source_32bit) {
-      if (!this->ensure_deintlv_buffers_(static_cast<uint8_t>(stride), in_count))
-        return false;
       if (!this->ensure_bit_conversion_(static_cast<uint8_t>(stride), in_count))
         return false;
       if (!this->bit_cvt_.process(in, static_cast<uint32_t>(in_count), this->bit_scratch_, "multi32"))
         return false;
       deintlv_input = this->bit_scratch_;
-    } else {
-      return this->extract_selected_channels_(static_cast<const int16_t *>(deintlv_input), in_count, stride, offsets);
     }
+    return this->extract_selected_channels_(static_cast<const int16_t *>(deintlv_input), in_count, stride, offsets);
+  }
 
-    esp_ae_sample_t out_args[MAX_DEINTLV_CH]{};
-    for (uint8_t c = 0; c < stride; c++) {
-      out_args[c] = this->deintlv_ch_[c];
+  void distribute_strided_(const int16_t *in, size_t count, size_t stride, const uint8_t *offsets,
+                           int16_t *interleaved, int16_t *mono, int16_t *ref, uint8_t mic_channels) const {
+    const bool dual = mic_channels >= 2 && this->channels_ >= 2;
+    if (mono != nullptr) {
+      for (size_t i = 0; i < count; i++) {
+        const int16_t first = in[i * stride + offsets[0]];
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+        mono[i] = dual ? average_microphones(first, in[i * stride + offsets[1]]) : first;
+#else
+        mono[i] = first;
+#endif
+      }
     }
-    const esp_ae_err_t err = esp_ae_deintlv_process(static_cast<uint8_t>(stride), 16, static_cast<uint32_t>(in_count),
-                                                    const_cast<void *>(deintlv_input), out_args);
-    if (err == ESP_AE_ERR_OK)
-      return true;
-    ESP_LOGE(TAG, "esp_ae_deintlv_process failed: err=%d samples=%u ch=%u", static_cast<int>(err),
-             static_cast<unsigned>(in_count), static_cast<unsigned>(stride));
-    return false;
+    if (dual && interleaved != nullptr) {
+      for (size_t i = 0; i < count; i++) {
+        interleaved[2 * i] = in[i * stride + offsets[0]];
+        interleaved[2 * i + 1] = in[i * stride + offsets[1]];
+      }
+    }
+    if (ref != nullptr && this->channels_ > mic_channels) {
+      for (size_t i = 0; i < count; i++) ref[i] = in[i * stride + offsets[mic_channels]];
+    }
   }
 
   bool extract_selected_channels_(const int16_t *in, size_t in_count, size_t stride, const uint8_t *offsets) {

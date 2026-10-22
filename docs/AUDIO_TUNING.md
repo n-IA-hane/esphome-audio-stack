@@ -1,0 +1,191 @@
+# Microphone delivery, analog tuning and PCM capture
+
+Use the maintained device profile first. The options below add tools for a
+specific board or experiment; none changes the existing profile defaults.
+ESPHome 2026.10.0 or newer is required.
+
+## 1. Choose how microphones reach the processor
+
+Audio Stack owns slot extraction, rate conversion and microphone delivery.
+AEC and AFE continue to use their existing input contracts.
+
+| Configuration | Delivery | Processor configuration |
+| --- | --- | --- |
+| `mic_mix: passthrough` (default) | Selected microphone channels remain separate | AEC takes one; a dual-mic AFE uses `mic_num: 2` and SE/BSS |
+| `mic_mix: average` | Arithmetic mean of two physical microphones, delivered as one channel | Mono AEC, mono AFE (`mic_num: 1`, no SE/BSS), or no processor |
+
+For a TDM board with microphones in slots 0 and 2 and a reference in slot 1:
+
+```yaml
+esp_audio_stack:
+  # Keep the rest of the board's bus, codec and processor settings.
+  tdm_mic_slots: [0, 2]
+  tdm_ref_slot: 1
+  mic_mix: average
+```
+
+For two microphones on a conventional stereo I2S input:
+
+```yaml
+esp_audio_stack:
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  mic_mix: average
+```
+
+A reference channel is not a second microphone. Validation rejects a downmix
+without two microphone slots, a stereo reference used as a microphone, and an
+AFE still configured for two microphones. When switching from dual AFE, set
+`mic_num: 1` and disable SE/BSS explicitly. The AEC and AFE implementations do
+not perform or own this averaging.
+
+The mean uses a 32-bit sum followed by division by two, with signed rounding
+toward zero. Two full-scale inputs cannot overflow a 16-bit output. This is
+not beamforming: opposite-polarity microphones can cancel each other. Check
+wiring, polarity and the enclosure before deciding which delivery sounds best.
+
+The operation runs in the existing conversion pass. It adds no task, wait or
+separate DSP queue and does not force the I2S bus to 16 kHz. For example, the bus
+may remain at 48 kHz while AEC receives 16 kHz. With `passthrough`, the downmix
+implementation is excluded from compilation.
+
+The converter also avoids deinterleave scratch when no sample-rate conversion
+is necessary. The 32-to-16-bit conversion still uses Espressif's converter;
+rate-changing paths retain the existing Audio Effects resampler. Digital gain
+and DC filtering retain their existing order.
+
+## 2. Adjust analog PGA without rebuilding
+
+Digital `mic_gain` amplifies the processed output. Analog PGA changes the input
+codec before digital processing. A clipped ADC signal cannot be repaired by
+reducing a digital gain later.
+
+These optional numbers add analog controls:
+
+```yaml
+number:
+  - platform: esp_audio_stack
+    input_pga:
+      name: Microphone PGA
+    reference_pga:
+      name: Reference PGA
+```
+
+`input_pga` requires a configured hardware input codec. `reference_pga` requires
+ES7210 with an explicit physical `codec.input.ref_channel`. This is a codec
+channel index, not a TDM memory-slot index. Use the board's verified mapping.
+That reference must be enabled in `codec.input.mic_selected`. The microphone
+control excludes that reference channel; the reference control
+changes only that channel.
+
+Both controls accept 0 to 37.5 dB. Optional `initial_value` sets a first-boot
+default. A saved user setting takes precedence; without either, the existing
+codec configuration supplies the default. Values survive codec close/reopen.
+
+Requests are applied by the existing audio owner. Changing a setting while
+idle does not open I2S or start another worker. The number shows the requested
+configuration; if a live driver write fails, it returns to the last accepted
+value and logs the failure. A newer pending request is not overwritten by an
+older result. Changing analog levels may require the echo canceller to adapt
+again; no universal PGA, DAC boost or filter setting is imposed on all boards.
+
+Omit these numbers to exclude their runtime control code. Ordinary fixed codec
+gains keep working as before.
+
+## 3. Record what each stage actually receives
+
+Add `esp_audio_capture` to the same external component source as Audio Stack:
+
+```yaml
+external_components:
+  - source: github://n-IA-hane/esphome-audio-stack@dev
+    components: [esp_audio_stack, esp_aec, esp_audio_capture]
+
+# Give the existing stack and microphone explicit IDs if needed.
+esp_audio_capture:
+  id: audio_capture
+  esp_audio_stack_id: audio_bus
+  microphone_id: mic_main
+  address: 192.0.2.10  # Replace with the receiving computer's IPv4 address.
+  port: 19091
+  duration: 15s
+  buffer_size: 65536
+  points: [raw_mic, reference, processor_input, processor_output, output]
+
+button:
+  - platform: template
+    name: Start audio capture
+    on_press:
+      - esp_audio_capture.start: audio_capture
+  - platform: template
+    name: Stop audio capture
+    on_press:
+      - esp_audio_capture.stop: audio_capture
+```
+
+Use a local development checkout when testing changes that have not been
+published. `microphone_id` must be the Audio Stack microphone attached to the
+selected stack, not a second I2S reader. Capture is one optional component per
+device, matching Audio Stack's single owner.
+
+The receiver uses plain TCP on the development LAN. Start it on that computer,
+then press the start button:
+
+```sh
+python tools/capture_audio.py captures/board-run-01 --port 19091
+```
+
+A complete worked configuration is
+[04-dual-mic-downmix.yaml](../examples/04-dual-mic-downmix.yaml).
+Remove its optional capture/number blocks if you only need microphone delivery.
+
+| Point | What is recorded |
+| --- | --- |
+| `raw_mic` | The selected physical microphones, before downmix, DC filtering, digital gain and DSP; analog PGA is already applied |
+| `reference` | The actual reference passed to the processor, after its normal routing/rate conversion; available when the processor runs |
+| `processor_input` | Microphone data after extraction, rate conversion, optional downmix and input conditioning |
+| `processor_output` | The processor's public output before `mic_gain`; bypass/unavailable processing retains its normal raw/silence behavior |
+| `output` | Final mono microphone PCM, after `mic_gain`, as supplied to consumers |
+
+Raw microphone PCM retains the bus sample rate and 16/32-bit container.
+Processed surfaces are 16-bit at the configured output rate. Streams are saved
+as separate WAV files with a JSON manifest. No hidden AFE stages such as
+"AEC before NS" are invented: those vendor-internal taps are not exposed here.
+
+Every record carries a stream sequence, sample position, monotonic timestamp,
+session generation, rate, channels, width and cumulative queue-drop count.
+Missing sample positions become zero-filled gaps in the WAV and remain listed
+in the manifest. Duplicate, regressive, malformed or changed-format records
+are rejected instead of being silently concatenated. Each surface has its own
+timeline; asynchronous AFE output is not claimed to have sample-accurate
+alignment with a raw-input record.
+
+Capture duration is bounded to 100 ms through 120 seconds. The default is
+15 seconds. A 64 KiB queue prefers PSRAM and is allocated only on start; larger
+queues may be selected up to 256 KiB. A slow receiver causes diagnostic drops
+or a bounded disconnect, not a wait in the realtime audio task. An individual
+PCM record is capped at 16 KiB. The socket worker is temporary and returns its
+queue and task resources at completion. When disabled, no buffer, worker or
+socket exists. Omitting the component removes all capture hooks at compilation.
+
+The microphone mute, a new audio generation, a format change, parent failure,
+stop action or transport failure ends the capture. It acquires and releases
+only its own microphone-consumer reference. Stopping intentionally discards
+unsent diagnostic data, so the trailing interval is not guaranteed to be
+present. Receiver `complete` means that the received framing ended cleanly,
+not proof that the requested duration or every sample was recorded. Inspect
+sample positions and drops before using a capture as a benchmark.
+
+## 4. Compare on the same board
+
+Compare single-mic AEC, averaged dual-mic AEC and dual-mic AFE with the same bus,
+playback content and application configuration. Record heap free/minimum,
+largest internal block, PSRAM, task margins and audio continuity. Build RAM is
+not runtime free heap, and a successful compile does not measure echo reduction
+or wake-word accuracy. Keep the maintained profile until the alternative is
+validated on the actual hardware.
+
+The stage-capture workflow and the explicit two-microphone average were informed
+by [traverseda's board-specific frontend](https://github.com/traverseda/esphome_snippets/commit/103d4be1d28415d1ad2f52e0cb927e54f63bd00d).
+This implementation retains Audio Stack's existing multi-rate I2S/codec owner
+and the existing AEC/AFE backends.

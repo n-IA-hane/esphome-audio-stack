@@ -28,6 +28,8 @@ def test_codec_backend_failure_ownership_and_retry(tmp_path, split):
         "bool CodecDevBackend::setup(",
         "bool CodecDevBackend::read_layout_",
         "bool CodecDevBackend::open(",
+        "bool CodecDevBackend::set_input_gain(",
+        "bool CodecDevBackend::set_input_channel_gain(",
         "void CodecDevBackend::close()",
         "void CodecDevBackend::destroy_codecs_",
         "void CodecDevBackend::teardown()",

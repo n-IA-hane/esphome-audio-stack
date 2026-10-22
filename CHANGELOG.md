@@ -2,6 +2,19 @@
 
 ## 2026.11.0-dev
 
+- Reconcile microphone/speaker adapters after a runtime I2S failure, discard
+  stale PCM on its owner after quiescence and allow a bounded recovery request.
+- Add compile-gated `mic_mix: average` in Audio Stack for two physical microphones
+  delivered to mono AEC, mono AFE or no processor. Existing passthrough defaults
+  and processor implementations are unchanged.
+- Avoid unnecessary channel scratch for same-rate conversion and extract only
+  selected channels when resampling, retaining Espressif conversion primitives.
+- Add optional analog `input_pga` and `reference_pga` numbers. Codec writes stay
+  on the audio owner; reference calibration remains independent of microphone PGA.
+- Add opt-in, bounded PCM capture with separate raw/input/reference/output WAVs
+  and gap-aware metadata. No capture worker, queue or socket exists while idle.
+
+
 > **Attention: ESPHome 2026.10.0 or newer is required.**
 >
 > ESPHome 2026.10 brings substantial audio changes, including several of our

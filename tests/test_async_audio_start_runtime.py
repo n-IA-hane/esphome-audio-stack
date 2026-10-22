@@ -93,6 +93,7 @@ struct ESPAudioStack {
  std::atomic<bool> start_requested_{false},speaker_requested_{false},speaker_running_{false},has_mic_consumers_{false};
  Processor *processor_=nullptr;
  std::atomic<bool> audio_task_idle_{true},hardware_volume_dirty_{false},tx_completion_tracking_active_{false};
+ std::atomic<bool> request_speaker_reset_{false};
  std::atomic<AudioStartPhase> start_phase_{AudioStartPhase::STOPPED};
  std::atomic<uint32_t> start_generation_{0},lifecycle_events_{0};
  ObservedGeneration ready_generation_{0};
@@ -107,6 +108,7 @@ struct ESPAudioStack {
  bool is_starting()const{return start_requested_ && !is_running();}
  void enable_loop_soon_any_context(){}void request_audio_preallocation_(){}
  void update_runtime_state_(){}void apply_pending_hardware_volume_(){}
+ void service_speaker_reset_(){request_speaker_reset_=false;}
  void start_speaker(){speaker_running_=true;}
  bool enable_i2s_channels_(){worker=std::this_thread::get_id();++opens;if(during_open)during_open();hardware_open=!fail_open;return !fail_open;}
  void deinit_i2s_(){assert(std::this_thread::get_id()==worker);++closes;hardware_open=false;}

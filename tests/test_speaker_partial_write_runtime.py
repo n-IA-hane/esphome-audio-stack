@@ -125,6 +125,7 @@ struct ESPAudioStack {
   RingBuffer *speaker_buffer_;
   std::atomic<bool> request_speaker_reset_{false};
   unsigned channels;
+  std::atomic<bool> has_i2s_error_{false};
   unsigned get_speaker_channels() const { return channels; }
   size_t play(const uint8_t*,size_t,TickType_t);
 };

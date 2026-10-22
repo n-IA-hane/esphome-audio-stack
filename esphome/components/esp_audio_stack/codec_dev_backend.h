@@ -87,8 +87,8 @@ class CodecDevBackend {
   void set_output_volume(float volume);
   void set_output_volume_curve(float min_db);
   void set_output_mute(bool mute);
-  void set_input_gain(float gain_db);
-  void set_input_channel_gain(uint8_t channel, float gain_db);
+  bool set_input_gain(float gain_db, bool opening = false);
+  bool set_input_channel_gain(uint8_t channel, float gain_db, bool opening = false);
 
   bool has_tx() const { return this->tx_dev_ != nullptr; }
   bool has_rx() const { return this->rx_dev_ != nullptr; }

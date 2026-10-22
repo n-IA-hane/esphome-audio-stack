@@ -531,12 +531,21 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
       return false;
     }
     if (this->es7210_.enabled) {
-      this->set_input_gain(this->es7210_.input_gain_db);
+      bool gains_ok = this->set_input_gain(this->es7210_.input_gain_db, true);
       if (this->es7210_.has_ref_channel_gain) {
-        this->set_input_channel_gain(this->es7210_.ref_channel, this->es7210_.ref_channel_gain_db);
+        gains_ok = this->set_input_channel_gain(this->es7210_.ref_channel, this->es7210_.ref_channel_gain_db, true) && gains_ok;
+      }
+      if (!gains_ok) {
+        esp_codec_dev_close(this->rx_dev_);
+        if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
+        return false;
       }
     } else if (this->input_codec_.enabled) {
-      this->set_input_gain(this->input_codec_.input_gain_db);
+      if (!this->set_input_gain(this->input_codec_.input_gain_db, true)) {
+        esp_codec_dev_close(this->rx_dev_);
+        if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
+        return false;
+      }
     }
   }
   if ((tx_config != nullptr && this->tx_dev_ != nullptr &&
@@ -639,16 +648,33 @@ void CodecDevBackend::set_output_mute(bool mute) {
   }
 }
 
-void CodecDevBackend::set_input_gain(float gain_db) {
-  if (this->rx_dev_ != nullptr) {
-    esp_codec_dev_set_in_gain(this->rx_dev_, gain_db);
+bool CodecDevBackend::set_input_gain(float gain_db, bool opening) {
+  if (!this->has_input_codec()) return false;
+  if (this->rx_dev_ != nullptr && (this->open_ || opening)) {
+    int result;
+    if (this->es7210_.enabled && this->es7210_.has_ref_channel_gain) {
+      const uint16_t microphones = this->es7210_.mic_selected &
+          ~ESP_CODEC_DEV_MAKE_CHANNEL_MASK(this->es7210_.ref_channel);
+      result = esp_codec_dev_set_in_channel_gain(this->rx_dev_, microphones, gain_db);
+    } else {
+      result = esp_codec_dev_set_in_gain(this->rx_dev_, gain_db);
+    }
+    if (result != ESP_CODEC_DEV_OK) return false;
   }
+  if (this->es7210_.enabled) this->es7210_.input_gain_db = gain_db;
+  else this->input_codec_.input_gain_db = gain_db;
+  return true;
 }
 
-void CodecDevBackend::set_input_channel_gain(uint8_t channel, float gain_db) {
-  if (this->rx_dev_ != nullptr && channel < 16) {
-    esp_codec_dev_set_in_channel_gain(this->rx_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel), gain_db);
+bool CodecDevBackend::set_input_channel_gain(uint8_t channel, float gain_db, bool opening) {
+  if (!this->es7210_.enabled || !this->es7210_.has_ref_channel_gain || channel != this->es7210_.ref_channel)
+    return false;
+  if (this->rx_dev_ != nullptr && (this->open_ || opening)) {
+    if (esp_codec_dev_set_in_channel_gain(this->rx_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel), gain_db) != ESP_CODEC_DEV_OK)
+      return false;
   }
+  this->es7210_.ref_channel_gain_db = gain_db;
+  return true;
 }
 
 void CodecDevBackend::destroy_codecs_() {

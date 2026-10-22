@@ -42,6 +42,10 @@ Use ESPHome **2026.10.0 or newer**,
 ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
 pins from your board's schematic.
 
+Optional [microphone downmix, analog tuning and PCM capture](docs/AUDIO_TUNING.md)
+are available for board development. Existing profiles keep their delivery and
+gain defaults; diagnostics remain off until explicitly requested.
+
 ## Choose a complete device or a custom audio path
 
 | Your goal | Starting point | Expected result |

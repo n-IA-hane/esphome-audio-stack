@@ -27,7 +27,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install esphome==${{ matrix.esphome }} pytest==9.0.3 ruff==0.15.21
       - name: Lint component and tests
-        run: python -m ruff check esphome tests
+        run: python -m ruff check esphome tests tools
       - name: Run contract tests
         run: python -m pytest -q -ra --junitxml=test-results/native.xml
       - name: Preserve native test results
@@ -36,4 +36,28 @@ jobs:
         with:
           name: audio-native-${{ matrix.esphome }}
           path: test-results/native.xml
+          if-no-files-found: error
+
+  optional-audio-firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.2"
+      - name: Install official ESPHome
+        run: python -m pip install esphome==2026.10.0
+      - name: Compile optional microphone delivery, PGA and capture together
+        run: |
+          mkdir -p test-results
+          printf 'wifi_ssid: test-network\nwifi_password: test-password\n' > examples/secrets.yaml
+          set -o pipefail
+          python -m esphome compile examples/04-dual-mic-downmix.yaml 2>&1 | tee test-results/optional-audio.log
+      - name: Preserve firmware build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: optional-audio-firmware
+          path: test-results/optional-audio.log
           if-no-files-found: error
