@@ -645,9 +645,18 @@ def _final_validate(config):
         std_dual = (not config.get(CONF_USE_STEREO_AEC_REFERENCE, False)
                     and len(config.get(CONF_RX_MIC_SLOTS, [])) == 2)
         if not tdm_dual and not std_dual:
-            raise cv.Invalid("mic_mix: average requires two microphone slots; a reference slot is not a microphone")
+            raise cv.Invalid(
+                "mic_mix: average requires two microphone slots; "
+                "a playback reference is not a microphone",
+                path=[CONF_MIC_MIX],
+            )
         if afe_mics != 1:
-            raise cv.Invalid("mic_mix: average delivers mono: configure the bound AFE with mic_num: 1 and no SE/BSS")
+            raise cv.Invalid(
+                "mic_mix: average delivers mono: configure the bound AFE with "
+                "mic_num: 1 and se_enabled: false. Dual-microphone BSS requires "
+                "two independent microphone channels",
+                path=[CONF_MIC_MIX],
+            )
     if afe_mics >= 2:
         tdm_dual = (
             config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config
@@ -656,7 +665,8 @@ def _final_validate(config):
         if not tdm_dual and not std_dual:
             raise cv.Invalid(
                 "esp_afe mic_num: 2 requires tdm_mic_slots with two slots, "
-                "or rx_slot_mode: stereo plus rx_mic_slots: [left, right]"
+                "or rx_slot_mode: stereo plus rx_mic_slots: [left, right]",
+                path=[CONF_PROCESSOR_ID],
             )
 
     return config

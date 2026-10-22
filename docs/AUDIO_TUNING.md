@@ -24,7 +24,11 @@ esp_audio_stack:
   mic_mix: average
 ```
 
-For two microphones on a conventional stereo I2S input:
+For two compatible microphones sharing a conventional stereo I2S input, select
+one microphone as left and the other as right using their hardware channel
+selection. They share BCLK, WS and the data line; check each microphone's
+datasheet for its inactive-slot output behavior before connecting outputs.
+No input codec or TDM emulation is required:
 
 ```yaml
 esp_audio_stack:
@@ -32,6 +36,29 @@ esp_audio_stack:
   rx_mic_slots: [left, right]
   mic_mix: average
 ```
+
+The same input layout with `mic_mix: passthrough` supplies two independent
+channels to dual-microphone AFE/BSS. "Stereo" describes their transport here,
+not a requirement to combine them or play them through two speakers.
+
+| Physical input | Logical microphone selection | Available delivery |
+| --- | --- | --- |
+| One microphone | Its mono channel | Mono AEC, mono AFE or no processor |
+| Stereo I2S, one data line | `rx_mic_slots: [left, right]` | Separate dual-AFE inputs or a mono average |
+| TDM, with or without a codec | Two verified `tdm_mic_slots` | Separate dual-AFE inputs or a mono average |
+
+The [codec-free I2S example](../examples/05-stereo-i2s-downmix.yaml) uses the same
+downmix as the TDM example. Separate RX/TX buses also retain this microphone
+delivery choice: `rx_bus` owns capture and `tx_bus` owns playback. This is not
+two independent microphone receivers. A software playback reference remains
+available for AEC when no codec supplies an analog reference.
+
+Do not count the playback reference as a microphone. The current adapter accepts
+at most two selected physical microphones; it does not provide arbitrary
+three-or-more-microphone AFE. Two independent I2S data-input lines are also not
+an existing stereo-input option. They require separate acquisition and sample
+alignment, not a second downmix implementation or a configuration labelled TDM.
+See the [ESP-IDF I2S bus and channel documentation](https://docs.espressif.com/projects/esp-idf/en/v5.5.6/esp32s3/api-reference/peripherals/i2s.html).
 
 A reference channel is not a second microphone. Validation rejects a downmix
 without two microphone slots, a stereo reference used as a microphone, and an

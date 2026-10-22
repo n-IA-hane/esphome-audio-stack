@@ -2,6 +2,10 @@
 
 ## 2026.11.0-dev
 
+- Document and compile codec-free stereo I2S delivery, including shared and split
+  RX/TX buses. Reuse the same two-channel extraction/downmix for AEC, mono AFE
+  and dual AFE. Point incompatible channel-count errors at the native YAML field.
+
 - Reconcile microphone/speaker adapters after a runtime I2S failure, discard
   stale PCM on its owner after quiescence and allow a bounded recovery request.
 - Add compile-gated `mic_mix: average` in Audio Stack for two physical microphones

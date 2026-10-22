@@ -41,6 +41,10 @@ jobs:
   optional-audio-firmware:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [04-dual-mic-downmix, 05-stereo-i2s-downmix]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -48,16 +52,18 @@ jobs:
           python-version: "3.14.2"
       - name: Install official ESPHome
         run: python -m pip install esphome==2026.10.0
-      - name: Compile optional microphone delivery, PGA and capture together
+      - name: Compile the selected microphone delivery example
+        env:
+          EXAMPLE: ${{ matrix.example }}
         run: |
           mkdir -p test-results
           printf 'wifi_ssid: test-network\nwifi_password: test-password\n' > examples/secrets.yaml
           set -o pipefail
-          python -m esphome compile examples/04-dual-mic-downmix.yaml 2>&1 | tee test-results/optional-audio.log
+          python -m esphome compile "examples/${EXAMPLE}.yaml" 2>&1 | tee test-results/optional-audio.log
       - name: Preserve firmware build evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: optional-audio-firmware
+          name: optional-audio-firmware-${{ matrix.example }}
           path: test-results/optional-audio.log
           if-no-files-found: error

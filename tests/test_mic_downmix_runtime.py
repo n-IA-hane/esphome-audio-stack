@@ -30,15 +30,15 @@ def converter(tmp_path_factory, request):
         + r"""
 int16_t value(unsigned slot,unsigned frame){return int16_t((slot%2 ? -1 : 1)*(300*(slot+1)+7*frame));}
 int main(int argc,char**argv){
-  assert(argc==6);unsigned bits=std::atoi(argv[1]),ratio=std::atoi(argv[2]),mics=std::atoi(argv[3]),ref=std::atoi(argv[4]);
-  bool memory=std::atoi(argv[5]);constexpr size_t count=16;unsigned channels=mics+ref,stride=4;
+  assert(argc==6||argc==7);unsigned bits=std::atoi(argv[1]),ratio=std::atoi(argv[2]),mics=std::atoi(argv[3]),ref=std::atoi(argv[4]);
+  bool memory=std::atoi(argv[5]);constexpr size_t count=16;unsigned channels=mics+ref,stride=argc==7 ? std::atoi(argv[6]) : 4;
 #ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
   assert(average_microphones(INT16_MIN,INT16_MIN)==INT16_MIN);
   assert(average_microphones(INT16_MAX,INT16_MAX)==INT16_MAX);
   assert(average_microphones(INT16_MIN,INT16_MAX)==0);
   assert(average_microphones(-2,-1)==-1);
 #endif
-  uint8_t offsets[3]={2,0,1};if(mics==1&&ref)offsets[1]=1;
+  uint8_t offsets[3]={2,0,1};if(stride==2){offsets[0]=1;offsets[1]=0;}if(mics==1&&ref)offsets[1]=1;
   {
     MultiChannelAudioEffectsRateConverterImpl c;
     c.init(ratio,channels,16000*ratio,16000,3,1);
@@ -112,6 +112,16 @@ def test_conversion_allocates_only_needed_scratch(converter, bits, ratio):
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("bits", [16, 32])
+@pytest.mark.parametrize("ratio", [1, 3])
+def test_codec_free_left_right_slots_reuse_same_converter(converter, bits, ratio):
+    result = subprocess.run(
+        [str(converter), str(bits), str(ratio), "2", "0", "0", "2"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     "layout", [{"tdm_mic_slots": [0, 2]}, {"rx_mic_slots": ["left", "right"]}]
 )
@@ -138,10 +148,12 @@ def test_downmix_schema_accepts_mono_backend_and_rejects_dual_backend(
             if processor is not None:
                 config["processor_id"] = processor
             assert schema._final_validate(config) is config
-        with pytest.raises(cv.Invalid, match="delivers mono"):
+        with pytest.raises(cv.Invalid, match="delivers mono") as invalid:
             schema._final_validate(
                 {"mic_mix": "average", "processor_id": ID("dual"), **layout}
             )
+        assert invalid.value.path == ["mic_mix"]
+        assert "se_enabled: false" in str(invalid.value)
         with pytest.raises(cv.Invalid, match="two microphone"):
             schema._final_validate({"mic_mix": "average", "tdm_mic_slots": [0]})
         with pytest.raises(cv.Invalid, match="two microphone"):
