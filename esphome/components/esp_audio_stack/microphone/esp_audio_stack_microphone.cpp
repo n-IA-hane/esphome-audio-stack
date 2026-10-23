@@ -91,20 +91,10 @@ void ESPAudioStackMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
     return;
   }
   this->audio_buffer_.resize(len);
-  const bool muted = this->mute_state_;
-  if (muted) {
-    std::memset(this->audio_buffer_.data(), 0, len);
-  } else {
-    std::memcpy(this->audio_buffer_.data(), data, len);
-  }
-  // ESPHome's base Microphone wrapper allocates a temporary zero vector when
-  // mute_state_ is true. We have already zero-filled the preallocated callback
-  // buffer, so clear the flag only while dispatching to avoid RT-task heap churn.
-  if (muted)
-    this->mute_state_ = false;
+  std::memcpy(this->audio_buffer_.data(), data, len);
+  // The official Microphone wrapper owns mute delivery. Never temporarily
+  // change its public state: a callback or main-loop unmute must remain valid.
   this->data_callbacks_.call(this->audio_buffer_);
-  if (muted)
-    this->mute_state_ = true;
 }
 
 void ESPAudioStackMicrophone::loop() {
@@ -119,6 +109,14 @@ void ESPAudioStackMicrophone::loop() {
     this->status_clear_error();
     this->i2s_error_latched_ = false;
     ESP_LOGI(TAG, "I2S audio path recovered");
+  }
+
+  // Ownership follows current consumer intent even when the hardware session
+  // is FAILED or this facade has already become STOPPED.
+  if (this->active_listeners_.load(std::memory_order_acquire) == 0 && this->parent_registered_) {
+    this->parent_->unregister_mic_consumer(this);
+    this->parent_registered_ = false;
+    this->state_ = microphone::STATE_STOPPED;
   }
 
   if (this->parent_->has_failed_session()) {

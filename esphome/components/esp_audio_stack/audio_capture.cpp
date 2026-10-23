@@ -16,26 +16,9 @@ void ESPAudioStack::capture_audio_(CapturePoint point, const void* data, size_t 
 
 void ESPAudioStack::capture_raw_audio_(const AudioTaskCtx& ctx) {
   // Physical microphone slots, before downmix, DC filtering, digital gain or DSP.
-  uint8_t stride = ctx.rx_slot_mode_stereo ? 2 : 1;
-  uint8_t slots[2] = {static_cast<uint8_t>(this->mic_channel_right_ && stride == 2), 0};
-  uint8_t channels = 1;
-#ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
-  if (ctx.std_second_mic_slot >= 0) {
-    slots[0] = ctx.std_primary_mic_slot;
-    slots[1] = ctx.std_second_mic_slot;
-    channels = 2;
-  }
-#endif
-#ifdef USE_ESP_AUDIO_STACK_TDM_BUS
-  if (ctx.use_tdm_bus) {
-    stride = ctx.rx_slot_count;
-    slots[0] = ctx.tdm_rx_layout.index(ctx.tdm_mic_slot);
-    if (ctx.tdm_second_mic_slot >= 0) {
-      slots[1] = ctx.tdm_rx_layout.index(ctx.tdm_second_mic_slot);
-      channels = 2;
-    }
-  }
-#endif
+  const uint8_t stride = ctx.rx_layout.stride;
+  const uint8_t *slots = ctx.rx_layout.mic_slots;
+  const uint8_t channels = ctx.rx_layout.mic_channels;
   if (slots[0] >= stride || (channels == 2 && slots[1] >= stride)) return;
   this->capture_audio_(CapturePoint::RAW_MIC, ctx.rx_buffer, ctx.bus_frame_size, this->sample_rate_, ctx.i2s_bps * 8,
                        channels, stride, slots[0], slots[1]);

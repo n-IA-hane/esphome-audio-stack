@@ -241,9 +241,9 @@ def test_std_stereo_dual_mic_does_not_require_tdm() -> None:
     assert "ctx.processor_input = ctx.processor_mic_buffer" in stereo
     assert "process_multi_32" in stereo
     assert "num_mic_ch" not in stereo or ", 2)" in stereo
-    assert "const uint8_t mic_offset = this->mic_channel_right_ ? 1 : 0;" in stereo
+    assert "const uint8_t mic_offset = ctx.rx_layout.mic_slots[0];" in stereo
     assert "uint8_t ch_offsets[1] = {mic_offset};" in stereo
-    assert "uint8_t ch_offsets[2] = {ctx.std_primary_mic_slot, static_cast<uint8_t>(ctx.std_second_mic_slot)};" in stereo
+    assert "uint8_t ch_offsets[2] = {ctx.rx_layout.mic_slots[0], ctx.rx_layout.mic_slots[1]};" in stereo
 
     dc = cpp[
         cpp.index("void ESPAudioStack::apply_input_conditioning_(") : cpp.index(

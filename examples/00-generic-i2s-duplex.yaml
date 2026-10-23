@@ -23,8 +23,8 @@ logger:                          # <-- ESPHome logging for setup and errors.
 # Local checkout example. For a standalone YAML, replace this source with
 # github://n-IA-hane/esphome-audio-stack@main for the stable version.
 external_components:             # <-- Load the maintained audio component.
-  - source: ../esphome/components# <-- Local checkout, see standalone URL above.
-    components: [esp_audio_stack]# <-- No optional DSP is enabled in this example.
+  - source: ../esphome/components  # <-- Local checkout, see standalone URL above.
+    components: [esp_audio_stack]  # <-- No optional DSP is enabled in this example.
 
 esp_audio_stack:                 # <-- One owner of capture and playback hardware.
   sample_rate: 48000             # <-- Physical I2S bus and speaker rate: 48 kHz.

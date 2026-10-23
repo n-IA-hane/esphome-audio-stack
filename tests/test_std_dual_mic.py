@@ -66,6 +66,8 @@ def test_actual_stereo_dispatch_selects_order_and_width(tmp_path, enabled):
 #include <cassert>
 #include <cstdint>
 #include <cstddef>
+#include "audio_slot_layout.h"
+using esphome::esp_audio_stack::AudioRxLayout;
 struct Converter {
  bool ok=true;
  template<class T> bool convert(const T *in,size_t n,size_t stride,const uint8_t *slots,
@@ -88,6 +90,7 @@ struct Converter {
 };
 struct AudioTaskCtx {
  unsigned processor_mic_channels=1,rx_rate_converter_channels=1,i2s_bps=2;
+ AudioRxLayout rx_layout=AudioRxLayout::standard(true,false,false,false,0,-1);
  size_t input_frame_size=3;
  int16_t *rx_buffer=nullptr,*mic_buffer=nullptr,*processor_mic_buffer=nullptr,*processor_input=nullptr;
 #ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
@@ -107,11 +110,13 @@ int main() {
  ctx.rx_buffer=raw;ctx.mic_buffer=mono;ctx.processor_mic_buffer=paired;
  assert(stack.process_rx_stereo_slot_(ctx)); assert(mono[0]==100 && mono[2]==300);
  stack.mic_channel_right_=true;
+ ctx.rx_layout=AudioRxLayout::standard(true,true,false,false,0,-1);
  assert(stack.process_rx_stereo_slot_(ctx)); assert(mono[0]==1000 && mono[2]==3000);
 #ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
  ctx.processor_mic_channels=2;ctx.rx_rate_converter_channels=2;
  for(unsigned reverse=0;reverse<2;++reverse) {
   ctx.std_primary_mic_slot=reverse;ctx.std_second_mic_slot=1-reverse;
+  ctx.rx_layout=AudioRxLayout::standard(true,false,false,false,reverse,1-reverse);
   assert(stack.process_rx_stereo_slot_(ctx));assert(ctx.processor_input==paired);
   for(unsigned i=0;i<3;++i) {assert(paired[2*i]==raw[2*i+reverse]);assert(paired[2*i+1]==raw[2*i+1-reverse]);assert(mono[i]==paired[2*i]);}
  }
@@ -129,5 +134,5 @@ int main() {
     exe = tmp_path / "slots"
     flags = ["-DUSE_ESP_AUDIO_STACK_STD_DUAL_MIC"] if enabled else []
     subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", *flags,
-                    str(cpp), "-o", str(exe)], check=True)
+                    "-I" + str(COMPONENT), str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

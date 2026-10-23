@@ -1,7 +1,7 @@
 """ESP Audio Stack Microphone Platform - Wraps full-duplex bus as standard ESPHome microphone"""
 
 import esphome.codegen as cg
-from esphome.components import audio, microphone
+from esphome.components import microphone
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BITS_PER_SAMPLE,
@@ -11,6 +11,7 @@ from esphome.const import (
 )
 
 from .. import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
+from ..audio_format import final_validate_facade, set_facade_limits
 
 DEPENDENCIES = ["esp_audio_stack"]
 CODEOWNERS = ["@n-IA-hane"]
@@ -24,17 +25,7 @@ ESPAudioStackMicrophone = esp_audio_stack_ns.class_(
 
 
 def _set_stream_limits(config):
-    # Mic output is at output_sample_rate (e.g. 16 kHz after rate conversion).
-    # Allow range to cover the standard 16 kHz VA path and supported output rates.
-    audio.set_stream_limits(
-        min_bits_per_sample=16,
-        max_bits_per_sample=16,
-        min_channels=1,
-        max_channels=1,
-        min_sample_rate=8000,
-        max_sample_rate=48000,
-    )(config)
-    return config
+    return set_facade_limits(config, microphone=True)
 
 
 def _reject_child_audio_overrides(config):
@@ -70,6 +61,12 @@ CONFIG_SCHEMA = cv.All(
     _set_stream_limits,
 )
 
+
+def _final_validate(config):
+    return final_validate_facade(config, microphone=True)
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])

@@ -91,6 +91,20 @@ and gain. These are the knobs users most often need when building a new target:
 | `buffers_in_psram` / `aec_ref_ring_in_psram` / `audio_task_stack_in_psram` | Save internal RAM on large full profiles. |
 | `audio_effects.*` | Expose official `esp_ae_rate_cvt` complexity/performance policy. |
 
+### Exact public PCM formats
+
+The microphone facade always publishes 16-bit mono PCM at the parent's
+`output_sample_rate`, or `sample_rate` when no conversion was requested.
+The speaker accepts 16-bit PCM at the parent's `sample_rate`, with
+`speaker_channels` channels (always mono for TDM). These are exact capabilities,
+not a promise of implicit conversion by downstream consumers.
+
+For example, use `sample_rate: 48000` and `output_sample_rate: 16000` for a
+48 kHz speaker plus a 16 kHz microphone for Voice Assistant. Put a resampler
+before the speaker when the playback source needs a different rate. ESPHome
+rejects incompatible rates or channels during configuration validation,
+including speaker-child overrides that disagree with the parent.
+
 ## Topology Notes
 
 ### Shared Codec Bus
@@ -951,7 +965,7 @@ internal reconfigure.
 When neither `use_stereo_aec_reference` nor `use_tdm_reference` is enabled, the AEC reference comes from the speaker output. Two options via `aec_reference:`:
 
 - **`ring_buffer`** (default): speaker TX is stored in an Espressif/ADF TYPE2-style ring buffer with `aec_reference_buffer_ms` of capacity. The mono-reference helper reads from the ring; on starvation it zero-fills (the AEC handles that as a "no echo this frame") rather than reusing stale data. Better frame alignment on no-codec setups (discrete MEMS mic + I²S amp) with bounded storage; delay follows the amount of audio queued.
-- **`previous_frame`**: the audio task uses the prior TX frame as the AEC reference. Simple, lower RAM and smaller compile-time surface; no TYPE2 ring buffer or delay tuning is compiled into that build.
+- **`previous_frame`**: the audio task uses the prior successfully written TX period as the AEC reference. It includes post-volume PCM, silence padding on partial reads, underruns and clock-only periods. The converter advances for every period, so old speech is not repeated during silence. A failed write invalidates the reference. No TYPE2 ring buffer or delay tuning is compiled into this mode.
 
 ### PSRAM and sdkconfig Requirements
 

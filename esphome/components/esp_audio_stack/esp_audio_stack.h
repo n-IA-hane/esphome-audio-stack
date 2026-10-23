@@ -552,6 +552,7 @@ class ESPAudioStack final : public Component {
     bool correct_dc_offset{false};
     uint8_t tdm_total_slots{0};
     uint8_t rx_slot_count{0};
+    AudioRxLayout rx_layout{};  // Resolved once, shared by conversion and raw diagnostics.
 #ifdef USE_ESP_AUDIO_STACK_TDM_BUS
     AudioSlotLayout tdm_rx_layout{};
 #endif
@@ -595,12 +596,14 @@ class ESPAudioStack final : public Component {
     int16_t *aec_output{nullptr};
 
     // ── Loop mutable state ──
-    int consecutive_i2s_errors{0};
+    int consecutive_rx_errors{0};
+    int consecutive_tx_errors{0};
     // INVALID_STATE counter: codec/GMF IO can surface invalid state
     // briefly when stop() disables a channel; counted separately so we
     // can escalate only when it persists while audio_stack_running_ stays true
     // (channel corrupted independently of our own teardown).
-    int invalid_state_errors{0};
+    int invalid_rx_state_errors{0};
+    int invalid_tx_state_errors{0};
     // DC-HPF state lives on the component; the process_rx_path_ loop keeps
     // converging across audio_session_ restarts (frame_spec changes
     // would otherwise zero the state and produce ~10 ms of mic gain
@@ -661,6 +664,9 @@ class ESPAudioStack final : public Component {
   void process_aec_and_callbacks_(AudioTaskCtx &ctx);
   void process_tx_path_(AudioTaskCtx &ctx);
   void process_tx_clock_only_(AudioTaskCtx &ctx);
+#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
+  void save_previous_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples);
+#endif
   bool write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes);
   bool write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes, size_t real_speaker_bytes);
   bool can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const;
