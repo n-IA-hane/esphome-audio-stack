@@ -48,3 +48,42 @@ def test_codec_free_stereo_delivery_composes_with_existing_bus_owner(tmp_path, b
     assert '#define USE_ESP_AUDIO_STACK_TDM_BUS' not in defines
     assert '#define USE_ESP_AUDIO_STACK_HARDWARE_CODEC' not in defines
     assert ('#define USE_ESP_AFE_GMF_PATH' in defines) is (backend == 'afe')
+
+
+@pytest.mark.parametrize('filename,dual_bss,tdm', [
+    ('04-dual-mic-downmix.yaml', False, True),
+    ('05-stereo-i2s-downmix.yaml', False, False),
+    ('06-dual-mic-afe-bss.yaml', True, True),
+    ('07-stereo-i2s-afe-bss.yaml', True, False),
+])
+def test_complete_dual_mic_examples_keep_the_selected_processor_channels(
+    tmp_path, filename, dual_bss, tdm
+):
+    """Load the distributed examples, not a fixture that swaps their backend."""
+    config = tmp_path / 'device.yaml'
+    config.write_text((ROOT / 'examples' / filename).read_text()
+                      .replace('!secret wifi_ssid', 'fixture-network')
+                      .replace('!secret wifi_password', 'fixture-password'))
+    document = yaml_util.load_yaml(config)
+    document['esphome']['build_path'] = str(tmp_path / 'build')
+    document['external_components'][0]['source'] = str(ROOT / 'esphome/components')
+    config.write_text(yaml_util.dump(document))
+    result = subprocess.run(
+        [sys.executable, '-m', 'esphome', 'compile', '--only-generate', str(config)],
+        capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    stack = document['esp_audio_stack']
+    assert stack['sample_rate'] == 48000 and stack['output_sample_rate'] == 16000
+    assert stack['mic_mix'] == ('passthrough' if dual_bss else 'average')
+    if dual_bss:
+        assert document['esp_afe']['mic_num'] == 2
+        assert document['esp_afe']['se_enabled'] is True
+        assert 'esp_aec' not in document
+    else:
+        assert 'esp_aec' in document and 'esp_afe' not in document
+    defines = (tmp_path / 'build/src/esphome/core/defines.h').read_text()
+    assert ('#define USE_ESP_AUDIO_STACK_MIC_DOWNMIX' in defines) is not dual_bss
+    assert ('#define USE_ESP_AUDIO_STACK_TDM_BUS' in defines) is tdm
+    assert ('#define USE_ESP_AUDIO_STACK_STD_DUAL_MIC' in defines) is not tdm
+    assert ('#define USE_ESP_AFE_GMF_PATH' in defines) is dual_bss

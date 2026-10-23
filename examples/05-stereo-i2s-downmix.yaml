@@ -2,6 +2,8 @@
 # Share BCLK, WS and SD; select Left on one mic and Right on the other.
 # Confirm the microphones release SD outside their selected slot.
 # Keep capture wiring independent of the chosen processor and mic_mix policy.
+# For separate Left/Right channels with AFE/SE-BSS on the same wiring, see
+# 07-stereo-i2s-afe-bss.yaml.
 esphome:
   name: stereo-mic-downmix
   min_version: 2026.10.0

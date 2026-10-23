@@ -1,0 +1,72 @@
+# Two independent TDM microphones plus playback feedback, delivered to dual-mic AFE.
+# Illustrative ES7210/ES8311 wiring only. Verify your board's pins and slot map.
+esphome:
+  name: dual-mic-afe-bss
+  min_version: 2026.10.0
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+psram:
+  mode: octal
+  speed: 80MHz
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+external_components:
+  - source: ../esphome/components
+    components: [esp_audio_stack, esp_afe]
+i2c:
+  sda: GPIO11  # Codec control data, not microphone PCM.
+  scl: GPIO10  # Codec control clock.
+  frequency: 400kHz
+esp_audio_stack:
+  id: audio_bus
+  i2s_mclk_pin: GPIO12  # Shared codec master clock.
+  i2s_bclk_pin: GPIO13  # TDM bit clock.
+  i2s_lrclk_pin: GPIO14  # TDM frame/word clock.
+  i2s_din_pin: GPIO15  # ES7210 ADC data into the ESP.
+  i2s_dout_pin: GPIO16  # ESP playback data to the ES8311 DAC.
+  sample_rate: 48000  # Hardware bus and playback rate.
+  output_sample_rate: 16000  # Convert both microphone channels for AFE.
+  bits_per_sample: 16  # Hardware PCM sample width for this example.
+  processor_id: processor
+  mic_mix: passthrough  # Keep mic A and mic B separate for SE/BSS.
+  use_tdm_reference: true  # Use ADC playback feedback, not a software copy.
+  tdm_total_slots: 4
+  tdm_mic_slots: [0, 2]  # Two physical microphones, in AFE input order.
+  tdm_ref_slot: 1  # Playback feedback occupies its own slot.
+  codec:
+    input:
+      type: es7210
+      mic_selected: 15  # Enable all four ADCs; capture selects TDM slots 0/1/2.
+      gain_db: 0  # Microphone analog gain; tune against your board's levels.
+      ref_channel: 2  # Codec ADC index for feedback; distinct from the TDM slot.
+      ref_gain_db: 24  # Separate analog reference gain for this example board.
+    output:
+      type: es8311
+esp_afe:
+  id: processor
+  type: sr  # Speech-recognition frontend, including its linear echo canceller.
+  mode: low_cost
+  mic_num: 2  # Two independent microphone inputs, plus the reference.
+  se_enabled: true  # Dual-microphone speech enhancement/BSS.
+  agc_enabled: false  # Keep automatic gain changes out of this starting point.
+  vad_enabled: true  # Voice activity detection remains available.
+  output_prebuffer_frames: 1  # Smooth the dual-microphone fetch cadence.
+microphone:
+  - platform: esp_audio_stack
+    id: processed_mic  # Public output is processed 16 kHz, 16-bit mono.
+    esp_audio_stack_id: audio_bus
+speaker:
+  - platform: esp_audio_stack
+    id: output
+    esp_audio_stack_id: audio_bus
+    sample_rate: 48000  # Playback stays at the hardware bus rate.
+    bits_per_sample: 16
+    num_channels: 1  # Public TDM speaker input is mono.

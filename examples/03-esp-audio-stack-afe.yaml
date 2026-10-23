@@ -1,5 +1,8 @@
 # ES8311 with single-mic AFE: echo cancellation, noise suppression and gain control.
 # This is a configuration example, not a board-specific hardware test.
+# Two separate microphones with AFE/SE-BSS: 06-dual-mic-afe-bss.yaml (TDM)
+# or 07-stereo-i2s-afe-bss.yaml (Left/Right I2S, no input codec).
+# Two microphones averaged before standalone AEC: examples 04 and 05.
 
 substitutions:
   name: audio-stack-afe

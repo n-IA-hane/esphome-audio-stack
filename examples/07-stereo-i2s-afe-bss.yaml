@@ -1,0 +1,62 @@
+# Two independent codec-free I2S microphones delivered to dual-mic AFE.
+# Share BCLK, WS and DATA; select Left on mic A and Right on mic B.
+# Use microphones whose datasheets permit sharing DATA outside their own slots.
+# Illustrative GPIOs only. Connect playback DOUT to a compatible I2S amplifier.
+esphome:
+  name: stereo-i2s-afe-bss
+  min_version: 2026.10.0
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+psram:
+  mode: octal
+  speed: 80MHz
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+external_components:
+  - source: ../esphome/components
+    components: [esp_audio_stack, esp_afe]
+esp_audio_stack:
+  id: audio_bus
+  i2s_bclk_pin: GPIO5  # Bit clock shared by both microphones and the amplifier.
+  i2s_lrclk_pin: GPIO6  # Left/Right word clock shared by all devices.
+  i2s_din_pin: GPIO4  # Both microphones share DATA, using separate L/R slots.
+  i2s_dout_pin: GPIO7  # Playback PCM to the I2S amplifier.
+  sample_rate: 48000  # Hardware bus and playback rate.
+  output_sample_rate: 16000  # Convert both microphone channels for AFE.
+  bits_per_sample: 16  # PCM data width; check your microphone's requirements.
+  slot_bit_width: 32  # Physical I2S slot width, independent of PCM data width.
+  rx_slot_mode: stereo  # Read both Left and Right slots.
+  rx_mic_slots: [left, right]  # Both slots are microphones, not feedback.
+  mic_mix: passthrough  # Preserve two independent channels for SE/BSS.
+  processor_id: processor
+  aec_reference: previous_frame  # Previous software TX period, no ADC loopback.
+  correct_dc_offset: true  # Remove DC independently from each microphone.
+  buffers_in_psram: true  # Place supported working buffers in PSRAM.
+esp_afe:
+  id: processor
+  type: sr  # Speech-recognition frontend, including its linear echo canceller.
+  mode: low_cost
+  mic_num: 2  # AFE receives separate Left and Right microphone channels.
+  se_enabled: true  # Dual-microphone speech enhancement/BSS.
+  agc_enabled: false  # Keep automatic gain changes out of this starting point.
+  vad_enabled: true  # Voice activity detection remains available.
+  output_prebuffer_frames: 1  # Smooth the dual-microphone fetch cadence.
+microphone:
+  - platform: esp_audio_stack
+    id: processed_mic  # Public output is processed 16 kHz, 16-bit mono.
+    esp_audio_stack_id: audio_bus
+speaker:
+  - platform: esp_audio_stack
+    id: output
+    esp_audio_stack_id: audio_bus
+    sample_rate: 48000  # Playback stays at the hardware bus rate.
+    bits_per_sample: 16
+    num_channels: 1  # Two microphones do not require a stereo loudspeaker.

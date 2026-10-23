@@ -44,7 +44,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [04-dual-mic-downmix, 05-stereo-i2s-downmix]
+        example:
+          - 04-dual-mic-downmix
+          - 05-stereo-i2s-downmix
+          - 06-dual-mic-afe-bss
+          - 07-stereo-i2s-afe-bss
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

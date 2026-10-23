@@ -203,6 +203,26 @@ For microphone-only or speaker-only hardware, declare only the public platform
 you use and omit the unused data pin. Internal clock generation may still be
 needed even in a microphone-only configuration.
 
+### Choose a complete microphone-processing example
+
+The two-microphone examples make two different choices explicit: **AFE/SE-BSS
+receives both microphones separately**, while **standalone AEC receives their
+mono average**. The capture wiring stays the same within each pair.
+
+| Input and processing | Complete example |
+| --- | --- |
+| One microphone, standalone AEC | [02: single-mic AEC](examples/02-esp-audio-stack-aec.yaml) |
+| One microphone, AFE | [03: single-mic AFE](examples/03-esp-audio-stack-afe.yaml) |
+| Two TDM microphones, separate channels to AFE/SE-BSS | [06: dual-mic AFE/BSS](examples/06-dual-mic-afe-bss.yaml) |
+| Two Left/Right I2S microphones, separate channels to AFE/SE-BSS | [07: codec-free dual-mic AFE/BSS](examples/07-stereo-i2s-afe-bss.yaml) |
+| Two TDM microphones, mono downmix to AEC | [04: dual-mic downmix and AEC](examples/04-dual-mic-downmix.yaml) |
+| Two Left/Right I2S microphones, mono downmix to AEC | [05: codec-free downmix and AEC](examples/05-stereo-i2s-downmix.yaml) |
+
+Averaging before a **single-microphone AFE** remains an optional alternative,
+described in the wiring guide. It does not retain separate inputs for SE/BSS.
+The GPIOs and codec feedback connections in these examples are illustrative;
+use your board's actual wiring.
+
 ## 2. One bus or two
 
 Both supported chips can capture and play simultaneously on **one shared I2S
@@ -463,12 +483,19 @@ instead of switching unexpectedly to raw microphone audio.
 
 ### Two microphones, with or without TDM
 
-Set `mic_num: 2` and `se_enabled: true` on the AFE. On Audio Stack choose one:
+Set `mic_num: 2` and `se_enabled: true` on the AFE, and keep
+`mic_mix: passthrough` on Audio Stack. Choose one capture layout:
 
 - **TDM ADC:** `tdm_mic_slots: [0, 2]`, using the board's actual slot numbers.
 - **Standard I2S MEMS pair:** `rx_slot_mode: stereo` and
   `rx_mic_slots: [left, right]`. The microphones must share the data line
   correctly, with one strapped left and the other right. Use a software reference when there is no hardware reference input.
+
+Complete examples: [TDM with AFE/BSS](examples/06-dual-mic-afe-bss.yaml) or
+[Left/Right I2S with AFE/BSS](examples/07-stereo-i2s-afe-bss.yaml).
+For the same wiring with mono downmix and standalone AEC, use
+[04](examples/04-dual-mic-downmix.yaml) or
+[05](examples/05-stereo-i2s-downmix.yaml), respectively.
 
 The two input microphones are processed into **one** public microphone stream.
 The first configured microphone is also the primary channel when processing

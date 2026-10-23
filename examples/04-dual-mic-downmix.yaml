@@ -1,5 +1,7 @@
 # Two physical microphones averaged by Audio Stack before mono AEC.
 # These pins/slots are illustrative. Check your board before flashing.
+# For separate microphone channels with AFE/SE-BSS on the same wiring, see
+# 06-dual-mic-afe-bss.yaml.
 esphome:
   name: audio-stack-downmix
   min_version: 2026.10.0
