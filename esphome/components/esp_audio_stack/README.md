@@ -763,12 +763,10 @@ mean every TTS engine generates 48 kHz audio or every source URL is transcoded.
 Check the actual incoming stream format when investigating a rate mismatch.
 Configure the media player and its decoders separately from this PCM backend.
 
-The bundled `resampler` accepts a decoder block larger than its input buffer by
-writing only the available prefix. When full, it waits for space within the
-caller's budget instead of repeatedly rejecting an oversized request without
-waiting. Its input remains a byte stream; `RingBufferAudioSource` reconstructs
-PCM frames across fragments. This differs from the hardware speaker's
-whole-frame write contract below.
+Use the `resampler`, `mixer` and media player supplied by the installed ESPHome
+release. Audio Stack does not replace them or add resampler scheduling options.
+Its hardware speaker accepts only complete PCM frames; producers retain any
+unaccepted bytes and retry through the normal ESPHome speaker interface.
 
 ## Pin Mapping by Codec
 

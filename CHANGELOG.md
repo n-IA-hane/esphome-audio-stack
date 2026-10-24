@@ -2,94 +2,94 @@
 
 ## 2026.11.0-dev
 
-- Add an illustrated microphone wiring guide: one mic, shared-data Left/Right,
-  TDM, analog codecs, mono downmix, dual AFE/BSS and separate RX/TX buses. Show
-  the YAML choices and distinguish microphone channels from playback reference.
-
-- Document and compile codec-free stereo I2S delivery, including shared and split
-  RX/TX buses. Reuse the same two-channel extraction/downmix for AEC, mono AFE
-  and dual AFE. Point incompatible channel-count errors at the native YAML field.
-
-- Reconcile microphone/speaker adapters after a runtime I2S failure, discard
-  stale PCM on its owner after quiescence and allow a bounded recovery request.
-- Add compile-gated `mic_mix: average` in Audio Stack for two physical microphones
-  delivered to mono AEC, mono AFE or no processor. Existing passthrough defaults
-  and processor implementations are unchanged.
-- Avoid unnecessary channel scratch for same-rate conversion and extract only
-  selected channels when resampling, retaining Espressif conversion primitives.
-- Add optional analog `input_pga` and `reference_pga` numbers. Codec writes stay
-  on the audio owner; reference calibration remains independent of microphone PGA.
-- Add opt-in, bounded PCM capture with separate raw/input/reference/output WAVs
-  and gap-aware metadata. No capture worker, queue or socket exists while idle.
-
+Changes since stable **2026.10.2**.
 
 > **Attention: ESPHome 2026.10.0 or newer is required.**
 >
-> ESPHome 2026.10 brings substantial audio changes, including several of our
-> accepted contributions. Thank you to the ESPHome team for your work, reviews
-> and accepted PRs! <3
+> ESPHome 2026.10 brings substantial audio improvements, including several of
+> our accepted contributions. Thank you to the ESPHome team for your work,
+> reviews and accepted PRs! <3
 >
-> We have aligned Audio Stack, ESP VoIP Stack, Runtime Controller and the
-> maintained device packages with this release. Older ESPHome versions are no
-> longer supported and their operation is not guaranteed. Upgrade the builder
-> before compiling the new firmware.
+> Audio Stack and the coordinated VoIP Stack, Runtime Controller and device
+> packages now follow the released ESPHome interfaces. Older ESPHome versions
+> are no longer supported and their operation is not guaranteed. Upgrade the
+> builder before compiling the new firmware.
 
+### Two microphones, your choice of processing
 
-- Require **ESPHome 2026.10.0 or newer** for the upcoming release. Use the native
-  ring-buffer handle representation instead of detecting the 2026.9 layout.
-  Existing processor, codec and media ownership are unchanged. Maintained
-  full profiles use ESPHome's Sendspin 0.9.3 and its native pairing with Music
-  Assistant 2.10.7 or newer.
+- Add compile-gated `mic_mix: average`: deliver the arithmetic mean of two
+  physical microphones to mono AEC, mono AFE or the unprocessed microphone.
+  Keep `passthrough` to preserve independent inputs for dual-microphone AFE/BSS.
+- Support the same delivery choices for selected TDM slots and codec-free
+  stereo I2S microphones sharing one data line, including separate RX/TX buses.
+  The bus can stay at 48 kHz while AEC/AFE receives 16 kHz microphone audio.
+- Add complete examples for dual-mic AEC downmix and dual-mic AFE/BSS, plus an
+  illustrated wiring guide covering single mic, Left/Right, TDM, codecs,
+  playback reference and separate buses. Native validation points incompatible
+  microphone/channel combinations at the relevant YAML setting.
+- Avoid unnecessary channel scratch at matching rates and convert only selected
+  channels when resampling, while retaining Espressif conversion primitives.
 
-- Request codec/I2S startup through the existing audio task instead of blocking
-  the ESPHome loop. Readiness, cancellation and cleanup remain tied to the
-  current start request; no additional worker task is created.
-- Keep hardware volume updates on the hardware owner and avoid rebuilding an
-  unchanged codec volume curve. DSP modes and vendor settling delays are unchanged.
-- Explicit start actions now return before hardware readiness; use `on_start`
-  for dependent actions and `esp_audio_stack.is_idle` for completed cleanup.
+### Tune the hardware and inspect the audio
 
-## 2026.10.3-dev
+- Add optional analog `input_pga` and `reference_pga` number entities. Adjust
+  microphone and ES7210 reference gain independently without reflashing; saved
+  settings survive codec reopen, and codec writes stay on the audio owner.
+- Add opt-in, bounded PCM capture for raw microphones, processor input,
+  reference, processor output and the final microphone. The receiver saves
+  separate WAVs with format, session and gap metadata. No capture worker,
+  buffer or socket exists while capture is inactive; omitting the component
+  excludes its hooks from the firmware.
+- Publish exact microphone and speaker format capabilities so incompatible
+  sample rates and channel counts fail during ESPHome validation.
 
-### Dependency consolidation and GMF integration
+### More reliable startup, playback and recovery
 
-ESP-SR is selected explicitly at 2.6.0 for both AEC and AFE. Existing full-firmware
-locks already resolved to this version; this removes ambiguity rather than
-claiming a new runtime upgrade from 2.5.5. Supported S3/P4 builds no longer request
-ESP-DSP independently when their ESP-SR target does not require it.
+- Start codec/I2S asynchronously on the existing audio task. The main loop stays
+  available while hardware starts; cancellation and cleanup follow the current
+  request. Use `on_start` for dependent actions and `esp_audio_stack.is_idle`
+  to wait for completed cleanup.
+- Reconcile microphone and speaker adapters after runtime I2S failure, discard
+  stale PCM after the owner is quiescent and allow a bounded recovery request.
+  RX and TX errors are tracked independently, so healthy playback cannot hide
+  failing microphone capture.
+- Keep consumer registrations and mute state consistent through failure,
+  stop and concurrent updates. AFE reacquisition retires the previous fetch
+  session before accepting audio or VAD state for the next one.
+- Account for playback completion only after the corresponding PCM has left
+  DMA. Honor valid requested DMA frame sizes and keep software AEC references
+  aligned with the transmitted PCM, including silence, padding and underruns.
+- Keep rejected speaker writes with the producer during shutdown/reset and
+  respect its wait budget. New playback cannot be silently discarded by a
+  pending stop reset. Accepted hardware-speaker writes remain frame-aligned.
+- Apply hardware-volume updates on their owner and reuse unchanged volume
+  curves. Preserve the hardware-gain contract used by the echo reference.
+- Prefer PSRAM for the persistent S3 AFE owner-task stack, with an internal-RAM
+  fallback. Keep the existing task/buffer ownership and DSP quality.
 
-Audio Effects is fixed at 1.4.3 for supported production targets, with the existing
-1.3-series exception for pre-v3 P4 silicon. Codec Dev remains 2.0.0-beta5.
+### Standard ESPHome providers and current dependencies
 
-The GMF AI Audio 1.1.1 integration uses upstream feed/fetch stack placement, keeps
-P4 stacks internal and S3 stacks in PSRAM, and retains the existing immediate PCM
-output patch. `esp_afe.gmf_source` permits validation of an identified local GMF
-component when developing another candidate. The preview pins GMF commit
-`b1e077aa5fd34e937752712f94b1a515d459b116`, the same component sources used in
-the coordinated firmware qualification.
+- Use ESPHome's released audio, resampler, mixer, player, Voice Assistant,
+  Micro Wake Word and OTA providers. The former bundled resampler and its
+  private scheduling options are removed; use the options supplied by the
+  installed ESPHome release. Audio Stack remains the I2S/codec owner and its
+  public microphone/speaker interfaces are unchanged.
+- Use official Espressif AFE manager callbacks directly, removing the redundant
+  AFE-element pipeline. VAD remains available; WakeNet is disabled through
+  official APIs. External Micro Wake Word stays independent.
+- Select ESP-SR **2.6.0**, Audio Effects **1.4.3** and Codec Dev
+  **2.0.0-beta5**. The supported pre-v3 P4 path retains its Audio Effects
+  1.3-series exception. The wrappers no longer add a separate ESP-DSP constraint.
+- Retain the pinned GMF AI Audio **1.1.1** compatibility dependency because its
+  manifest permits ESP-SR 2.6.0. This release does not remove every vendor fork.
+  `gmf_source` remains available for explicitly identified development builds.
+- Maintained full profiles use ESPHome's Sendspin **0.9.3** and native pairing
+  with Music Assistant **2.10.7** or newer. Audio Stack itself does not require
+  Sendspin or Music Assistant.
 
-
-### Rejected playback respects caller backpressure
-
-During speaker shutdown or a pending buffer reset, a rejected write now honors
-its caller-supplied wait budget before returning zero. The producer retains the
-PCM and can retry. Ordinary accepted writes receive no added delay. This follows
-the native ESPHome I2S speaker contract and prevents an active mixer from busy
-retrying a closed output while the main loop is needed for cleanup.
-
-### Playback can restart safely after a stop
-
-A speaker stop resets its playback buffer on the audio task. New playback
-could previously be accepted before that reset completed, then discarded by
-the pending reset without a playback completion notification. The producer
-could consequently wait indefinitely for audio that would never be played.
-
-New writes now return zero while the reset is pending, so the producer retains
-those samples and retries after the buffer is ready. A host regression covers
-writes before and during reset, repeated stop requests and successful retry.
-This addresses one reproduced failure path investigated in
-[Intercom issue #129](https://github.com/n-IA-hane/esphome-intercom/issues/129).
-
+Rebuild and upload the firmware after updating. If you use Intercom device
+packages, start from the current maintained YAML and follow the
+[package migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md).
 
 ## 2026.10.2
 

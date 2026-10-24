@@ -19,3 +19,10 @@ The `main` branch of this repository tracks the stable audio-stack baseline, not
 - `esphome/components/esp_aec`
 - `esphome/components/esp_afe`
 - one minimal didactic example
+
+## Current ESPHome boundary
+
+Audio Stack, AEC, AFE and the optional audio-capture component are maintained
+here. Standard audio, resampler, mixer, player, Voice Assistant, Micro Wake Word
+and OTA providers come from the installed ESPHome release. The former local
+resampler provider is retired; its provenance and changes remain in Git history.

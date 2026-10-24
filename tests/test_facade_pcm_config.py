@@ -6,8 +6,16 @@ import sys
 
 import pytest
 import yaml
+import esphome
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_standard_audio_providers_are_not_shadowed():
+    """Keep the standalone integration on the released ESPHome providers."""
+    component_root = ROOT / "esphome/components"
+    for provider in ("audio", "resampler", "mixer", "speaker_source", "voice_assistant", "micro_wake_word", "ota"):
+        assert not (component_root / provider).exists(), f"local {provider} shadows ESPHome"
 
 
 def base_config(tmp_path):
@@ -120,3 +128,56 @@ def test_exact_rates_and_channels_validate_with_generated_parent_id(
         == speaker["max_channels"]
         == (2 if layout == "stereo" else 1)
     )
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+def test_facades_generate_with_released_mixer_resampler_and_assist(tmp_path, channels):
+    """Generate the real composition and identify the standard C++ providers."""
+    document = base_config(tmp_path)
+    document["esp_audio_stack"].update(
+        {"output_sample_rate": 16000, "speaker_channels": channels, "num_channels": channels}
+    )
+    document["voice_assistant"] = {"microphone": "mic", "speaker": "converted"}
+    document["speaker"].extend(
+        [
+            {
+                "platform": "mixer",
+                "id": "mix",
+                "output_speaker": "hw",
+                "num_channels": channels,
+                "source_speakers": [{"id": "voice_input"}, {"id": "media_input"}],
+            },
+            {
+                "platform": "resampler",
+                "id": "converted",
+                "output_speaker": "voice_input",
+                "sample_rate": 48000,
+                "bits_per_sample": 16,
+                "num_channels": channels,
+            },
+        ]
+    )
+    path = tmp_path / "device.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    result = subprocess.run(
+        [sys.executable, "-m", "esphome", "compile", "--only-generate", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = tmp_path / "build/src/esphome/components"
+    released = Path(esphome.__file__).resolve().parent / "components"
+    for provider in ("audio", "resampler", "mixer", "voice_assistant"):
+        files = sorted(
+            source for source in (generated / provider).rglob("*")
+            if source.suffix in {".cpp", ".h"}
+        )
+        assert files, f"{provider} was not generated"
+        for source in files:
+            relative = source.relative_to(generated)
+            assert source.read_bytes() == (released / relative).read_bytes(), relative
+    own_speaker = generated / "esp_audio_stack/speaker/esp_audio_stack_speaker.cpp"
+    assert own_speaker.read_bytes() == (
+        ROOT / "esphome/components/esp_audio_stack/speaker/esp_audio_stack_speaker.cpp"
+    ).read_bytes()

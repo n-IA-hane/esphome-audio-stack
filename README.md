@@ -35,6 +35,11 @@ speaker, mixer, resampler and player components. Your runtime configuration
 still decides which consumers run together and when Assist may start a session.
 For devices that need only capture/playback, omit the optional processor.
 
+Use the standard audio, resampler, mixer, player, Voice Assistant, Micro Wake
+Word and OTA providers included in ESPHome. This repository supplies the bus,
+codec and optional processing components; it does not override those ESPHome
+providers.
+
 [Stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 

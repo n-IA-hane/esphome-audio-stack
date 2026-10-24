@@ -103,13 +103,6 @@ template<typename T> struct RAMAllocator {
         depth += (source[end] == '{') - (source[end] == '}')
         end += 1
     body = source[start:end]
-    resampler_source = (ROOT / 'esphome/components/resampler/speaker/resampler_speaker.cpp').read_text()
-    start = resampler_source.index('size_t ResamplerSpeaker::play(')
-    end, depth = resampler_source.index('{', start) + 1, 1
-    while depth:
-        depth += (resampler_source[end] == '{') - (resampler_source[end] == '}')
-        end += 1
-    resampler_body = resampler_source[start:end]
     harness = r'''
 #include <atomic>
 #include <vector>
@@ -129,27 +122,7 @@ struct ESPAudioStack {
   unsigned get_speaker_channels() const { return channels; }
   size_t play(const uint8_t*,size_t,TickType_t);
 };
-namespace ring_buffer = esphome::ring_buffer;
-struct FakeInfo {
-  unsigned channels;
-  size_t frames_to_bytes(size_t frames) const { return frames * channels * sizeof(int16_t); }
-};
-struct FakeSpeaker {
-  bool is_running() const { return true; }
-  size_t play(const uint8_t *,size_t,TickType_t) { assert(false); return 0; }
-};
-struct ResamplerSpeaker {
-  std::weak_ptr<RingBuffer> ring_buffer_;
-  FakeSpeaker sink;
-  FakeSpeaker *output_speaker_{&sink};
-  FakeInfo audio_stream_info_;
-  bool is_stopped() const { return false; }
-  void start() { assert(false); }
-  bool requires_resampling_() const { return true; }
-  size_t play(const uint8_t *,size_t,TickType_t);
-};
 // PRODUCTION_PLAY
-// PRODUCTION_RESAMPLER_PLAY
 std::vector<uint8_t> sequence(size_t size,unsigned seed=0) {
   std::vector<uint8_t> result(size);
   for(size_t i=0;i<size;++i) result[i]=(i*37+seed)%251;
@@ -160,15 +133,13 @@ std::vector<uint8_t> drain(RingBuffer &ring,size_t limit) {
   result.resize(ring.read(result.data(),result.size(),0)); return result;
 }
 int main(int argc,char **argv) {
-  assert(argc==3 || argc==4); std::string scenario=argv[1]; unsigned channels=std::atoi(argv[2]);
+  assert(argc==3); std::string scenario=argv[1]; unsigned channels=std::atoi(argv[2]);
   const size_t frame=channels*sizeof(int16_t);
   const size_t capacity=scenario=="device_sized_wait" ? 3200*channels : 5*frame+(scenario=="wrap" ? 1 : 0);
   std::shared_ptr<RingBuffer> ring=RingBuffer::create(capacity);
   ESPAudioStack stack{ring.get(),false,channels};
-  ResamplerSpeaker resampler;
-  resampler.ring_buffer_=ring; resampler.audio_stream_info_={channels};
   auto play=[&](const uint8_t *data,size_t length,TickType_t ticks) {
-    return argc==4 ? resampler.play(data,length,ticks) : stack.play(data,length,ticks);
+    return stack.play(data,length,ticks);
   };
   auto input=sequence(17*frame+1,101);
   if(scenario=="oversized") {
@@ -197,7 +168,7 @@ int main(int argc,char **argv) {
     if(scenario=="device_sized_wait") input=sequence(8192);
     size_t written=play(input.data(),input.size(),scenario=="no_space" ? 0 : 7);
     if(scenario=="wait" || scenario=="device_sized_wait") {
-      const size_t expected=argc==4 ? 1 : frame;
+      const size_t expected=frame;
       assert(written==expected && waited==7);
       assert(consumed==std::vector<uint8_t>(prefix.begin(),prefix.begin()+frame));
       std::vector<uint8_t> want(prefix.begin()+frame,prefix.end());want.insert(want.end(),input.begin(),input.begin()+expected);
@@ -213,16 +184,10 @@ int main(int argc,char **argv) {
     assert(play(input.data(),2*frame+1,0)==2*frame);
     assert(play(input.data()+2*frame,1,0)==0);
     assert(drain(*ring,capacity)==std::vector<uint8_t>(input.begin(),input.begin()+2*frame));
-  } else if(scenario=="fragments") {
-    // Resampler input is a byte stream. RingBufferAudioSource owns stitching
-    // PCM frames across chunks; the writer must retain every byte unchanged.
-    assert(play(input.data(),1,0)==1);
-    assert(play(input.data()+1,2*frame-1,0)==2*frame-1);
-    assert(drain(*ring,capacity)==std::vector<uint8_t>(input.begin(),input.begin()+2*frame));
   } else { assert(false); }
   assert(ring->available()==0);
 }
-'''.replace('// PRODUCTION_PLAY', body).replace('// PRODUCTION_RESAMPLER_PLAY', resampler_body)
+'''.replace('// PRODUCTION_PLAY', body)
     unit = directory / 'partial.cpp'
     unit.write_text(harness)
     binary = directory / 'partial'
@@ -235,18 +200,9 @@ int main(int argc,char **argv) {
 
 
 @pytest.mark.parametrize('channels', [1, 2])
-@pytest.mark.parametrize('scenario', ['almost_full', 'oversized', 'wrap', 'wait', 'no_space', 'unaligned'])
+@pytest.mark.parametrize('scenario', ['almost_full', 'oversized', 'wrap', 'wait', 'no_space', 'unaligned', 'device_sized_wait', 'wait_timeout'])
 def test_pcm_progress_alignment_and_retry(partial_writer, channels, scenario):
     result = subprocess.run(['bash', '-c', 'ulimit -c 0; exec "$@"', 'bash',
                              str(partial_writer), scenario, str(channels)],
-                            capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize('channels', [1, 2])
-@pytest.mark.parametrize('scenario', ['oversized', 'wait', 'no_space', 'device_sized_wait', 'wait_timeout', 'fragments'])
-def test_resampler_bounded_byte_stream_and_retry(partial_writer, channels, scenario):
-    result = subprocess.run(['bash', '-c', 'ulimit -c 0; exec "$@"', 'bash',
-                             str(partial_writer), scenario, str(channels), 'resampler'],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
