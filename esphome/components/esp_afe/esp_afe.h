@@ -12,7 +12,6 @@
 #include "esphome/components/switch/switch.h"
 #endif
 #include "../esp_audio_stack/audio_core_processor.h"
-#include "../esp_audio_stack/audio_core_task_utils.h"
 
 #ifdef USE_ESP32
 
@@ -111,9 +110,8 @@ class EspAfe final : public Component, public AudioProcessor {
   bool set_feature(AudioFeature feature, bool enabled) override;
   ProcessorTelemetry telemetry() const override;
   bool reconfigure(int type, int mode) override;
-  // Suspend manager workers when no consumer is listening (called by
-  // esp_audio_stack when the last mic consumer leaves) and resume them when
-  // a consumer re-attaches. Idempotent.
+  // Publish consumer intent without waiting for GMF. The existing reconfigure
+  // owner retires a completed acquisition before admitting its replacement.
   void set_processing_active(bool active) override;
   bool wants_background_input() const override {
     return this->continuous_vad_ && this->vad_enabled_.load(std::memory_order_relaxed);
@@ -193,7 +191,9 @@ class EspAfe final : public Component, public AudioProcessor {
         return high ? "voip_high_perf" : "voip_low_cost";
     }
   }
-  bool is_voice_present() const { return this->voice_present_.load(std::memory_order_relaxed); }
+  bool is_voice_present() const {
+    return this->accepting_processing_() && this->voice_present_.load(std::memory_order_relaxed);
+  }
   float get_input_volume_dbfs() const { return this->input_volume_dbfs_.load(std::memory_order_relaxed); }
   float get_output_rms_dbfs() const { return this->output_rms_dbfs_.load(std::memory_order_relaxed); }
 
@@ -227,6 +227,14 @@ class EspAfe final : public Component, public AudioProcessor {
 
   bool build_instance_(AfeInstance *instance);
   bool recreate_instance_(bool require_same_frame_sizes);
+  bool quiesce_process_(TickType_t ticks_to_wait);
+  bool retire_processing_session_();
+  bool service_processing_request_();
+  bool accepting_processing_() const {
+    const uint32_t request = this->processing_request_.load(std::memory_order_acquire);
+    return (request & 1U) != 0 && this->processing_active_.load(std::memory_order_acquire) &&
+           this->manager_epoch_.load(std::memory_order_acquire) == (request >> 1);
+  }
   void clear_process_busy_();
   void reset_output_prebuffer_() { this->output_prebuffer_ready_ = this->output_prebuffer_frames_ == 0; }
 #ifdef USE_ESP_AFE_POST_AGC
@@ -393,9 +401,9 @@ class EspAfe final : public Component, public AudioProcessor {
   StaticQueue_t reconfigure_queue_struct_{};
   uint8_t reconfigure_queue_storage_[sizeof(ReconfigureRequest)]{};
   TaskHandle_t reconfigure_task_handle_{nullptr};
-  StaticTask_t reconfigure_task_tcb_{};
-  StackType_t *reconfigure_task_stack_{nullptr};
   std::atomic<bool> reconfigure_task_running_{false};
+  SemaphoreHandle_t reconfigure_done_{nullptr};
+  StaticSemaphore_t reconfigure_done_storage_{};
   std::atomic<bool> reconfigure_busy_{false};
   std::atomic<bool> last_reconfigure_ok_{true};
 
@@ -432,10 +440,14 @@ class EspAfe final : public Component, public AudioProcessor {
   std::atomic<uint32_t> fetch_us_max_{0};
   std::atomic<float> ringbuf_free_pct_{1.0f};
   std::atomic<uint32_t> frame_spec_revision_{0};
-  // Tracks whether a microphone consumer wants the AFE path active. When the
-  // pipeline is live, this also means GMF jobs are running; when an all-off
-  // single-mic config has torn the pipeline down, the flag is preserved
-  // so a later feature-enable rebuild can resume immediately.
+  // Requested activity and the acquisition epoch share one atomic word: an
+  // inactive transition advances the epoch even if a new consumer arrives
+  // before the owner retires the old manager. Bit 0 is the desired activity.
+  std::atomic<uint32_t> processing_request_{0};
+  std::atomic<uint32_t> manager_epoch_{0};
+  std::atomic<bool> activity_pending_{false};
+  // Actual admission is serialized by the configuration owner. It is never
+  // reopened while an earlier fetch can still complete on the old manager.
   std::atomic<bool> processing_active_{false};
   std::atomic<int> last_spec_mic_ch_{1};  // last published mic_channels (1 = default mono)
   std::atomic<int> last_spec_process_size_{0};

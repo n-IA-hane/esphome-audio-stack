@@ -493,7 +493,9 @@ CONFIG_SCHEMA = cv.All(
             ),
             # Official IDF i2s_chan_config_t DMA knobs. If dma_frame_num is omitted,
             # the component keeps the historical ~10 ms/descriptor auto sizing.
-            cv.Optional(CONF_DMA_DESC_NUM, default=6): cv.int_range(min=2, max=16),
+            # Omitted: RX keeps capture headroom, TX uses two causal refill buffers.
+            # Explicit: TX uses this count; RX retains its existing TDM margin policy.
+            cv.Optional(CONF_DMA_DESC_NUM): cv.int_range(min=2, max=16),
             cv.Optional(CONF_DMA_FRAME_NUM): cv.int_range(min=64, max=4092),
             # Use PSRAM for non-DMA audio buffers (saves ~15KB internal RAM).
             # Requires PSRAM. DMA buffers (I2S RX/TX) always use internal RAM.
@@ -913,11 +915,12 @@ async def to_code(config):
             (CONF_TASK_PRIORITY, var.set_task_priority),
             (CONF_TASK_CORE, var.set_task_core),
             (CONF_TASK_STACK_SIZE, var.set_task_stack_size),
-            (CONF_DMA_DESC_NUM, var.set_dma_desc_num),
             (CONF_BUFFERS_IN_PSRAM, var.set_buffers_in_psram),
             (CONF_AUDIO_TASK_STACK_IN_PSRAM, var.set_audio_task_stack_in_psram),
         ),
     )
+    if CONF_DMA_DESC_NUM in config:
+        cg.add(var.set_dma_desc_num(config[CONF_DMA_DESC_NUM]))
     if CONF_DMA_FRAME_NUM in config:
         cg.add(var.set_dma_frame_num(config[CONF_DMA_FRAME_NUM]))
     audio_effects = config[CONF_AUDIO_EFFECTS]

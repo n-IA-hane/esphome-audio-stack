@@ -1632,46 +1632,6 @@ bool ESPAudioStack::format_tx_frame_(AudioTaskCtx &ctx, void **tx_data, size_t *
 // ════════════════════════════════════════════════════════════════════════════
 // TX PATH: ring buffer read → volume → Espressif format conversion → I2S write
 // ════════════════════════════════════════════════════════════════════════════
-bool ESPAudioStack::write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes) {
-#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-  const bool write_ok = this->codec_backend_.write(tx_data, tx_bytes);
-  const bool io_closed = !this->codec_backend_.is_open();
-#else
-  size_t bytes_written = 0;
-  const esp_err_t write_err = i2s_channel_write(this->tx_handle_, tx_data, tx_bytes, &bytes_written, portMAX_DELAY);
-  const bool write_ok = write_err == ESP_OK && bytes_written == tx_bytes;
-  const bool io_closed = write_err == ESP_ERR_INVALID_STATE;
-#endif
-  if (!write_ok && io_closed) {
-    if (this->audio_stack_running_.load(std::memory_order_relaxed)) {
-      if (++ctx.invalid_tx_state_errors > 100) {
-        ESP_LOGE(TAG, "Persistent I2S TX INVALID_STATE (%d) - channel corrupted", ctx.invalid_tx_state_errors);
-        this->has_i2s_error_.store(true, std::memory_order_relaxed);
-        this->audio_stack_running_.store(false, std::memory_order_relaxed);
-      }
-    }
-    return false;
-  }
-  if (!write_ok) {
-#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-    LOG_W_THROTTLED("Codec TX write failed");
-#else
-    LOG_W_THROTTLED("I2S write failed: err=%s bytes=%u/%u", esp_err_to_name(write_err),
-                    static_cast<unsigned>(bytes_written), static_cast<unsigned>(tx_bytes));
-#endif
-    if (++ctx.consecutive_tx_errors > 100) {
-      ESP_LOGE(TAG, "Persistent I2S write errors (%d)", ctx.consecutive_tx_errors);
-      this->has_i2s_error_.store(true, std::memory_order_relaxed);
-      this->audio_stack_running_.store(false, std::memory_order_relaxed);
-    }
-    return false;
-  }
-
-  ctx.consecutive_tx_errors = 0;
-  ctx.invalid_tx_state_errors = 0;
-  return true;
-}
-
 bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes, size_t real_speaker_bytes) {
   if (tx_data == nullptr || tx_bytes == 0) {
     return false;
@@ -1697,43 +1657,23 @@ bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_
       public_frame_bytes > 0 ? static_cast<uint32_t>(real_speaker_bytes / public_frame_bytes) : 0;
   auto *bytes = static_cast<uint8_t *>(tx_data);
 
-#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   for (size_t offset = 0; offset < tx_bytes; offset += this->tx_completion_dma_buffer_bytes_) {
     const uint32_t real_frames = std::min(remaining_real_frames, this->tx_completion_dma_frames_);
     TxCompletionRecord record{};
     record.real_frames = real_frames;
-    record.trailing_silence_frames = real_frames > 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
-    if (!this->queue_tx_completion_record_(record)) {
-      return false;
-    }
-    remaining_real_frames -= real_frames;
-  }
-  if (!this->write_tx_frame_(ctx, tx_data, tx_bytes)) {
-    this->mark_tx_completion_desync_("Codec TX write failed after reserving DMA completion records");
-    return false;
-  }
-  return true;
-#else
-  for (size_t offset = 0; offset < tx_bytes; offset += this->tx_completion_dma_buffer_bytes_) {
-    const uint32_t real_frames = std::min(remaining_real_frames, this->tx_completion_dma_frames_);
-    TxCompletionRecord record{};
-    record.real_frames = real_frames;
-    record.trailing_silence_frames = real_frames > 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
-    if (!this->queue_tx_completion_record_(record)) {
-      return false;
-    }
-    if (!this->write_tx_frame_(ctx, bytes + offset, this->tx_completion_dma_buffer_bytes_)) {
-      this->mark_tx_completion_desync_("I2S TX write failed after reserving a DMA completion record");
+    record.trailing_silence_frames = real_frames != 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
+    if (!this->queue_tx_dma_block_(bytes + offset, this->tx_completion_dma_buffer_bytes_, record)) {
+      if (this->audio_stack_running_.load(std::memory_order_relaxed))
+        this->mark_tx_completion_desync_("TX DMA staging admission failed");
       return false;
     }
     remaining_real_frames -= real_frames;
   }
   return true;
-#endif
 }
 
-#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
-void ESPAudioStack::save_previous_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples) {
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
+void ESPAudioStack::save_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples) {
   if (samples == nullptr || !ctx.processor_enabled || this->direct_aec_ref_ == nullptr) {
     this->direct_aec_ref_valid_ = false;
     return;
@@ -1755,8 +1695,14 @@ void ESPAudioStack::save_previous_tx_reference_(AudioTaskCtx &ctx, const int16_t
   // elapsed TX periods, not only the last complete speaker-buffer read.
   this->direct_aec_ref_valid_ =
       this->play_ref_rate_converter_.process(samples, this->direct_aec_ref_, ctx.bus_frame_size);
-  if (!this->direct_aec_ref_valid_)
+  if (!this->direct_aec_ref_valid_) {
     this->fail_audio_session_("TX reference rate conversion");
+    return;
+  }
+#ifdef USE_ESP_AUDIO_STACK_RING_REF
+  if (this->aec_ref_ring_buffer_ != nullptr && ctx.mic_running)
+    this->aec_ref_ring_buffer_->write(this->direct_aec_ref_, ctx.input_frame_bytes);
+#endif
 }
 #endif
 
@@ -1775,11 +1721,11 @@ void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
   // still emits TX completion events, so queue zero-frame records to keep the
   // completion stream in lockstep without notifying speaker consumers.
   const bool written = this->write_tx_dma_blocks_(ctx, ctx.tx_clock_buffer, tx_bytes, 0);
-#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
   // The clock buffer uses the hardware bit/channel layout. The public mono
   // reference is silence and still advances its rate converter once per period.
   memset(ctx.spk_buffer, 0, ctx.speaker_frame_bytes);
-  this->save_previous_tx_reference_(ctx, written ? ctx.spk_buffer : nullptr);
+  this->save_tx_reference_(ctx, written ? ctx.spk_buffer : nullptr);
 #else
   (void) written;
 #endif
@@ -1828,65 +1774,21 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
 #endif
   }
 
-  // Keep the existing complete-frame admission policy for ring references.
-#if defined(USE_AUDIO_PROCESSOR) && defined(USE_ESP_AUDIO_STACK_RING_REF)
-  const bool full_frame = ctx.speaker_running && !ctx.speaker_paused && ctx.speaker_got == ctx.speaker_frame_bytes;
-  const int16_t *ref_source = ctx.spk_buffer;
-#ifdef USE_ESP_AUDIO_STACK_STEREO_TX
-  if (full_frame && !ctx.use_tdm_bus && ctx.speaker_channels > 1) {
-    if (ctx.tx_ref_mono_buffer == nullptr || this->tx_ref_ch_cvt_handle_ == nullptr) {
-      ESP_LOGE(TAG, "missing stereo TX mono reference converter");
-      this->has_i2s_error_.store(true, std::memory_order_relaxed);
-      this->audio_stack_running_.store(false, std::memory_order_relaxed);
-      return;
-    }
-    const esp_ae_err_t err =
-        esp_ae_ch_cvt_process(static_cast<esp_ae_ch_cvt_handle_t>(this->tx_ref_ch_cvt_handle_),
-                              static_cast<uint32_t>(ctx.bus_frame_size), ctx.spk_buffer, ctx.tx_ref_mono_buffer);
-    if (err != ESP_AE_ERR_OK) {
-      ESP_LOGE(TAG, "esp_ae_ch_cvt_process TX ref failed: err=%d", static_cast<int>(err));
-      this->has_i2s_error_.store(true, std::memory_order_relaxed);
-      this->audio_stack_running_.store(false, std::memory_order_relaxed);
-      return;
-    }
-    ref_source = ctx.tx_ref_mono_buffer;
-  }
-#endif
-  if (this->aec_ref_ring_buffer_ && ctx.processor_enabled && ctx.mic_running) {
-    if (full_frame && this->direct_aec_ref_ != nullptr) {
-      // Decimate TX -> processor rate into direct_aec_ref_ scratch, then push
-      // the converted frame into the ring. direct_aec_ref_ is sized for
-      // input_frame_bytes by allocate_audio_buffers_() (the converter writes
-      // bus_frame_size / ratio = input_frame_size samples).
-      if (!this->play_ref_rate_converter_.process(ref_source, this->direct_aec_ref_, ctx.bus_frame_size)) {
-        ESP_LOGE(TAG, "TX AEC reference rate conversion failed; stopping audio session");
-        this->has_i2s_error_.store(true, std::memory_order_relaxed);
-        this->audio_stack_running_.store(false, std::memory_order_relaxed);
-        return;
-      }
-      const size_t ref_bytes = ctx.input_frame_bytes;
-      // ESPHome RingBuffer::write() already drops oldest data on overflow
-      // (discard_bytes_ + write_without_replacement), which is the right
-      // backpressure here: keep the most recent reference window for AEC.
-      this->aec_ref_ring_buffer_->write((void *) this->direct_aec_ref_, ref_bytes);
-    }
-  }
-#endif
   void *tx_data;
   size_t tx_bytes;
   if (!this->format_tx_frame_(ctx, &tx_data, &tx_bytes)) {
     ESP_LOGE(TAG, "TX audio-effects format conversion failed; stopping audio session");
     this->has_i2s_error_.store(true, std::memory_order_relaxed);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
-#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
-    this->save_previous_tx_reference_(ctx, nullptr);
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
+    this->save_tx_reference_(ctx, nullptr);
 #endif
     return;
   }
 
   const bool written = this->write_tx_dma_blocks_(ctx, tx_data, tx_bytes, ctx.speaker_got);
-#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
-  this->save_previous_tx_reference_(ctx, written ? ctx.spk_buffer : nullptr);
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
+  this->save_tx_reference_(ctx, written ? ctx.spk_buffer : nullptr);
 #else
   (void) written;
 #endif

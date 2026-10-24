@@ -56,3 +56,35 @@ def test_resampler_explicit_core_checks_chip_and_priority(monkeypatch):
                     "task_priority": priority,
                 }
             )
+
+
+@pytest.mark.parametrize(
+    ('requested', 'path', 'renderer', 'enabled'),
+    [
+        (1, ['speaker', 0, 'source_speakers', 0, 'id'], {'platform': 'mixer', 'num_channels': 1}, True),
+        (1, ['speaker', 0, 'source_speakers', 0, 'id'], {'platform': 'mixer', 'num_channels': 2}, False),
+        (2, ['speaker', 0, 'source_speakers', 0, 'id'], {'platform': 'mixer', 'num_channels': 1}, False),
+        (None, ['speaker', 0, 'source_speakers', 0, 'id'], {'platform': 'mixer', 'num_channels': 1}, False),
+        (1, ['speaker', 0, 'id'], {'num_channels': 1}, False),
+        (1, ['speaker', 0, 'source_speakers', 0, 'id'], {'platform': 'custom', 'num_channels': 1}, False),
+    ],
+)
+def test_mono_pruning_requires_requested_mono_and_a_known_mono_mixer(
+    monkeypatch, requested, path, renderer, enabled
+):
+    # Isolate this component's policy from unrelated capability validation.
+    # ID/path layout is the one used by the real Mixer final validator.
+    full = SimpleNamespace(get_path_for_id=lambda _: path,
+                           get_config_for_path=lambda _: renderer)
+    monkeypatch.setattr(module.fv, 'full_config', SimpleNamespace(get=lambda: full))
+    monkeypatch.setattr(module.audio, 'final_validate_audio_schema', lambda *a, **k: lambda c: None)
+
+    def inherit(name, _parent):
+        return lambda config: config.setdefault(name, 1 if name == 'num_channels' else 48000)
+
+    monkeypatch.setattr(module, 'inherit_property_from', inherit)
+    config = {'output_speaker': 'sink', 'bits_per_sample': 16}
+    if requested is not None:
+        config['num_channels'] = requested
+    module._validate_audio_compatibility(config)
+    assert config[module._MONO_MIXER_OUTPUT] is enabled

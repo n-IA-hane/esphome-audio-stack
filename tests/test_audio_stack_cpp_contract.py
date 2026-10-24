@@ -64,10 +64,11 @@ def test_idle_tx_completion_overflow_preserves_full_duplex_capture() -> None:
     ]
 
     assert "tx_completion_idle_event_drops_" in header
-    assert "isr_load_u32(self->tx_completion_pending_real_records_)" in callback
+    assert "descriptor->record.real_frames != 0" in callback
     assert "self->tx_completion_desync_ = true" in callback
-    assert "isr_increment_u32(self->tx_completion_idle_event_drops_)" in callback
-    assert "Discarded %u idle TX completion events" in cpp
+    assert "event->dma_buf" in callback
+    assert "descriptor->record.generation == isr_load_u32(self->tx_playback_generation_)" in callback
+    assert "memset(event->dma_buf, 0, event->size)" in callback
 
 
 def test_tx_completion_tracking_is_session_scoped() -> None:
@@ -156,7 +157,7 @@ def test_speaker_output_callbacks_follow_i2s_completion_not_buffer_acceptance() 
     ]
     completion_drain = stack_cpp[
         stack_cpp.index("void ESPAudioStack::drain_tx_completion_events_") :
-        stack_cpp.index("bool ESPAudioStack::queue_tx_completion_record_")
+        stack_cpp.index("bool ESPAudioStack::queue_tx_dma_block_")
     ]
     dma_write = pipeline_cpp[
         pipeline_cpp.index("bool ESPAudioStack::write_tx_dma_blocks_") :
@@ -169,39 +170,40 @@ def test_speaker_output_callbacks_follow_i2s_completion_not_buffer_acceptance() 
 
     assert "add_speaker_output_callback" in speaker_cpp
     assert "audio_output_callback_.call(frames, timestamp)" in speaker_cpp
-    assert "xQueueSendToBackFromISR" in dma_callback
+    assert "xQueueSendFromISR" in dma_callback
+    assert "descriptor->record" in dma_callback
+    assert "descriptor->address == event->dma_buf" in dma_callback
     assert "dispatch_speaker_output_callbacks_" in completion_drain
     assert "record.real_frames" in completion_drain
     assert "record.trailing_silence_frames" in completion_drain
 
-    # Every real write is paired with its completion record before submission
-    # to IDF. Merely accepting bytes into the public speaker buffer must not
-    # advance Sendspin/mixer playback time.
-    assert dma_write.index("queue_tx_completion_record_(record)") < dma_write.index(
-        "write_tx_frame_(ctx, bytes + offset"
-    )
+    # Completion metadata comes from the actual descriptor that finished, not
+    # an application FIFO guessed before the opaque IDF writer selects a buffer.
+    assert "queue_tx_dma_block_(bytes + offset" in dma_write
+    assert "i2s_channel_write(" not in pipeline_cpp
+    assert "codec_backend_.write(" not in pipeline_cpp
     assert "dispatch_speaker_output_callbacks_" not in dma_write
     assert "audio_output_callback_" not in public_play
 
 
 def test_failed_tx_write_cannot_leave_stale_completion_metadata() -> None:
-    """A reserved DMA record must never be consumed by a later successful write."""
+    """Staging rejection must end the session instead of leaving phantom credit."""
     pipeline_cpp = read("audio_pipeline.cpp")
+    owner = read("esp_audio_stack.cpp")
     dma_write = pipeline_cpp[
         pipeline_cpp.index("bool ESPAudioStack::write_tx_dma_blocks_") :
         pipeline_cpp.index("void ESPAudioStack::process_tx_clock_only_")
     ]
-
-    # The record must remain queued before the blocking IDF write: on_sent may
-    # run before i2s_channel_write() returns. If the write then fails, however,
-    # tracking is irrecoverably ambiguous and the pipeline must stop instead of
-    # letting a later DMA completion consume stale metadata.
-    assert dma_write.index("queue_tx_completion_record_(record)") < dma_write.index(
-        "write_tx_frame_(ctx, bytes + offset"
-    )
-    assert dma_write.count("mark_tx_completion_desync_") == 2
-    assert "if (!this->write_tx_frame_(ctx, tx_data, tx_bytes))" in dma_write
-    assert "if (!this->write_tx_frame_(ctx, bytes + offset" in dma_write
+    admission = owner[
+        owner.index("bool ESPAudioStack::queue_tx_dma_block_(") :
+        owner.index("void ESPAudioStack::mark_tx_completion_desync_(")
+    ]
+    assert "if (!this->queue_tx_dma_block_(" in dma_write
+    assert "mark_tx_completion_desync_" in dma_write
+    assert "TX DMA staging admission failed" in dma_write
+    assert admission.index("memcpy(") < admission.index("xQueueSend(this->tx_ready_queue_")
+    assert "this->tx_completion_pending_real_records_.fetch_sub(1" in admission
+    assert "xQueueSend(this->tx_free_queue_, &block, 0)" in admission
 
 
 def _dual_mic_slots_ok(

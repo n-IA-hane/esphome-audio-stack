@@ -65,3 +65,54 @@ int main(){
     exe = tmp_path / "manager_lifecycle"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+
+
+def test_rebuilt_manager_reopens_only_current_requested_acquisition(tmp_path):
+    """Exercise the install admission block with the current consumer intent.
+
+    Resource allocation and algorithm construction precede this block and are
+    not modeled. It must also resume a still-live consumer after all-off.
+    """
+    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    start = source.index("  const uint32_t request =", source.index("bool EspAfe::install_instance_("))
+    end = source.index("\n  return true;", start)
+    admission = source[start:end]
+    harness = r"""
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+#define ESP_LOGE(...)
+struct EspAfe {
+ std::atomic<uint32_t> processing_request_{0},manager_epoch_{0};
+ std::atomic<bool> processing_active_{false};
+ bool allow_start=true;unsigned starts=0,cleanups=0;
+ bool start_pipeline_(){++starts;return allow_start;}
+ bool install(){
+  auto cleanup_failed_install=[this]{++cleanups;return false;};
+"""
+    checks = r"""
+  return true;
+ }
+};
+int main(){
+ EspAfe afe;
+ assert(afe.install()&&afe.starts==0&&!afe.processing_active_);
+ // All-off or a failed acquisition can leave admission false while a
+ // consumer still owns an intent. A successful fresh install resumes it.
+ afe.processing_request_=3;afe.manager_epoch_=1;
+ assert(afe.install()&&afe.starts==1&&afe.processing_active_);
+ afe.processing_request_=4;
+ assert(afe.install()&&afe.starts==1&&!afe.processing_active_);
+ afe.processing_request_=5;
+ assert(afe.install()&&afe.starts==1&&!afe.processing_active_);
+ afe.manager_epoch_=2;afe.allow_start=false;
+ assert(!afe.install()&&afe.starts==2&&!afe.processing_active_&&afe.cleanups==1);
+ afe.allow_start=true;
+ assert(afe.install()&&afe.starts==3&&afe.processing_active_);
+}
+"""
+    cpp = tmp_path / "install_admission.cpp"
+    cpp.write_text(harness + admission + checks)
+    binary = tmp_path / "install_admission"
+    subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)

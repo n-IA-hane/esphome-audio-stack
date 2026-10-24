@@ -6,6 +6,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def admission_helper():
+    header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
+    start = header.index("  bool accepting_processing_() const {")
+    return header[start:header.index("\n  }", start) + 4]
+
+
 def test_manager_result_delivers_pcm_without_an_input_job(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     methods = ""
@@ -25,6 +31,8 @@ constexpr int ESP_OK=0,ESP_FAIL=-1,ESP_GMF_IO_OK=0,VAD_SPEECH=1;
 struct esp_gmf_payload_t{uint8_t*buf;uint32_t buf_length;uint32_t valid_size;};
 struct afe_fetch_result_t{int16_t*data;int data_size;int vad_state;int ret_value=ESP_OK;};
 struct EspAfe{
+ std::atomic<uint32_t> processing_request_{1},manager_epoch_{0};
+ // ADMISSION_HELPER
  std::atomic<bool>processing_active_{true},drain_request_{false},vad_enabled_{true},voice_present_{false};
  int input_result=0;std::vector<uint8_t>output;
  int gmf_input_acquire_(esp_gmf_payload_t*p,uint32_t n,int){
@@ -55,7 +63,7 @@ int main(){
 }
 """
     cpp = tmp_path / "manager_callbacks.cpp"
-    cpp.write_text(harness + methods + checks)
+    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
     exe = tmp_path / "manager_callbacks"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
@@ -99,6 +107,8 @@ int esp_gmf_afe_manager_set_result_cb(void*,Result,void*){
 }
 struct Ring{void reset(){assert(!result_attached && !read_attached && paused);++resets;}}ring;
 struct EspAfe{
+ std::atomic<uint32_t> processing_request_{1},manager_epoch_{0};
+ // ADMISSION_HELPER
  void*afe_manager_=this;bool afe_pipeline_running_=true,afe_pipeline_paused_=false;
  Ring*fetch_output_ring_=&ring;
  std::atomic<unsigned>feed_queue_frames_{0},fetch_queue_frames_{0};
@@ -132,7 +142,7 @@ int main(){
 }
 '''
     cpp = tmp_path / "callback_lifetime.cpp"
-    cpp.write_text(harness + methods + checks)
+    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
     exe = tmp_path / "callback_lifetime"
     subprocess.run(["g++", "-std=c++17", "-O2", "-pthread", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=5)

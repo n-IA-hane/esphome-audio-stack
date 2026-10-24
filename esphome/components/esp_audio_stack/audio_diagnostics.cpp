@@ -12,7 +12,7 @@ void ESPAudioStack::publish_diagnostic_hardware_() {
   const auto state = static_cast<I2SHardwareState>(next.state);
   if (state == I2SHardwareState::READY || state == I2SHardwareState::RUNNING) {
     next.dma_frames = this->tx_completion_dma_frames_;
-    next.dma_descriptors = this->tx_completion_queue_size_ / 2U;
+    next.dma_descriptors = this->tx_dma_descriptor_count_;
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
     next.prepared = this->codec_backend_.is_prepared();
     next.open = this->codec_backend_.is_open();

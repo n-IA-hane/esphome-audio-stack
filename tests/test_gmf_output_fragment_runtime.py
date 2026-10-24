@@ -6,6 +6,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def admission_helper():
+    header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
+    start = header.index("  bool accepting_processing_() const {")
+    return header[start:header.index("\n  }", start) + 4]
+
+
 def test_gmf_partial_payloads_preserve_every_sample(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     start = source.index("esp_gmf_err_io_t EspAfe::gmf_output_release_(")
@@ -33,6 +39,8 @@ struct Ring {
  }
 };
 struct EspAfe {
+ std::atomic<uint32_t> processing_request_{1},manager_epoch_{0};
+ // ADMISSION_HELPER
  std::atomic<bool> processing_active_{true};
  int fetch_chunksize_=1024;
  Ring storage;
@@ -65,7 +73,7 @@ int main() {
 }
 """
     cpp = tmp_path / "callback.cpp"
-    cpp.write_text(harness + callback + checks)
+    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + callback + checks)
     exe = tmp_path / "callback"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

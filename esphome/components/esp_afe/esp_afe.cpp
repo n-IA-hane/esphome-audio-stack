@@ -11,6 +11,7 @@
 #include <esp_heap_caps.h>
 #include <esp_err.h>
 #include <esp_timer.h>
+#include <freertos/idf_additions.h>
 
 #include <algorithm>
 #include <cmath>
@@ -560,8 +561,13 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
   // Runtime buffers are already prepared above. Apply the configured feature
   // state before resuming GMF tasks so an active reconfigure never runs even
   // one frame with stale AEC/VAD state.
-  if (this->processing_active_.load(std::memory_order_acquire)) {
+  const uint32_t request = this->processing_request_.load(std::memory_order_acquire);
+  const bool requested = (request & 1U) != 0 &&
+                         this->manager_epoch_.load(std::memory_order_acquire) == (request >> 1);
+  this->processing_active_.store(requested, std::memory_order_release);
+  if (requested) {
     if (!this->start_pipeline_()) {
+      this->processing_active_.store(false, std::memory_order_release);
       ESP_LOGE(TAG, "Reconfigure: AFE manager failed to start");
       return cleanup_failed_install();
     }
@@ -616,6 +622,26 @@ void EspAfe::clear_process_busy_() {
   }
 }
 
+bool EspAfe::quiesce_process_(TickType_t ticks_to_wait) {
+  this->drain_request_.store(true, std::memory_order_seq_cst);
+  bool drained = true;
+  if (this->process_busy_.load(std::memory_order_seq_cst)) {
+    TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
+    ulTaskNotifyTake(pdTRUE, 0);
+    this->process_drain_waiter_.store(waiter, std::memory_order_release);
+    do {
+      if (this->process_busy_.load(std::memory_order_seq_cst)) ulTaskNotifyTake(pdTRUE, ticks_to_wait);
+    } while (ticks_to_wait == portMAX_DELAY && this->process_busy_.load(std::memory_order_seq_cst));
+    if (this->process_busy_.load(std::memory_order_seq_cst)) {
+      ESP_LOGE(TAG, "Drain timeout waiting for process() to quiesce; keeping the live AFE instance");
+      drained = false;
+    }
+    this->process_drain_waiter_.store(nullptr, std::memory_order_release);
+  }
+  if (!drained) this->drain_request_.store(false, std::memory_order_seq_cst);
+  return drained;
+}
+
 bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   const int64_t reinit_start_us = esp_timer_get_time();
   int64_t stage_start_us = reinit_start_us;
@@ -649,31 +675,7 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   // Drain protocol: seq_cst gives the request/busy atomics one total order.
   // That prevents the store-buffer false/false outcome that release/acquire
   // would still allow on different atomic objects.
-  this->drain_request_.store(true, std::memory_order_seq_cst);
-  bool drained = true;
-  if (this->process_busy_.load(std::memory_order_seq_cst)) {
-    TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
-    ulTaskNotifyTake(pdTRUE, 0);
-    this->process_drain_waiter_.store(waiter, std::memory_order_release);
-    if (this->process_busy_.load(std::memory_order_seq_cst)) {
-      ulTaskNotifyTake(pdTRUE, DRAIN_WAIT_TIMEOUT);
-    }
-    // Task notifications are shared by the FreeRTOS task. Only the guarded
-    // state proves that process() actually left the instance.
-    if (this->process_busy_.load(std::memory_order_seq_cst)) {
-      ESP_LOGE(TAG, "Drain timeout waiting for process() to quiesce; keeping "
-                    "the live AFE instance");
-      drained = false;
-    }
-    this->process_drain_waiter_.store(nullptr, std::memory_order_release);
-  }
-  if (!drained) {
-    // process() may still hold pointers into the current ESP-SR/GMF instance.
-    // Never detach or destroy it on a timeout: aborting this reconfigure is the
-    // only fail-safe outcome that cannot become a cross-core use-after-free.
-    this->drain_request_.store(false, std::memory_order_seq_cst);
-    return false;
-  }
+  if (!this->quiesce_process_(DRAIN_WAIT_TIMEOUT)) return false;
   log_stage("drain");
 
   // From here on the ScopedLock auto-releases on every return path; only the
@@ -749,6 +751,8 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
   (void) old_fetch;
 
   begin_stage("install");
+  this->manager_epoch_.store(this->processing_request_.load(std::memory_order_acquire) >> 1,
+                             std::memory_order_release);
   if (!this->install_instance_(&next)) {
     log_stage("install_failed");
     AfeInstance failed = this->detach_instance_();
@@ -906,6 +910,17 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
     return false;
   }
 
+  if (this->reconfigure_task_handle_ != nullptr && !this->accepting_processing_()) {
+    // A retired or pending acquisition has no live VAD to toggle. Publish
+    // intent without waiting for its owner: Audio Stack reconciles the
+    // continuous-VAD consumer, and the same worker applies the new feature.
+    this->vad_enabled_.store(enabled, std::memory_order_relaxed);
+    this->voice_present_.store(false, std::memory_order_relaxed);
+    this->activity_pending_.store(true, std::memory_order_release);
+    xTaskNotifyGive(this->reconfigure_task_handle_);
+    return true;
+  }
+
   // AFE currently torn down (all features were off). Flip the flag and let
   // recreate_instance_ rebuild (or stay stopped if still all-off).
   if (this->afe_stopped_.load(std::memory_order_acquire)) {
@@ -1009,6 +1024,14 @@ void EspAfe::setup() {
     this->mark_failed();
     return;
   }
+  if (!this->start_reconfigure_task_()) {
+    AfeInstance failed = this->detach_instance_();
+    this->destroy_instance_(&failed);
+    this->release_runtime_buffers_();
+    this->mark_failed();
+    return;
+  }
+  if (this->activity_pending_.load(std::memory_order_acquire)) xTaskNotifyGive(this->reconfigure_task_handle_);
   ESP_LOGI(TAG, "AFE setup complete, runtime prepared and idle (waiting for "
                 "mic consumer)");
 }
@@ -1111,7 +1134,7 @@ ProcessorTelemetry EspAfe::telemetry() const {
   ProcessorTelemetry t;
   t.frame_count = this->process_frame_count_.load(std::memory_order_relaxed);
   t.glitch_count = this->process_output_miss_.load(std::memory_order_relaxed);
-  t.voice_present = this->voice_present_.load(std::memory_order_relaxed);
+  t.voice_present = this->is_voice_present();
   t.input_volume_dbfs = this->input_volume_dbfs_.load(std::memory_order_relaxed);
   t.output_rms_dbfs = this->output_rms_dbfs_.load(std::memory_order_relaxed);
   t.ringbuf_free_pct = this->ringbuf_free_pct_.load(std::memory_order_relaxed);
@@ -1170,7 +1193,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // for this frame or this frame observes drain_request_ and touches no live
   // pointer or size.
   this->process_busy_.store(true, std::memory_order_seq_cst);
-  if (this->drain_request_.load(std::memory_order_seq_cst)) {
+  if (this->drain_request_.load(std::memory_order_seq_cst) || !this->accepting_processing_()) {
     const int published_output = this->last_spec_fetch_size_.load(std::memory_order_acquire);
     this->clear_process_busy_();
     silence_frame(out, published_output);
@@ -1399,6 +1422,10 @@ bool EspAfe::reinit_by_name(const char *name) {
 }
 
 bool EspAfe::start_reconfigure_task_() {
+  if (this->reconfigure_done_ == nullptr) {
+    this->reconfigure_done_ = xSemaphoreCreateBinaryStatic(&this->reconfigure_done_storage_);
+    if (this->reconfigure_done_ == nullptr) return false;
+  }
   if (this->reconfigure_queue_ == nullptr) {
     this->reconfigure_queue_ = xQueueCreateStatic(1, sizeof(ReconfigureRequest), this->reconfigure_queue_storage_,
                                                   &this->reconfigure_queue_struct_);
@@ -1412,9 +1439,26 @@ bool EspAfe::start_reconfigure_task_() {
   }
 
   this->reconfigure_task_running_.store(true, std::memory_order_release);
-  if (!esp_audio_stack::start_pinned_task(
-          &EspAfe::reconfigure_task_trampoline, "afe_reinit", RECONFIGURE_TASK_STACK_BYTES, this, 4, 0, false, TAG,
-          &this->reconfigure_task_handle_, &this->reconfigure_task_tcb_, &this->reconfigure_task_stack_)) {
+  xSemaphoreTake(this->reconfigure_done_, 0);
+  auto start_owner = [this]([[maybe_unused]] UBaseType_t caps) {
+#if configSUPPORT_STATIC_ALLOCATION
+    return xTaskCreatePinnedToCoreWithCaps(&EspAfe::reconfigure_task_trampoline, "afe_reinit",
+        RECONFIGURE_TASK_STACK_BYTES, this, 4, &this->reconfigure_task_handle_, 0, caps) == pdPASS;
+#else
+    return xTaskCreatePinnedToCore(&EspAfe::reconfigure_task_trampoline, "afe_reinit",
+        RECONFIGURE_TASK_STACK_BYTES, this, 4, &this->reconfigure_task_handle_, 0) == pdPASS;
+#endif
+  };
+  // This configuration owner parks between requests and never performs flash
+  // operations. Keep its large stack out of internal RAM when IDF permits it;
+  // IDF releases a failed attempt before the single internal fallback.
+  bool started = false;
+#if configSUPPORT_STATIC_ALLOCATION && CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0)
+    started = start_owner(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
+  if (!started && !start_owner(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)) {
+    ESP_LOGE(TAG, "Failed to create AFE reconfigure task");
     this->reconfigure_task_running_.store(false, std::memory_order_release);
     return false;
   }
@@ -1448,11 +1492,13 @@ bool EspAfe::request_reinit_by_name(const char *name) {
     this->reconfigure_busy_.store(false, std::memory_order_release);
     return false;
   }
+  xTaskNotifyGive(this->reconfigure_task_handle_);
   ESP_LOGI(TAG, "%s AFE reconfigure to %s", already_pending ? "Updated pending" : "Queued", req.mode);
   return true;
 }
 
 bool EspAfe::is_reconfigure_idle() const {
+  if (this->activity_pending_.load(std::memory_order_acquire)) return false;
   if (this->reconfigure_queue_ == nullptr) {
     return !this->reconfigure_busy_.load(std::memory_order_acquire);
   }
@@ -1461,22 +1507,38 @@ bool EspAfe::is_reconfigure_idle() const {
 }
 
 void EspAfe::reconfigure_task_trampoline(void *arg) {
-  static_cast<EspAfe *>(arg)->reconfigure_task_loop_();
-  vTaskDelete(nullptr);
+  auto *self = static_cast<EspAfe *>(arg);
+  const auto done = self->reconfigure_done_;
+  self->reconfigure_task_loop_();
+  // No owner access after completion. The destructor deletes the parked task
+  // before releasing the component, its mutex or the GMF instance.
+  xSemaphoreGive(done);
+  vTaskSuspend(nullptr);
 }
 
 void EspAfe::reconfigure_task_loop_() {
   ReconfigureRequest req{};
   while (this->reconfigure_task_running_.load(std::memory_order_acquire)) {
-    if (xQueueReceive(this->reconfigure_queue_, &req, portMAX_DELAY) != pdTRUE) {
-      continue;
+    // A process-drain notification shares this task's notification slot.
+    // Pending intent/queue entries remain authoritative if a drain consumed
+    // that wake; only park when there is no work left to reconcile.
+    if (!this->activity_pending_.load(std::memory_order_acquire) &&
+        uxQueueMessagesWaiting(this->reconfigure_queue_) == 0) {
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
+    if (!this->reconfigure_task_running_.load(std::memory_order_acquire)) break;
     this->reconfigure_busy_.store(true, std::memory_order_release);
-    ESP_LOGI(TAG, "AFE async reconfigure begin: %s", req.mode);
-    const bool ok = this->reinit_by_name(req.mode);
+    bool ok = true;
+    if (xQueueReceive(this->reconfigure_queue_, &req, 0) == pdTRUE) {
+      ESP_LOGI(TAG, "AFE async reconfigure begin: %s", req.mode);
+      ok = this->reinit_by_name(req.mode);
+      ESP_LOGI(TAG, "AFE async reconfigure %s: %s", ok ? "done" : "failed", req.mode);
+    }
+    if (this->activity_pending_.exchange(false, std::memory_order_acq_rel)) {
+      ok = this->service_processing_request_() && ok;
+    }
     this->last_reconfigure_ok_.store(ok, std::memory_order_release);
     this->reconfigure_busy_.store(false, std::memory_order_release);
-    ESP_LOGI(TAG, "AFE async reconfigure %s: %s", ok ? "done" : "failed", req.mode);
   }
 }
 
@@ -1519,7 +1581,7 @@ void EspAfe::manager_result_cb_(afe_fetch_result_t *result, void *ctx) {
       result->data_size <= 0 || result->data_size % sizeof(int16_t) != 0) {
     return;
   }
-  if (!self->processing_active_.load(std::memory_order_acquire) ||
+  if (!self->accepting_processing_() ||
       self->drain_request_.load(std::memory_order_acquire)) {
     return;
   }
@@ -1539,7 +1601,7 @@ esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wa
   // Rebuild drains input while microphone consumers remain registered. Both
   // lifecycle states must release the same blocking GMF reader.
   const auto accepting_input = [this]() {
-    return this->processing_active_.load(std::memory_order_acquire) &&
+    return this->accepting_processing_() &&
            !this->drain_request_.load(std::memory_order_acquire);
   };
   const bool active_at_entry = accepting_input();
@@ -1597,7 +1659,7 @@ esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wa
 
 esp_gmf_err_io_t EspAfe::gmf_output_release_(esp_gmf_payload_t *load, int wait_ticks) {
   (void) wait_ticks;
-  if (!this->processing_active_.load(std::memory_order_acquire)) {
+  if (!this->accepting_processing_()) {
     return ESP_GMF_IO_OK;
   }
   if (load == nullptr || load->buf == nullptr || load->valid_size == 0) {
@@ -1806,64 +1868,73 @@ bool EspAfe::prepare_feed_input_ring_() {
 #endif
 
 void EspAfe::set_processing_active(bool active) {
-  if (this->processing_active_.exchange(active, std::memory_order_acq_rel) == active) {
-    return;
+  uint32_t previous = this->processing_request_.load(std::memory_order_acquire);
+  uint32_t next;
+  do {
+    if (((previous & 1U) != 0) == active) {
+      // A failed explicit acquisition may retry; unchanged live consumers do
+      // not rebuild or wake the owner every frame.
+      if (!active || this->processing_active_.load(std::memory_order_acquire) ||
+          this->activity_pending_.load(std::memory_order_acquire) ||
+          this->reconfigure_busy_.load(std::memory_order_acquire)) return;
+      break;
+    }
+    next = active ? previous | 1U : (previous + 2U) & ~1U;
+  } while (!this->processing_request_.compare_exchange_weak(previous, next, std::memory_order_acq_rel));
+  if (!active) {
+    this->processing_active_.store(false, std::memory_order_release);
+    this->voice_present_.store(false, std::memory_order_relaxed);
   }
-  if (this->config_mutex_ == nullptr) {
-    // setup()/install_instance_ will apply the desired state.
-    return;
-  }
+  this->activity_pending_.store(true, std::memory_order_release);
+  if (this->reconfigure_task_handle_ != nullptr) xTaskNotifyGive(this->reconfigure_task_handle_);
+}
 
-  // Pipeline pointers belong to the reconfiguration critical section. This
-  // runs only on consumer attach/detach, never per audio frame.
+bool EspAfe::retire_processing_session_() {
   esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
-  if (!lock) {
-    // Keep the desired atomic state: an in-flight rebuild reads it before
-    // publishing the replacement instance.
-    ESP_LOGW(TAG, "AFE %s requested during reconfigure; state will be applied by the rebuild",
-             active ? "active" : "idle");
-    return;
-  }
+  if (!lock || !this->quiesce_process_(DRAIN_WAIT_TIMEOUT)) return false;
+  this->processing_active_.store(false, std::memory_order_release);
+  AfeInstance old = this->detach_instance_();
+  // Official destroy joins feed/fetch; callback detachment alone cannot join
+  // fetch() because the manager looks up its callback after fetch returns.
+  this->destroy_instance_(&old);
+  this->release_runtime_buffers_();
+  this->voice_present_.store(false, std::memory_order_relaxed);
+  this->manager_epoch_.store(this->processing_request_.load(std::memory_order_acquire) >> 1,
+                             std::memory_order_release);
+  this->drain_request_.store(false, std::memory_order_seq_cst);
+  return true;
+}
 
-  if (active) {
-    if (this->afe_stopped_.load(std::memory_order_acquire)) {
-      ESP_LOGI(TAG, "AFE active requested while stopped; pipeline will rebuild "
-                    "when a feature is enabled");
-      return;
-    }
-    if (!this->is_initialized()) {
-      ESP_LOGI(TAG, "AFE active requested before an instance is ready");
-      return;
-    }
-    if (!this->start_pipeline_()) {
-      ESP_LOGW(TAG, "AFE active: processing pipeline failed to run, staying idle");
-      this->processing_active_.store(false, std::memory_order_release);
-      return;
-    }
-    ESP_LOGI(TAG, "AFE active: processing pipeline running");
-  } else {
-    if (!this->afe_stopped_.load(std::memory_order_acquire) && this->is_initialized()) {
-      if (this->pause_pipeline_()) {
-#ifdef USE_ESP_AFE_GMF_PATH
-        this->drain_feed_input_ring_();
-#endif
-        if (this->fetch_output_ring_) {
-          this->fetch_output_ring_->reset();
-        }
-        this->reset_output_prebuffer_();
-        this->fetch_queue_frames_.store(0, std::memory_order_relaxed);
-        ESP_LOGI(TAG, "AFE idle: processing pipeline suspended (no mic consumers)");
-      } else {
-#ifdef USE_ESP_AFE_GMF_PATH
-        this->flush_pipeline_before_stop_();
-#endif
-        this->stop_pipeline_();
-        ESP_LOGW(TAG, "AFE idle: processing pipeline stopped after pause failure");
-      }
-    } else {
-      ESP_LOGI(TAG, "AFE idle: stopped pipeline remains torn down");
-    }
+bool EspAfe::service_processing_request_() {
+  const uint32_t request = this->processing_request_.load(std::memory_order_acquire);
+  if ((request & 1U) == 0 || this->manager_epoch_.load(std::memory_order_acquire) != (request >> 1)) {
+    if (!this->retire_processing_session_()) return false;
   }
+  if ((this->processing_request_.load(std::memory_order_acquire) & 1U) == 0 ||
+      this->afe_stopped_.load(std::memory_order_acquire)) return true;
+  if (!this->is_initialized() && !this->recreate_instance_(false)) return false;
+
+  esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
+  if (!lock) return false;
+  const uint32_t latest = this->processing_request_.load(std::memory_order_acquire);
+  if ((latest & 1U) == 0 || this->manager_epoch_.load(std::memory_order_acquire) != (latest >> 1)) return true;
+#ifdef USE_ESP_AFE_GMF_PATH
+  // A VAD intent may arrive while this acquisition is being installed. Its
+  // pending notification guarantees another pass if it changes after this
+  // load; only the existing config owner touches the ready manager here.
+  if (esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD,
+                                        this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
+    ESP_LOGW(TAG, "AFE acquisition could not apply VAD intent");
+    return false;
+  }
+#endif
+  this->processing_active_.store(true, std::memory_order_release);
+  if (!this->start_pipeline_()) {
+    this->processing_active_.store(false, std::memory_order_release);
+    return false;
+  }
+  ESP_LOGI(TAG, "AFE acquisition ready (epoch=%u)", (unsigned) (latest >> 1));
+  return true;
 }
 
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -1966,10 +2037,25 @@ void EspAfe::release_runtime_buffers_() {
 }
 
 EspAfe::~EspAfe() {
-  // Quiesce: acquire mutex to ensure process() is not mid-frame.
+  this->processing_active_.store(false, std::memory_order_release);
+  if (this->reconfigure_task_handle_ != nullptr) {
+    this->reconfigure_task_running_.store(false, std::memory_order_release);
+    xTaskNotifyGive(this->reconfigure_task_handle_);
+    xSemaphoreTake(this->reconfigure_done_, portMAX_DELAY);
+#if configSUPPORT_STATIC_ALLOCATION
+    // IDF suspends and joins a remote-core task before freeing its stack/TCB.
+    vTaskDeleteWithCaps(this->reconfigure_task_handle_);
+#else
+    vTaskDelete(this->reconfigure_task_handle_);
+#endif
+    this->reconfigure_task_handle_ = nullptr;
+  }
+  // process() does not take config_mutex_. Join its admitted frame before
+  // freeing anything, as well as the reconfigure owner joined above.
   if (this->config_mutex_ != nullptr) {
     {
-      esp_audio_stack::ScopedLock lock(this->config_mutex_, pdMS_TO_TICKS(500));
+      esp_audio_stack::ScopedLock lock(this->config_mutex_, portMAX_DELAY);
+      this->quiesce_process_(portMAX_DELAY);
       AfeInstance instance = this->detach_instance_();
       this->destroy_instance_(&instance);
       this->release_runtime_buffers_();

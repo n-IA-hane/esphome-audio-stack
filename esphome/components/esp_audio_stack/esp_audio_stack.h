@@ -470,7 +470,10 @@ class ESPAudioStack final : public Component {
   void set_task_priority(uint8_t prio) { this->task_priority_ = prio; }
   void set_task_core(int8_t core) { this->task_core_ = core; }
   void set_task_stack_size(uint32_t size) { this->task_stack_size_ = size; }
-  void set_dma_desc_num(uint32_t desc_num) { this->dma_desc_num_ = desc_num; }
+  void set_dma_desc_num(uint32_t desc_num) {
+    this->dma_desc_num_ = desc_num;
+    this->dma_desc_num_configured_ = true;
+  }
   void set_dma_frame_num(uint32_t frame_num) {
     this->dma_frame_num_ = frame_num;
     this->dma_frame_num_configured_ = true;
@@ -664,10 +667,9 @@ class ESPAudioStack final : public Component {
   void process_aec_and_callbacks_(AudioTaskCtx &ctx);
   void process_tx_path_(AudioTaskCtx &ctx);
   void process_tx_clock_only_(AudioTaskCtx &ctx);
-#ifdef USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF
-  void save_previous_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples);
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
+  void save_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples);
 #endif
-  bool write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes);
   bool write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes, size_t real_speaker_bytes);
   bool can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const;
   void apply_post_processor_gain_(AudioTaskCtx &ctx);
@@ -693,13 +695,23 @@ class ESPAudioStack final : public Component {
   struct TxCompletionRecord {
     uint32_t real_frames{0};
     uint32_t trailing_silence_frames{0};
+    uint32_t generation{0};
+  };
+  struct TxCompletionEvent {
+    TxCompletionRecord record;
+    int64_t timestamp;
+  };
+  struct TxDmaDescriptor {
+    void *address{nullptr};
+    TxCompletionRecord record{};
   };
   static bool IRAM_ATTR tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
   bool prepare_tx_completion_tracking_();
   bool prime_tx_completion_records_(bool preload_dma);
   void drain_tx_completion_events_();
   void reset_tx_completion_tracking_();
-  bool queue_tx_completion_record_(const TxCompletionRecord &record);
+  bool queue_tx_dma_block_(const void *data, size_t bytes, const TxCompletionRecord &record);
+  void reset_tx_playback_();
   void mark_tx_completion_desync_(const char *reason);
   void fail_tx_completion_tracking_(const char *reason);
   void dispatch_speaker_output_callbacks_(uint32_t frames, int64_t timestamp);
@@ -890,7 +902,20 @@ class ESPAudioStack final : public Component {
   size_t speaker_output_callback_count_{0};
 
   QueueHandle_t tx_completion_event_queue_{nullptr};
-  QueueHandle_t tx_completion_record_queue_{nullptr};
+  QueueHandle_t tx_ready_queue_{nullptr};
+  QueueHandle_t tx_free_queue_{nullptr};
+  // PCM staging and descriptor identity are owned here, not inferred from the
+  // opaque buffers selected by i2s_channel_write(). All ISR surfaces are internal.
+  static constexpr size_t MAX_TX_DMA_DESCRIPTORS = 16;
+  TxDmaDescriptor tx_dma_descriptors_[MAX_TX_DMA_DESCRIPTORS]{};
+  TxCompletionRecord *tx_staging_records_{nullptr};
+  size_t tx_staging_record_capacity_{0};
+  size_t tx_dma_descriptor_count_{0};
+  uint32_t tx_logical_frame_size_{0};
+  uint8_t *tx_staging_data_{nullptr};
+  size_t tx_staging_bytes_{0};
+  size_t tx_staging_capacity_{0};
+  std::atomic<uint32_t> tx_playback_generation_{0};
   uint8_t *tx_completion_silence_{nullptr};
   size_t tx_completion_silence_bytes_{0};
   size_t tx_completion_queue_size_{0};
@@ -960,6 +985,7 @@ class ESPAudioStack final : public Component {
   int8_t task_core_{0};        // Core 0: canonical Espressif AEC pattern; -1 = unpinned
   uint32_t task_stack_size_{8192};
   uint32_t dma_desc_num_{6};
+  bool dma_desc_num_configured_{false};
   uint32_t dma_frame_num_{0};
   bool dma_frame_num_configured_{false};
   bool buffers_in_psram_{false};           // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)

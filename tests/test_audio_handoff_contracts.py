@@ -32,59 +32,39 @@ def run_cpp(tmp_path, source, *flags):
 
 @pytest.mark.parametrize("failed_direction", ["rx", "tx"])
 @pytest.mark.parametrize("invalid_state", [False, True])
-def test_directional_io_failure_is_not_cleared_by_other_direction(
-    tmp_path, failed_direction, invalid_state
-):
-    pipeline = (COMPONENT / "audio_pipeline.cpp").read_text()
-    header = (COMPONENT / "esp_audio_stack.h").read_text()
-    # Use the actual mutable error-counter declarations, including any future split.
-    a = header.index("    // ── Loop mutable state")
-    b = header.index("    // DC-HPF state", a)
-    declarations = header[a:b]
-    code = (
-        r"""
-#include <atomic>
-#include <cassert>
-#include <cstdint>
-#include <cstring>
-#define ESP_LOGE(...) ((void)0)
-#define LOG_W_THROTTLED(...) ((void)0)
-using esp_err_t=int;
-constexpr int ESP_OK=0,ESP_FAIL=1,ESP_ERR_INVALID_STATE=2,portMAX_DELAY=0;
-int rx_error=0,tx_error=0;
-const char *esp_err_to_name(int){return "injected";}
-int i2s_channel_read(void*,void *out,size_t n,size_t *got,int){*got=rx_error?0:n;if(!rx_error)memset(out,1,n);return rx_error;}
-int i2s_channel_write(void*,void*,size_t n,size_t *sent,int){*sent=tx_error?0:n;return tx_error;}
-struct AudioTaskCtx {
- int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16;
-"""
-        + declarations
-        + r"""
-};
-struct ESPAudioStack {
- void *rx_handle_=this,*tx_handle_=this;
- std::atomic<bool> audio_stack_running_{true},has_i2s_error_{false};
- bool read_rx_frame_(AudioTaskCtx&,const char*);
- bool write_tx_frame_(AudioTaskCtx&,void*,size_t);
-};
-"""
-        + method(pipeline, "bool ESPAudioStack::read_rx_frame_(")
-        + "\n"
-        + method(pipeline, "bool ESPAudioStack::write_tx_frame_(")
-    )
-    code += f"\nint main(){{ AudioTaskCtx c; ESPAudioStack s; {failed_direction}_error={2 if invalid_state else 1};\n"
-    code += r"""
- for(int i=0;i<101;i++) {s.read_rx_frame_(c,"test");s.write_tx_frame_(c,c.storage,sizeof(c.storage));}
- assert(s.has_i2s_error_ && !s.audio_stack_running_ && "healthy opposite direction must not mask persistent failure");
- // A successful operation of the SAME direction clears its own error streak.
- s.audio_stack_running_=true;s.has_i2s_error_=false;rx_error=0;tx_error=0;
- s.read_rx_frame_(c,"test");s.write_tx_frame_(c,c.storage,sizeof(c.storage));
- rx_error=1;for(int i=0;i<100;i++)s.read_rx_frame_(c,"test");
- assert(!s.has_i2s_error_);rx_error=0;s.read_rx_frame_(c,"test");
- rx_error=1;s.read_rx_frame_(c,"test");assert(!s.has_i2s_error_);
+def test_directional_io_failure_is_not_cleared_by_other_direction(tmp_path, failed_direction, invalid_state):
+    from test_tx_dma_completion_runtime import completion_source
+    pipeline=(COMPONENT/'audio_pipeline.cpp').read_text()
+    code=completion_source().split('int main(int argc,char**argv)')[0]
+    code=code.replace('struct AudioTaskCtx{uint8_t speaker_channels=1;',
+                      'struct AudioTaskCtx{int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16;int consecutive_rx_errors=0,invalid_rx_state_errors=0;uint8_t speaker_channels=1;')
+    code=code.replace(' bool write_tx_frame_(AudioTaskCtx&',
+                      ' bool read_rx_frame_(AudioTaskCtx&,const char*);void *rx_handle_=this;\n bool write_tx_frame_(AudioTaskCtx&')
+    adapter="int rx_error=0;int i2s_channel_read(void*,void*,size_t n,size_t *read,unsigned){*read=rx_error?0:n;return rx_error;}\n"
+    # The actual RX method is added after its adapter; TX uses its new DMA owner.
+    pos=code.index('struct ESPAudioStack{')
+    code=code[:pos]+adapter+code[pos:]
+    code+=method(pipeline,'bool ESPAudioStack::read_rx_frame_(')+'\n'
+    if failed_direction=='rx':
+        code+=f'int main(){{Rig r;rx_error={2 if invalid_state else 1};\n'+r"""
+ for(unsigned i=0;i<101;i++){r.irq();r.drain();r.stack.read_rx_frame_(r.ctx,"test");if(r.stack.audio_stack_running_)r.write(false);}
+ assert(r.stack.has_i2s_error_&&!r.stack.audio_stack_running_&&"healthy TX must not mask failed RX");
 }
 """
-    run_cpp(tmp_path, code)
+    elif invalid_state:
+        code+=r"""
+int main(){Rig r;i2s_event_data_t bad{nullptr,r.pcm[0].data(),1};r.stack.tx_on_sent_callback(&r.driver,&bad,&r.stack);
+ r.stack.drain_tx_completion_events_();assert(r.stack.read_rx_frame_(r.ctx,"healthy"));
+ assert(r.stack.has_i2s_error_&&!r.stack.audio_stack_running_&&"healthy RX must not mask TX geometry failure");}
+"""
+    else:
+        code+=r"""
+int main(){Rig r;for(unsigned i=0;i<Rig::N;i++)r.write(false);
+ uint8_t pcm[Rig::BYTES]{};assert(!r.stack.write_tx_dma_blocks_(r.ctx,pcm,Rig::BYTES,0));
+ assert(r.stack.read_rx_frame_(r.ctx,"healthy"));
+ assert(r.stack.has_i2s_error_&&!r.stack.audio_stack_running_&&"missing TX clock must end bounded admission");}
+"""
+    run_cpp(tmp_path,code)
 
 
 def test_last_microphone_stop_unregisters_even_after_failed_session(tmp_path):
@@ -155,8 +135,9 @@ int main(){
 
 
 @pytest.mark.parametrize("ratio", [1, 3])
+@pytest.mark.parametrize("policy", ["previous_frame", "ring_buffer"])
 def test_previous_frame_follows_successful_tx_including_partial_and_clock_silence(
-    tmp_path, ratio
+    tmp_path, ratio, policy
 ):
     pipeline = (COMPONENT / "audio_pipeline.cpp").read_text()
     code = r"""
@@ -186,7 +167,9 @@ struct AudioTaskCtx {
 struct Ring {
  std::vector<int16_t> pending;
  size_t read(void *out,size_t cap,unsigned){size_t bytes=pending.size()*2;assert(bytes<=cap);
- if(bytes)memcpy(out,pending.data(),bytes);pending.clear();return bytes;}
+ if(bytes)memcpy(out,pending.data(),bytes);pending.erase(pending.begin(),pending.begin()+bytes/2);return bytes;}
+ size_t available()const{return pending.size()*2;}
+ void write(void *p,size_t n){auto *v=static_cast<int16_t*>(p);pending.insert(pending.end(),v,v+n/2);}
 };
 struct Converter {
  unsigned calls=0,ratio=1;
@@ -195,7 +178,7 @@ struct Converter {
  }
 };
 struct ESPAudioStack {
- void *tx_handle_=this;Ring ring;Ring *speaker_buffer_=&ring;
+ void *tx_handle_=this;Ring ring,reference_ring;Ring *speaker_buffer_=&ring,*aec_ref_ring_buffer_=&reference_ring;
  int16_t saved[4]{};int16_t *direct_aec_ref_=saved;bool direct_aec_ref_valid_=false;
  std::atomic<bool> has_i2s_error_{false},audio_stack_running_{true};
  Converter play_ref_rate_converter_;std::vector<int16_t> wire;bool write_ok=true;
@@ -208,12 +191,15 @@ struct ESPAudioStack {
  }
 };
 """
+    if policy == "ring_buffer":
+        code = code.replace("#define USE_ESP_AUDIO_STACK_PREVIOUS_FRAME_REF", "#define USE_ESP_AUDIO_STACK_RING_REF")
     # New helper is optional in the pre-fix source so the RED is behavioral.
-    signature = "void ESPAudioStack::save_previous_tx_reference_("
+    signature = ("void ESPAudioStack::save_tx_reference_(" if "void ESPAudioStack::save_tx_reference_(" in pipeline
+                 else "void ESPAudioStack::save_previous_tx_reference_(")
     if signature in pipeline:
         code = code.replace(
             " void process_tx_path_",
-            " void save_previous_tx_reference_(AudioTaskCtx&,const int16_t*);\n void process_tx_path_",
+            " void "+signature.split("::")[1].split("(")[0]+"(AudioTaskCtx&,const int16_t*);\n void process_tx_path_",
         )
         code += method(pipeline, signature) + "\n"
     for signature in (
@@ -233,13 +219,16 @@ struct ESPAudioStack {
  for(int i=0;i<4;i++){s.process_tx_path_(c);s.fill_mono_aec_reference_(c);for(auto v:reference)assert(v==0);}
  for(int i=0;i<3;i++){s.process_tx_clock_only_(c);s.fill_mono_aec_reference_(c);for(auto v:reference)assert(v==0);}
  assert(s.play_ref_rate_converter_.calls==9);
- // Post-volume reference is saved once, and only after successful physical write.
+ // Post-volume reference is saved once, only after successful TX admission.
  c.hot_output_volume_q31=1<<30;s.ring.pending.assign(c.bus_frame_size,1000);
  s.process_tx_path_(c);s.fill_mono_aec_reference_(c);for(auto v:reference)assert(v==500);
  s.write_ok=false;s.ring.pending.assign(c.bus_frame_size,2000);s.process_tx_path_(c);
  assert(!s.direct_aec_ref_valid_);s.fill_mono_aec_reference_(c);for(auto v:reference)assert(v==0);
 }
 """
+    if policy == "ring_buffer":
+        code = code.replace("assert(!s.direct_aec_ref_valid_);s.fill_mono_aec_reference_(c);for(auto v:reference)assert(v==0);",
+                            "assert(s.reference_ring.available()==0&&\"failed TX must not publish new reference\");")
     run_cpp(tmp_path, code)
 
 

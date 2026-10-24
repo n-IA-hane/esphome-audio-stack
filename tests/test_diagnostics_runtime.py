@@ -56,7 +56,7 @@ struct ESPAudioStack{
  std::atomic<uint8_t> i2s_hardware_state_{0};
  std::atomic<bool> has_mic_consumers_{false},speaker_running_{false},speaker_paused_{false},has_i2s_error_{false};
  std::atomic<unsigned> tx_completion_idle_event_drops_{0},tx_completion_pending_real_records_{0};
- unsigned tx_completion_dma_frames_=480,tx_completion_queue_size_=12;
+ unsigned tx_completion_dma_frames_=480,tx_completion_queue_size_=12,tx_dma_descriptor_count_=6;
  unsigned i2s_num_=0,sample_rate_=48000,output_sample_rate_=16000,bits_per_sample_=16,slot_bit_width_=0;
  bool use_tdm_bus_=false,use_tdm_ref_=false,use_stereo_aec_ref_=true,mic_channel_right_=false,rx_slot_mode_stereo_=true,ref_channel_right_=true;
  unsigned tdm_mic_slot_=0,tdm_ref_slot_=1,tdm_tx_slot_=0,tdm_total_slots_=4;int tdm_second_mic_slot_=-1;

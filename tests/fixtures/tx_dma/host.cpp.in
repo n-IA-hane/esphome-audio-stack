@@ -1,0 +1,215 @@
+// IDF 5.5.6 ordering modeled with deterministic queues and descriptor playback.
+// Audio Stack method bodies are inserted from the current source tree below.
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <vector>
+#include <string>
+#include <set>
+using BaseType_t=int;using TickType_t=uint32_t;using esp_err_t=int;
+constexpr int pdTRUE=1,pdFALSE=0,ESP_OK=0,ESP_ERR_INVALID_STATE=2,ESP_ERR_TIMEOUT=3,ESP_ERR_INVALID_ARG=4;
+constexpr unsigned portMAX_DELAY=0xffffffffU;
+#define IRAM_ATTR
+#define ESP_LOGE(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
+#define LOG_W_THROTTLED(...) ((void)0)
+#define pdMS_TO_TICKS(t) (t)
+struct Queue{size_t capacity,size;std::deque<std::vector<uint8_t>> items;};using QueueHandle_t=Queue*;
+int allocation_count=0,fail_allocation=0;std::set<void*> owned_allocations;
+QueueHandle_t xQueueCreate(size_t n,size_t bytes){if(++allocation_count==fail_allocation)return nullptr;auto*q=new Queue{n,bytes,{}};owned_allocations.insert(q);return q;}
+QueueHandle_t xQueueCreateWithCaps(size_t n,size_t bytes,int){return xQueueCreate(n,bytes);}
+void vQueueDeleteWithCaps(Queue*q){if(q){assert(owned_allocations.erase(q)==1);delete q;}}
+void vQueueDelete(Queue*q){vQueueDeleteWithCaps(q);}
+void xQueueReset(Queue*q){q->items.clear();}
+constexpr int MALLOC_CAP_INTERNAL=1,MALLOC_CAP_8BIT=2;
+void*heap_caps_calloc(size_t n,size_t bytes,int){if(++allocation_count==fail_allocation)return nullptr;auto*p=calloc(n,bytes);if(p)owned_allocations.insert(p);return p;}
+void heap_caps_free(void*p){if(p){assert(owned_allocations.erase(p)==1);free(p);}}
+
+int xQueueSend(Queue*q,const void*p,unsigned){if(q->items.size()==q->capacity)return 0;q->items.emplace_back(q->size);memcpy(q->items.back().data(),p,q->size);return 1;}
+void (*before_receive)(Queue*)=nullptr;
+int xQueueReceive(Queue*q,void*p,unsigned){if(before_receive)before_receive(q);if(q->items.empty())return 0;memcpy(p,q->items.front().data(),q->size);q->items.pop_front();return 1;}
+int xQueueSendFromISR(Queue*q,const void*p,int*){return xQueueSend(q,p,0);}
+int xQueueSendToBackFromISR(Queue*q,const void*p,int*y){return xQueueSendFromISR(q,p,y);}
+int xQueueReceiveFromISR(Queue*q,void*p,int*){return xQueueReceive(q,p,0);}
+int xQueueIsQueueFullFromISR(Queue*q){return q->items.size()==q->capacity;}
+size_t uxQueueSpacesAvailable(Queue*q){return q->capacity-q->items.size();}
+int64_t now_us=0;int64_t esp_timer_get_time(){return now_us;}
+const char*esp_err_to_name(int){return "injected";}
+template<class T>T isr_load_flag(std::atomic<T>&a){return a.load();}
+uint32_t isr_load_u32(std::atomic<uint32_t>&a){return a.load();}
+void isr_increment_u32(std::atomic<uint32_t>&a){++a;}
+void isr_decrement_u32(std::atomic<uint32_t>&a){--a;}
+struct I2S;using i2s_chan_handle_t=I2S*;
+struct i2s_event_data_t{void*data;void*dma_buf;size_t size;};
+struct I2S{size_t buf_size=512,desc_num=6,rw_pos=512;uint8_t*curr_ptr=nullptr;Queue*ready;
+ bool(*callback)(I2S*,i2s_event_data_t*,void*)=nullptr;void*user=nullptr;};
+unsigned opaque_write_calls=0;
+int i2s_channel_write(I2S*h,const void*src,size_t n,size_t*written,unsigned){
+ // IDF selects a reusable descriptor internally; callers do not receive it.
+ ++opaque_write_calls;*written=0;const auto*p=static_cast<const uint8_t*>(src);
+ while(n){if(h->curr_ptr==nullptr||h->rw_pos==h->buf_size||uxQueueSpacesAvailable(h->ready)<=1){
+  if(!xQueueReceive(h->ready,&h->curr_ptr,0))return ESP_ERR_TIMEOUT;h->rw_pos=0;}
+ size_t take=std::min(n,h->buf_size-h->rw_pos);memcpy(h->curr_ptr+h->rw_pos,p,take);h->rw_pos+=take;p+=take;n-=take;*written+=take;}
+ return ESP_OK;
+}
+int i2s_channel_preload_data(I2S*,const void*,size_t n,size_t*loaded){*loaded=n;return ESP_OK;}
+struct ESPAudioStack{
+ struct AudioTaskCtx{uint8_t speaker_channels=1;int invalid_tx_state_errors=0,consecutive_tx_errors=0;};
+ // PRODUCTION_RECORD_TYPES
+ Queue*tx_completion_event_queue_=nullptr,*tx_completion_record_queue_=nullptr;
+ // CAUSAL_STATE_FIELDS
+ uint8_t*tx_completion_silence_=nullptr;size_t tx_completion_silence_bytes_=0;
+ size_t tx_completion_dma_buffer_bytes_=512,tx_completion_queue_size_=12;uint32_t tx_completion_dma_frames_=256,sample_rate_=16000;
+ size_t speaker_output_callback_count_=1;
+ std::atomic<bool>tx_completion_tracking_active_{true},audio_stack_running_{true},has_i2s_error_{false},teardown_pending_{false};
+ volatile bool tx_completion_desync_=false;
+ std::atomic<uint32_t>tx_completion_pending_real_records_{0},tx_completion_idle_event_drops_{0};I2S*tx_handle_=nullptr;
+ uint32_t notified=0;int64_t notified_timestamp=-1;
+ void dispatch_speaker_output_callbacks_(uint32_t n,int64_t t){notified+=n;notified_timestamp=t;}
+ static bool tx_on_sent_callback(I2S*,i2s_event_data_t*,void*);
+ void drain_tx_completion_events_();bool queue_tx_completion_record_(const TxCompletionRecord&);
+ bool prepare_tx_completion_tracking_();bool prime_tx_completion_records_(bool);void reset_tx_completion_tracking_();void reset_tx_playback_();
+ bool queue_tx_dma_block_(const void*,size_t,const TxCompletionRecord&);
+ void fail_tx_completion_tracking_(const char*);void mark_tx_completion_desync_(const char*);
+ bool write_tx_frame_(AudioTaskCtx&,void*,size_t);bool write_tx_dma_blocks_(AudioTaskCtx&,void*,size_t,size_t);
+};
+// CURRENT_PRODUCTION_METHODS
+struct Rig{
+#ifdef CAUSAL_DMA
+ static constexpr size_t N=2,BYTES=512;
+#else
+ static constexpr size_t N=6,BYTES=512;
+#endif
+ ESPAudioStack stack;I2S driver;ESPAudioStack::AudioTaskCtx ctx;
+ std::vector<std::vector<uint8_t>>pcm{N,std::vector<uint8_t>(BYTES,0)};
+ std::vector<uint8_t> emitted;size_t next=0;unsigned actual_frames=0;int64_t actual_timestamp=-1,first_actual=-1,first_write=-1;
+ explicit Rig(bool preloaded=true){driver.ready=xQueueCreate(N-1,sizeof(uint8_t*));driver.callback=ESPAudioStack::tx_on_sent_callback;driver.user=&stack;stack.tx_handle_=&driver;
+#ifdef CAUSAL_DMA
+ stack.tx_dma_descriptor_count_=N;stack.tx_logical_frame_size_=256;
+ assert(stack.prepare_tx_completion_tracking_());stack.tx_completion_tracking_active_=true;
+#else
+ stack.tx_completion_event_queue_=xQueueCreate(N*2,sizeof(int64_t));stack.tx_completion_record_queue_=xQueueCreate(N*2,sizeof(ESPAudioStack::TxCompletionRecord));
+ for(size_t i=0;i<N;i++)assert(stack.queue_tx_completion_record_({0,0}));
+#endif
+ if(preloaded)driver.curr_ptr=pcm[N-1].data();}
+ ~Rig(){vQueueDelete(driver.ready);vQueueDelete(stack.tx_completion_event_queue_);
+#ifdef CAUSAL_DMA
+ vQueueDelete(stack.tx_ready_queue_);vQueueDelete(stack.tx_free_queue_);heap_caps_free(stack.tx_staging_records_);heap_caps_free(stack.tx_staging_data_);
+#else
+ vQueueDelete(stack.tx_completion_record_queue_);
+#endif
+ heap_caps_free(stack.tx_completion_silence_);}
+ void irq(){now_us+=1000000LL*stack.tx_completion_dma_frames_/stack.sample_rate_;auto*data=pcm[next].data();
+ const size_t frame_bytes=BYTES/stack.tx_completion_dma_frames_;int last_real=-1;
+ for(size_t f=0;f<stack.tx_completion_dma_frames_;++f){bool nonzero=false;for(size_t b=0;b<frame_bytes;++b)nonzero=nonzero||data[f*frame_bytes+b]!=0;if(nonzero){++actual_frames;last_real=f;emitted.insert(emitted.end(),data+f*frame_bytes,data+(f+1)*frame_bytes);}}
+ if(last_real>=0){actual_timestamp=now_us-static_cast<int64_t>(stack.tx_completion_dma_frames_-1-last_real)*1000000LL/stack.sample_rate_;if(first_actual<0)first_actual=actual_timestamp;}
+ i2s_event_data_t evt{nullptr,data,BYTES};driver.callback(&driver,&evt,driver.user);
+ // IDF invokes on_sent BEFORE clearing and before exposing the reusable buffer.
+#ifndef CAUSAL_DMA
+ memset(data,0,BYTES);
+#endif
+ if(xQueueIsQueueFullFromISR(driver.ready)){uint8_t*old;xQueueReceive(driver.ready,&old,0);}xQueueSend(driver.ready,&data,0);next=(next+1)%N;}
+ void drain(){stack.drain_tx_completion_events_();assert(!stack.has_i2s_error_);}
+ void write(bool real){if(real&&first_write<0)first_write=now_us;std::vector<uint8_t>data(BYTES,real?0x5a:0);assert(stack.write_tx_dma_blocks_(ctx,data.data(),BYTES,real?stack.tx_completion_dma_frames_*2*ctx.speaker_channels:0));}
+};
+#ifdef CAUSAL_DMA
+
+Rig *generation_rig=nullptr;
+void replace_generation_before_refill(Queue *queue){
+ if(queue!=generation_rig->stack.tx_ready_queue_)return;
+ before_receive=nullptr;
+ generation_rig->stack.reset_tx_playback_();
+ generation_rig->write(true);
+}
+#endif
+int main(int argc,char**argv){assert(argc==2);int scenario=std::stoi(argv[1]);
+#ifdef CAUSAL_DMA
+ if(scenario>=20 && scenario<=23){now_us=0;Rig r;const unsigned quantum=1U<<(scenario-20);
+  r.stack.tx_completion_tracking_active_=false;r.stack.tx_logical_frame_size_=quantum*256;
+  assert(r.stack.prepare_tx_completion_tracking_());r.stack.tx_completion_tracking_active_=true;
+  std::vector<uint8_t> expected;
+  // RX geometry is unchanged: six descriptors, or the existing TDM quantum margin.
+  const unsigned rx_descriptors=std::max(6U,(quantum*5U+3U)/4U);unsigned rx_queued=0,rx_drops=0;
+  for(unsigned q=0;q<250;++q){
+   for(unsigned b=0;b<quantum;++b){r.irq();if(rx_queued==rx_descriptors-1)++rx_drops;else ++rx_queued;}
+   assert(rx_queued>=quantum);rx_queued-=quantum;r.drain();
+   for(unsigned b=0;b<quantum;++b){std::vector<uint8_t> data(Rig::BYTES,static_cast<uint8_t>(1+(q*quantum+b)%250));
+    assert(r.stack.write_tx_dma_blocks_(r.ctx,data.data(),Rig::BYTES,Rig::BYTES));expected.insert(expected.end(),data.begin(),data.end());}
+  }
+  for(unsigned i=0;i<quantum+Rig::N+1;++i){r.irq();r.drain();}
+  assert(rx_drops==0 && r.emitted==expected && r.stack.notified==r.actual_frames && r.stack.tx_completion_pending_real_records_==0);return 0;
+ }
+ if(scenario==15){for(int failure=1;failure<=6;++failure){
+   {now_us=0;Rig r;r.stack.tx_completion_tracking_active_=false;
+    // Force all cold allocations to be needed again, then fail each prefix.
+    heap_caps_free(r.stack.tx_staging_records_);r.stack.tx_staging_records_=nullptr;r.stack.tx_staging_record_capacity_=0;
+    heap_caps_free(r.stack.tx_staging_data_);r.stack.tx_staging_data_=nullptr;r.stack.tx_staging_bytes_=0;
+    heap_caps_free(r.stack.tx_completion_silence_);r.stack.tx_completion_silence_=nullptr;r.stack.tx_completion_silence_bytes_=0;
+    fail_allocation=allocation_count+failure;assert(!r.stack.prepare_tx_completion_tracking_());
+    assert(!r.stack.tx_completion_tracking_active_);fail_allocation=0;
+    assert(r.stack.prepare_tx_completion_tracking_());r.stack.tx_completion_tracking_active_=true;r.write(true);
+    for(unsigned i=0;i<Rig::N+1;i++){r.irq();r.drain();}assert(r.stack.notified==256);
+   }assert(owned_allocations.empty());
+  }return 0;
+ }
+ if(scenario==16){now_us=0;Rig r;r.stack.tx_completion_tracking_active_=false;r.stack.tx_logical_frame_size_=32*256;
+  assert(r.stack.prepare_tx_completion_tracking_());assert(r.stack.tx_staging_capacity_==32);r.stack.tx_completion_tracking_active_=true;
+  for(unsigned i=0;i<32;i++)r.write(true);
+  for(unsigned i=0;i<34;i++){r.irq();r.drain();}
+  assert(r.actual_frames==32*256 && r.stack.notified==32*256 && r.stack.tx_completion_pending_real_records_==0);return 0;
+ }
+ if(scenario==17 || scenario==18){now_us=0;Rig r;for(unsigned i=0;i<Rig::N;i++)r.irq();
+  uint8_t foreign[Rig::BYTES]{};i2s_event_data_t event{nullptr,scenario==17?foreign:r.pcm[0].data(),scenario==17?Rig::BYTES:1};
+  r.driver.callback(&r.driver,&event,&r.stack);r.stack.drain_tx_completion_events_();
+  assert(r.stack.has_i2s_error_ && !r.stack.audio_stack_running_ && r.stack.notified==0);return 0;
+ }
+ if(scenario==19){now_us=0;Rig r;for(unsigned i=0;i<r.stack.tx_staging_capacity_;i++)r.write(true);
+  std::vector<uint8_t> pcm(Rig::BYTES,0x5a);assert(!r.stack.write_tx_dma_blocks_(r.ctx,pcm.data(),Rig::BYTES,Rig::BYTES));
+  assert(r.stack.has_i2s_error_ && !r.stack.audio_stack_running_ && r.stack.notified==0);return 0;
+ }
+ if(scenario==14){now_us=0;Rig r;generation_rig=&r;before_receive=replace_generation_before_refill;
+  r.irq();r.drain();
+  for(unsigned i=0;i<Rig::N;i++){r.irq();r.drain();}
+  assert(r.actual_frames==256 && r.stack.notified==256 && "a new-generation block must survive a concurrent reset");return 0;
+ }
+ if(scenario==5 || scenario==8){now_us=0;Rig r;
+  r.write(true);if(scenario==5)r.irq();
+  r.stack.reset_tx_playback_();assert(r.stack.tx_completion_pending_real_records_==(scenario==5?1U:0U));
+  r.write(true);for(unsigned i=0;i<Rig::N+2;i++){r.irq();r.drain();}
+  assert(r.stack.notified==256 && r.stack.tx_completion_pending_real_records_==0);
+  assert(r.actual_frames==(scenario==5?512U:256U));return 0;
+ }
+ if(scenario==9){now_us=0;Rig r;std::vector<uint8_t>pcm(Rig::BYTES,0);std::fill(pcm.begin(),pcm.begin()+Rig::BYTES/2,0x5a);
+  assert(r.stack.write_tx_dma_blocks_(r.ctx,pcm.data(),Rig::BYTES,Rig::BYTES/2));
+  for(unsigned i=0;i<Rig::N+1;i++){r.irq();r.drain();}
+  assert(r.stack.notified==128 && r.actual_frames==128 && r.actual_timestamp==r.stack.notified_timestamp);return 0;
+ }
+ if(scenario>=10){now_us=0;Rig r;const unsigned channels=scenario==10||scenario==12?2:1;
+  const unsigned bytes_per_sample=scenario==11||scenario==12?4:2;
+  r.ctx.speaker_channels=channels;r.stack.tx_completion_dma_frames_=Rig::BYTES/(channels*bytes_per_sample);
+  for(unsigned i=0;i<12;i++){r.irq();r.drain();assert(r.actual_frames==r.stack.notified);r.write(true);}
+  for(unsigned i=0;i<Rig::N+1;i++){r.irq();r.drain();assert(r.actual_frames==r.stack.notified);}
+  assert(opaque_write_calls==0&&r.stack.tx_completion_pending_real_records_==0);return 0;
+ }
+#endif
+ if(scenario<3){now_us=0;Rig r;
+  for(unsigned i=0;i<30;i++){r.irq();r.drain();assert(r.actual_frames==r.stack.notified);r.write(scenario!=1 && (scenario==0 || i%2==0));}
+  for(unsigned i=0;i<Rig::N+1;i++){r.irq();r.drain();assert(r.actual_frames==r.stack.notified);}
+#ifdef CAUSAL_DMA
+  if(scenario!=1)assert(r.first_actual-r.first_write<=3*1000000LL*r.stack.tx_completion_dma_frames_/r.stack.sample_rate_);
+#endif
+  printf("first_write=%lld first_actual=%lld staging_latency_us=%lld\n",(long long)r.first_write,(long long)r.first_actual,(long long)(r.first_actual-r.first_write));return 0;}
+ now_us=0;Rig r(scenario==3);for(size_t i=0;i<Rig::N;i++)r.irq();r.drain();r.write(true);
+ r.irq();r.drain();bool causal=r.actual_frames==r.stack.notified;
+ for(size_t i=0;i<Rig::N;i++){r.irq();r.drain();causal=causal&&(r.actual_frames==r.stack.notified);}
+ printf("first_write=%lld first_actual=%lld staging_latency_us=%lld\n",(long long)r.first_write,(long long)r.first_actual,(long long)(r.first_actual-r.first_write));fflush(stdout);
+ assert(causal&&"completion must belong to the descriptor which emitted the PCM");assert(r.actual_frames==256);
+#ifdef CAUSAL_DMA
+ assert(r.first_actual-r.first_write<=3*1000000LL*r.stack.tx_completion_dma_frames_/r.stack.sample_rate_);
+#endif
+}

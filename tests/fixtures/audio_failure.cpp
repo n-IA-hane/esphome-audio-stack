@@ -57,6 +57,7 @@ struct ESPAudioStack {
   void deinit_i2s_(){++closes;hardware_open=false;}
   bool register_mic_consumer(void*){return true;}
   void unregister_mic_consumer(void*){}
+  void reset_tx_playback_(){}
   unsigned get_speaker_channels()const{return 1;}
   unsigned get_speaker_buffer_available()const{return ring.queued;}
   bool has_pending_speaker_output()const{return false;}

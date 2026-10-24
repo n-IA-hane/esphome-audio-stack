@@ -153,13 +153,15 @@ def test_afe_rebuild_timeout_never_destroys_a_busy_instance() -> None:
         cpp.index("\nbool EspAfe::", cpp.index("bool EspAfe::recreate_instance_(") + 1)
     ]
 
-    timeout = rebuild.index("Drain timeout waiting for process() to quiesce")
-    abort = rebuild.index("if (!drained)")
+    quiesce = cpp[cpp.index("bool EspAfe::quiesce_process_(") : cpp.index("bool EspAfe::recreate_instance_(")]
+    timeout = quiesce.index("Drain timeout waiting for process() to quiesce")
+    abort = quiesce.index("if (!drained)")
     detach = rebuild.index("AfeInstance old = this->detach_instance_()")
-    assert timeout < abort < detach
-    assert "this->drain_request_.store(false, std::memory_order_seq_cst);" in rebuild[abort:detach]
-    assert "return false;" in rebuild[abort:detach]
-    wait = rebuild[rebuild.index("this->process_drain_waiter_.store(waiter") : timeout]
+    assert timeout < abort
+    assert rebuild.index("if (!this->quiesce_process_(DRAIN_WAIT_TIMEOUT)) return false;") < detach
+    assert "this->drain_request_.store(false, std::memory_order_seq_cst);" in quiesce[abort:]
+    assert "return drained;" in quiesce[abort:]
+    wait = quiesce[quiesce.index("this->process_drain_waiter_.store(waiter") : timeout]
     assert wait.count("this->process_busy_.load(std::memory_order_seq_cst)") >= 2
 
 
@@ -183,8 +185,12 @@ def test_rebuild_state_is_published_without_racing_live_afe_fields() -> None:
     first_live_size = process.index("int qs = this->process_chunksize_")
     assert busy < drain < first_live_size
 
-    setter = cpp[cpp.index("void EspAfe::set_processing_active") : cpp.index("\n#ifdef USE_ESP_AFE_GMF_PATH", cpp.index("void EspAfe::set_processing_active"))]
-    assert setter.index("ScopedLock lock") < setter.index("this->start_pipeline_()")
+    setter = cpp[cpp.index("void EspAfe::set_processing_active") : cpp.index("\nbool EspAfe::retire_processing_session_")]
+    assert "ScopedLock" not in setter and "this->start_pipeline_()" not in setter
+    assert "xTaskNotifyGive(this->reconfigure_task_handle_)" in setter
+    service_start = cpp.index("bool EspAfe::service_processing_request_")
+    service = cpp[service_start : cpp.index("\n}\n", service_start) + 2]
+    assert service.index("ScopedLock lock") < service.index("this->start_pipeline_()")
 
     release = cpp[cpp.index("void EspAfe::release_runtime_buffers_()") : cpp.index("\nEspAfe::~EspAfe()")]
     assert "this->direct_feed_signal_ = nullptr;" not in release

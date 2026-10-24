@@ -500,6 +500,43 @@ bool CodecDevBackend::read_layout_(esp_codec_dev_type_t direction, const SampleC
   return true;
 }
 
+bool CodecDevBackend::tx_dma_layout_matches(const SampleConfig &requested) const {
+  const auto &layout = this->tx_layout_;
+  if (!layout.valid || layout.bus.total_slot != requested.channels ||
+      layout.bus.slot_mask != requested.channel_mask || layout.bus.total_slot == 0 ||
+      layout.bus.total_slot > ESP_CODEC_DEV_MAX_MAP_CHANNELS) return false;
+  // get_data_layout describes the application's memory, potentially before a
+  // CodecDev software remap. Derive the actual DMA order independently from
+  // the public codec order table and the negotiated physical slot mask.
+  uint32_t device_order = 0x87654321U;
+  if (this->tx_codec_if_ != nullptr && this->tx_codec_if_->hw_base.get_order_list != nullptr) {
+    const auto &hw = this->tx_codec_if_->hw_base;
+    const esp_codec_dev_device_map_info_t *maps = nullptr;
+    int count = 0;
+    if (hw.get_order_list(&hw, &maps, &count) != ESP_CODEC_DEV_OK || maps == nullptr) return false;
+    bool found = false;
+    for (int i = 0; i < count; ++i) {
+      if (maps[i].mode == layout.bus.mode && maps[i].channels == layout.bus.total_slot) {
+        device_order = maps[i].map.value;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  } else if (layout.bus.mode == ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS && this->tx_codec_if_ != nullptr) {
+    return false;
+  }
+  uint32_t dma_order = 0;
+  uint8_t selected = 0;
+  for (uint8_t slot = 0; slot < layout.bus.total_slot; ++slot) {
+    if ((layout.bus.slot_mask & (1U << slot)) == 0) continue;
+    const uint32_t channel = (device_order >> (4U * slot)) & 0x0fU;
+    if (channel == 0 || channel > ESP_CODEC_DEV_MAX_MAP_CHANNELS) return false;
+    dma_order |= channel << (4U * selected++);
+  }
+  return dma_order != 0 && dma_order == layout.memory.value;
+}
+
 bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx_config) {
   if (!this->prepared_) {
     return false;
@@ -551,7 +588,8 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
   if ((tx_config != nullptr && this->tx_dev_ != nullptr &&
        !this->read_layout_(ESP_CODEC_DEV_TYPE_OUT, *tx_config, this->tx_layout_)) ||
       (rx_config != nullptr && this->rx_dev_ != nullptr &&
-       !this->read_layout_(ESP_CODEC_DEV_TYPE_IN, *rx_config, this->rx_layout_))) {
+       !this->read_layout_(ESP_CODEC_DEV_TYPE_IN, *rx_config, this->rx_layout_)) ||
+      (tx_config != nullptr && this->tx_dev_ != nullptr && !this->tx_dma_layout_matches(*tx_config))) {
     if (this->rx_dev_ != nullptr) esp_codec_dev_close(this->rx_dev_);
     if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
     this->rx_layout_ = {};
@@ -582,17 +620,6 @@ bool CodecDevBackend::read(void *data, size_t len) {
     return false;
   }
   const int ret = esp_codec_dev_read(this->rx_dev_, data, static_cast<int>(len));
-  if (ret != ESP_CODEC_DEV_OK) {
-    return false;
-  }
-  return true;
-}
-
-bool CodecDevBackend::write(void *data, size_t len) {
-  if (this->tx_dev_ == nullptr || data == nullptr || len == 0) {
-    return false;
-  }
-  const int ret = esp_codec_dev_write(this->tx_dev_, data, static_cast<int>(len));
   if (ret != ESP_CODEC_DEV_OK) {
     return false;
   }

@@ -82,7 +82,6 @@ class CodecDevBackend {
   void teardown();
 
   bool read(void *data, size_t len);
-  bool write(void *data, size_t len);
 
   void set_output_volume(float volume);
   void set_output_volume_curve(float min_db);
@@ -96,6 +95,7 @@ class CodecDevBackend {
   bool is_prepared() const { return this->prepared_; }
   const StreamLayout &rx_layout() const { return this->rx_layout_; }
   const StreamLayout &tx_layout() const { return this->tx_layout_; }
+  bool tx_dma_layout_matches(const SampleConfig &requested) const;
   bool has_output_codec() const { return this->output_codec_.enabled; }
   bool has_input_codec() const { return this->es7210_.enabled || this->input_codec_.enabled; }
   const char *input_codec_name() const;

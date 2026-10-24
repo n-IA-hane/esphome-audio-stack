@@ -27,6 +27,7 @@ def test_codec_backend_failure_ownership_and_retry(tmp_path, split):
         "const audio_codec_if_t *CodecDevBackend::new_generic_codec_",
         "bool CodecDevBackend::setup(",
         "bool CodecDevBackend::read_layout_",
+        "bool CodecDevBackend::tx_dma_layout_matches",
         "bool CodecDevBackend::open(",
         "bool CodecDevBackend::set_input_gain(",
         "bool CodecDevBackend::set_input_channel_gain(",

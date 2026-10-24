@@ -15,6 +15,23 @@ is included in the selected release. Stable log declarations remain compatible.
 Defaults remain core -1 and priority 1. Selecting a core does not change the
 resampling algorithm or imply a measured performance improvement.
 
+An additional local code-generation hint recognizes an explicitly mono speaker
+feeding an actual mono Mixer renderer. When the coordinated owned audio header
+advertises `ESPHOME_AUDIO_HAS_MONO_CHANNEL_PRUNING`, the facade permits pruning
+the right DSP lane that the renderer would discard. The audio wrapper preserves
+the existing stereo layout, partial-byte writes, frame credits and gain-ramp
+progression. It selects the left channel, without averaging. Equal-rate,
+equal-bit-depth playback keeps the task-free bypass; ordinary stereo output
+retains both channels. With the official ESPHome audio header the facade keeps
+using its native four-argument API and does not enable this optimization.
+
+This hint is a separate local adaptation, not part of task-affinity PR #21055.
+The coordinated Intercom test `test_resampler_channel_pruning_runtime.py` uses
+the real ART/PCM/mixer/gain implementation and also compiles against the official
+header. Schema tests verify that ordinary sinks, stereo Mixers and inherited
+channel defaults do not accidentally enable the hint. No vendor patch, user
+option or extra task is required.
+
 The intercom manifest esphome/upstream_sources.json records the shared baseline.
 Existing upstream licenses and authorship apply. Builds are separate from
 physical-device qualification.

@@ -9,6 +9,7 @@ from esphome.const import (
     CONF_ID,
     CONF_NUM_CHANNELS,
     CONF_OUTPUT_SPEAKER,
+    CONF_PLATFORM,
     CONF_SAMPLE_RATE,
     CONF_TASK_STACK_IN_PSRAM,
     PLATFORM_ESP32,
@@ -29,6 +30,7 @@ ResamplerSpeaker = resampler_ns.class_(
 PASSTHROUGH = "passthrough"
 CONF_TASK_CORE = "task_core"
 CONF_TASK_PRIORITY = "task_priority"
+_MONO_MIXER_OUTPUT = "_mono_mixer_output"
 
 
 def _set_stream_limits(config: ConfigType) -> ConfigType:
@@ -41,6 +43,9 @@ def _set_stream_limits(config: ConfigType) -> ConfigType:
 
 
 def _validate_audio_compatibility(config: ConfigType) -> None:
+    # Channel pruning is an implementation detail, not a new channel policy.
+    # Require an explicit mono request and a renderer known to discard lane1.
+    explicit_mono = config.get(CONF_NUM_CHANNELS) == 1
     inherit_property_from(CONF_NUM_CHANNELS, CONF_OUTPUT_SPEAKER)(config)
     inherit_property_from(CONF_SAMPLE_RATE, CONF_OUTPUT_SPEAKER)(config)
 
@@ -59,6 +64,15 @@ def _validate_audio_compatibility(config: ConfigType) -> None:
         channels=config.get(CONF_NUM_CHANNELS),
         sample_rate=config.get(CONF_SAMPLE_RATE),
     )(config)
+    config[_MONO_MIXER_OUTPUT] = False
+    if explicit_mono:
+        full = fv.full_config.get()
+        path = full.get_path_for_id(config[CONF_OUTPUT_SPEAKER])
+        if len(path) >= 3 and path[-3] == "source_speakers":
+            mixer = full.get_config_for_path(path[:-3])
+            config[_MONO_MIXER_OUTPUT] = (
+                mixer.get(CONF_PLATFORM) == "mixer" and mixer.get(CONF_NUM_CHANNELS) == 1
+            )
 
 
 def _validate_task_core(config: ConfigType) -> ConfigType:
@@ -117,6 +131,8 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_output_speaker(output_spkr))
 
     cg.add(var.set_buffer_duration(config[CONF_BUFFER_DURATION]))
+    if config.get(_MONO_MIXER_OUTPUT, False):
+        cg.add(var.set_mono_mixer_output(True))
     cg.add(
         var.set_task_scheduling(
             cg.TemplateArguments(config[CONF_TASK_CORE], config[CONF_TASK_PRIORITY])

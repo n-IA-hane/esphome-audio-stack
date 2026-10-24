@@ -110,8 +110,10 @@ int main(){
 def test_software_reference_is_taken_after_tx_volume_and_before_processor_dispatch():
     pipeline = (ROOT / "audio_pipeline.cpp").read_text()
     tx = method(pipeline, "void ESPAudioStack::process_tx_path_(")
-    assert tx.index("esp_audio_libs::gain::apply(") < tx.index("const int16_t *ref_source = ctx.spk_buffer")
-    assert tx.index("const int16_t *ref_source = ctx.spk_buffer") < tx.index("play_ref_rate_converter_.process(ref_source")
+    reference_owner = method(pipeline, "void ESPAudioStack::save_tx_reference_(")
+    assert tx.index("esp_audio_libs::gain::apply(") < tx.index("write_tx_dma_blocks_(")
+    assert tx.index("write_tx_dma_blocks_(") < tx.index("save_tx_reference_(ctx, written ?")
+    assert "play_ref_rate_converter_.process(samples" in reference_owner
     dispatch = method(pipeline, "void ESPAudioStack::process_aec_and_callbacks_(")
     reference = dispatch.index("this->fill_mono_aec_reference_(ctx)")
     assert reference < dispatch.index("this->run_processor_(ctx)", reference)

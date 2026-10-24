@@ -343,8 +343,13 @@ void ResamplerSpeaker::resample_task(void *params) {
         this_resampler->audio_stream_info_.ms_to_bytes(TRANSFER_BUFFER_DURATION_MS),
         this_resampler->target_stream_info_.ms_to_bytes(TRANSFER_BUFFER_DURATION_MS));
 
+#ifdef ESPHOME_AUDIO_HAS_MONO_CHANNEL_PRUNING
+    esp_err_t err = resampler->start(this_resampler->audio_stream_info_, this_resampler->target_stream_info_,
+                                     this_resampler->taps_, this_resampler->filters_, this_resampler->mono_mixer_output_);
+#else
     esp_err_t err = resampler->start(this_resampler->audio_stream_info_, this_resampler->target_stream_info_,
                                      this_resampler->taps_, this_resampler->filters_);
+#endif
 
     if (err == ESP_OK) {
       std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = ring_buffer::RingBuffer::create(

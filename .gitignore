@@ -6,6 +6,8 @@ __pycache__/
 *.pyo
 *.swp
 .venv/
+# Native integration fixtures fetched at the exact firmware dependency pin.
+.test-deps/
 venv/
 secrets.yaml
 examples/secrets.yaml

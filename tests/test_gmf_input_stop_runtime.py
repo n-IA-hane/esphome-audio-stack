@@ -6,6 +6,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def admission_helper():
+    header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
+    start = header.index("  bool accepting_processing_() const {")
+    return header[start:header.index("\n  }", start) + 4]
+
+
 def test_inactive_input_aborts_instead_of_generating_pcm(tmp_path):
     s = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     a = s.index("esp_gmf_err_io_t EspAfe::gmf_input_acquire_(")
@@ -30,6 +36,8 @@ void diag_add(std::atomic<uint32_t>& c){++c;}
 void decrement_if_nonzero(std::atomic<uint32_t>& c){if(c)c--;}
 void update_peak_atomic(std::atomic<uint32_t>& c,uint32_t n){c=std::max(c.load(),n);}
 struct EspAfe {
+ std::atomic<uint32_t> processing_request_{1},manager_epoch_{0};
+ // ADMISSION_HELPER
  void *feed_input_ring_=input;std::atomic<bool> processing_active_{false},drain_request_{false};int feed_chunksize_=1024;
  std::atomic<uint32_t> feed_rejected_{0},feed_queue_frames_{0},feed_us_last_{0},feed_us_max_{0},feed_ok_{0};
  esp_gmf_err_io_t gmf_input_acquire_(esp_gmf_payload_t*,uint32_t,int);
@@ -61,7 +69,7 @@ int main(){
 }
 """
     cpp = tmp_path / "input.cpp"
-    cpp.write_text(harness + s[a:b] + checks)
+    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + s[a:b] + checks)
     exe = tmp_path / "input"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

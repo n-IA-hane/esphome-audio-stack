@@ -17,11 +17,14 @@ using i2s_chan_handle_t=void*;
 using i2s_clock_src_t=int;
 enum esp_codec_dev_type_t {ESP_CODEC_DEV_TYPE_IN,ESP_CODEC_DEV_TYPE_OUT};
 struct esp_codec_dev_channel_map_t {uint32_t value=0;};
+constexpr unsigned ESP_CODEC_DEV_MAX_MAP_CHANNELS=8;
+struct esp_codec_dev_device_map_info_t {int mode;uint8_t channels;esp_codec_dev_channel_map_t map;};
+struct audio_hw_base_t {int(*get_order_list)(const audio_hw_base_t*,const esp_codec_dev_device_map_info_t**,int*)=nullptr;};
 struct esp_codec_dev_bus_info_t {uint32_t sample_rate=0;unsigned data_bit=0,slot_bit=0,total_slot=0,slot_mask=0;int mode=0;};
 struct esp_codec_dev_sample_info_t {unsigned sample_rate,bits_per_sample,channel,channel_mask,mclk_multiple;};
 struct audio_codec_i2s_cfg_t {unsigned port;void *rx_handle;void *tx_handle;int clk_src;};
 struct audio_codec_ctrl_if_t {};
-struct audio_codec_if_t {const audio_codec_ctrl_if_t *ctrl;float pa_gain=0;};
+struct audio_codec_if_t {const audio_codec_ctrl_if_t *ctrl;float pa_gain=0;audio_hw_base_t hw_base;};
 struct audio_codec_data_if_t {int (*get_bus_info)(const audio_codec_data_if_t*,esp_codec_dev_type_t,esp_codec_dev_bus_info_t*);};
 struct esp_codec_dev_cfg_t {esp_codec_dev_type_t dev_type;const audio_codec_if_t *codec_if;const audio_codec_data_if_t *data_if;};
 struct Dev {esp_codec_dev_cfg_t cfg;bool open=false;};
@@ -31,6 +34,10 @@ struct es7210_codec_cfg_t {const audio_codec_ctrl_if_t *ctrl_if;struct{bool is_m
 std::set<const void*> resources;
 int allocation=0,fail_allocation=0,opens=0,fail_open=0,layouts=0,fail_layout=0,layout_mismatch=0,closes=0;
 int gain_calls=0,fail_gain=0;
+int order_list(const audio_hw_base_t*,const esp_codec_dev_device_map_info_t **rows,int *count){
+ static const esp_codec_dev_device_map_info_t table[]={{ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS,4,{0x4321}}};
+ *rows=table;*count=1;return 0;
+}
 float channel_gains[4]{};
 int esp_codec_dev_set_in_channel_gain(Dev *d,uint16_t mask,float db){
  assert(d->open);if(++gain_calls==fail_gain)return -1;
@@ -50,12 +57,12 @@ int bus_info(const audio_codec_data_if_t*,esp_codec_dev_type_t,esp_codec_dev_bus
  return 0;
 }
 const audio_codec_data_if_t* audio_codec_new_i2s_data(const audio_codec_i2s_cfg_t*){auto*p=make<audio_codec_data_if_t>();if(p)p->get_bus_info=bus_info;return p;}
-const audio_codec_if_t* es8311_codec_new(const es8311_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p){p->ctrl=c->ctrl_if;p->pa_gain=c->pa_cfg.hw_gain.pa_gain;}return p;}
+const audio_codec_if_t* es8311_codec_new(const es8311_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p){p->ctrl=c->ctrl_if;p->pa_gain=c->pa_cfg.hw_gain.pa_gain;p->hw_base.get_order_list=order_list;}return p;}
 const audio_codec_if_t* es7210_codec_new(const es7210_codec_cfg_t*c){auto*p=make<audio_codec_if_t>();if(p)p->ctrl=c->ctrl_if;return p;}
 Dev* esp_codec_dev_new(const esp_codec_dev_cfg_t*c){auto*p=make<Dev>();if(p)p->cfg=*c;return p;}
 int esp_codec_dev_open(Dev*d,const esp_codec_dev_sample_info_t*){assert(!d->open);if(++opens==fail_open)return -1;d->open=true;return 0;}
 int esp_codec_dev_close(Dev*d){assert(d->open);d->open=false;++closes;return 0;}
-int esp_codec_dev_get_data_layout(Dev*,esp_codec_dev_channel_map_t*m){if(++layouts==fail_layout)return -1;m->value=0x21;return 0;}
+int esp_codec_dev_get_data_layout(Dev*,esp_codec_dev_channel_map_t*m){if(++layouts==fail_layout)return -1;m->value=layout_mismatch==5?0x13:0x31;return 0;}
 void esp_codec_dev_delete(Dev*d){assert(!d->open);assert(!d->cfg.codec_if||resources.count(d->cfg.codec_if));assert(resources.count(d->cfg.data_if));release(d);}
 void audio_codec_delete_codec_if(const audio_codec_if_t*c){assert(resources.count(c->ctrl));release(c);}
 void audio_codec_delete_ctrl_if(const audio_codec_ctrl_if_t*c){release(c);}
@@ -121,9 +128,10 @@ int main(){
    assert(b.open(tx?&cfg:nullptr,rx?&cfg:nullptr));assert(b.is_open());
    b.teardown();b.teardown();assert(resources.empty());assert_closed(b);
   }
-  for(int kind=0;kind<3;kind++)for(int fail=1;fail<=4;fail++){
+  for(int kind=0;kind<3;kind++)for(int fail=1;fail<=5;fail++){
    if(kind==0&&fail>(rx+tx))continue;
    if(kind==1&&fail>2*(rx+tx))continue;
+   if(kind==2&&fail==5&&!tx)continue;
    reset_faults();CodecDevBackend b;assert(setup(b,split,rx,tx,es7210));const auto prepared_count=resources.size();
    if(kind==0)fail_open=fail;else if(kind==1)fail_layout=fail;else layout_mismatch=fail;
    assert(!b.open(tx?&cfg:nullptr,rx?&cfg:nullptr));assert_closed(b);assert(b.prepared_);assert(resources.size()==prepared_count);

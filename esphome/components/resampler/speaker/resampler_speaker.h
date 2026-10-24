@@ -54,6 +54,8 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
     this->target_bits_per_sample_ = target_bits_per_sample;
   }
   void set_target_sample_rate(uint32_t target_sample_rate) { this->target_sample_rate_ = target_sample_rate; }
+  /// Internal codegen hint, only enabled for an explicitly mono mixer renderer.
+  void set_mono_mixer_output(bool mono) { this->mono_mixer_output_ = mono; }
 
   /// @brief When enabled, the input bits per sample are passed through to the output speaker unchanged instead of being
   /// converted to a fixed target. Only the sample rate is resampled if it differs from the target.
@@ -108,6 +110,7 @@ class ResamplerSpeaker final : public Component, public speaker::Speaker {
   uint8_t target_bits_per_sample_{0};
   int8_t task_core_{-1};
   uint8_t task_priority_{1};
+  bool mono_mixer_output_{false};
 
   bool passthrough_bits_per_sample_{false};
   bool task_stack_in_psram_{false};

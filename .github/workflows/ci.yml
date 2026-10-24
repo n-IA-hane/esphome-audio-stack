@@ -26,6 +26,41 @@ jobs:
           python-version: "3.14.2"
       - name: Install test dependencies
         run: python -m pip install esphome==${{ matrix.esphome }} pytest==9.0.3 ruff==0.15.21
+      - name: Fetch the GMF manager pinned by the component
+        run: |
+          python - <<'PY'
+          import ast
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          source = Path('esphome/components/esp_afe/__init__.py')
+          dependencies = [node for node in ast.walk(ast.parse(source.read_text()))
+                          if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                          and node.func.id == 'add_idf_component'
+                          and any(arg.arg == 'repo' for arg in node.keywords)]
+          dependency = next(node for node in dependencies
+                            if any(arg.arg == 'name' and ast.literal_eval(arg.value) == 'espressif/gmf_ai_audio'
+                                   for arg in node.keywords))
+          values = {arg.arg: ast.literal_eval(arg.value) for arg in dependency.keywords}
+          assert re.fullmatch(r'[0-9a-f]{40}', values['ref']), 'GMF tests require an immutable firmware pin'
+          checkout = Path('.test-deps/esp-gmf').resolve()
+          checkout.mkdir(parents=True)
+          subprocess.run(['git', 'init', str(checkout)], check=True)
+          subprocess.run(['git', '-C', str(checkout), 'fetch', '--depth=1', values['repo'], values['ref']], check=True)
+          subprocess.run(['git', '-C', str(checkout), 'checkout', '--detach', 'FETCH_HEAD'], check=True)
+          manager = checkout / values['path'] / 'src/esp_gmf_afe_manager.c'
+          digest = hashlib.sha256(manager.read_bytes()).hexdigest()
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'GMF_AFE_MANAGER_SOURCE={manager}\n')
+          Path('test-results').mkdir(exist_ok=True)
+          Path('test-results/native-dependencies.json').write_text(json.dumps({
+              'gmf': {'repository': values['repo'], 'revision': values['ref'], 'manager_sha256': digest}
+          }, indent=2) + '\n')
+          PY
       - name: Lint component and tests
         run: python -m ruff check esphome tests tools
       - name: Run contract tests
@@ -35,7 +70,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: audio-native-${{ matrix.esphome }}
-          path: test-results/native.xml
+          path: |
+            test-results/native.xml
+            test-results/native-dependencies.json
           if-no-files-found: error
 
   optional-audio-firmware:

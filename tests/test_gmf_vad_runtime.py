@@ -18,6 +18,7 @@ def test_vad_control_preserves_state_on_failure(tmp_path):
 #define ESP_LOGW(...)
 constexpr int CONFIG_MUTEX_TIMEOUT=10,ESP_AFE_FEATURE_VAD=1;
 bool lock_available=true,hardware_vad=true;int manager_result=0,manager_calls=0;
+void xTaskNotifyGive(void*){}
 namespace esp_audio_stack{
 struct ScopedLock{bool acquired;ScopedLock(void*,int):acquired(lock_available){} explicit operator bool()const{return acquired;}};
 }
@@ -26,7 +27,9 @@ int esp_gmf_afe_manager_enable_features(void*,int,bool enabled){
 }
 struct EspAfe{
  std::atomic<bool> vad_enabled_{true},voice_present_{true},afe_stopped_{false};
+ std::atomic<bool> activity_pending_{false};void* reconfigure_task_handle_=this;
  void* config_mutex_=this;void* afe_manager_=this;
+ bool accepting_processing_()const{return true;}
  bool is_initialized()const{return true;} bool all_features_disabled_()const{return false;}
  bool recreate_instance_(bool){return true;} bool set_vad_enabled_runtime_(bool);
 };
