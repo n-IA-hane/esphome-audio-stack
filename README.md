@@ -361,6 +361,11 @@ and resource use on your device.
 See the [AEC reference](esphome/components/esp_aec/README.md) for modes and
 runtime reconfiguration.
 
+The standalone component defaults to `sr_low_cost`. Maintained Intercom FULL
+profiles instead start in SR HIGH and offer SR LOW/HIGH, preserving speech for
+wake-word recognition during playback. VoIP-only profiles also offer FD. Those
+preset choices do not remove the standalone component's other supported modes.
+
 ## 5. Use the codec stereo channel as a reference
 
 In ES8311 digital-feedback mode, the left slot carries the microphone ADC and the right slot carries DAC
@@ -461,7 +466,7 @@ existing stack's `processor_id` to the AFE ID. Do not declare both processors.
 | --- | --- | --- |
 | AEC | Echo from the device's playback | A correctly selected playback reference |
 | NS, noise suppression | Background noise in speech capture | Good microphone placement or unclipped input |
-| VAD, voice activity detection | Whether speech is present | Wake-word recognition or speech-to-text |
+| VAD, voice activity detection | Whether speech is present | Optional activity detection for voice-aware consumers |
 | AGC, automatic gain control | Variation in speech level | Correct ADC gain; it cannot restore clipped samples |
 | SE/BSS, two-microphone speech enhancement | Uses both microphones to improve speech separation | A second real microphone and the correct channel layout |
 
@@ -1028,32 +1033,47 @@ live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/dev/yamls)
 
 ## Technical sources
 
-- [ESP-IDF I2S: clocks, slots and full duplex](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32s3/api-reference/peripherals/i2s.html)
+- [ESP-IDF I2S: clocks, slots and full duplex](https://docs.espressif.com/projects/esp-idf/en/v5.5.6/esp32s3/api-reference/peripherals/i2s.html)
 - [ESP-SR AFE: channel roles and processing](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/audio_front_end/README.html)
 - [ESP-SR AEC: microphone and playback reference](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/acoustic_echo_cancellation/README.html)
 
-## Upgrading to 2026.10.0
+<a id="upgrading-to-2026100"></a>
 
-Use ESPHome 2026.10.0 or newer with the maintained profiles, then rebuild and
-upload the firmware. Audio Stack runs on the ESP, so component updates take
-effect after a firmware rebuild and upload.
+## Upgrading from 2026.10.2 to 2026.11.0
 
-Existing TDM YAML fields keep their meaning: slot numbers describe physical
-positions on the bus. Do not renumber microphone, reference or speaker slots
-because DMA now stores only selected slots. Diagnostic slot-level sensors
-still use those same physical numbers. The AFE defaults to `MR` for one
-microphone and `MMR` for two; an explicit `MMNR` remains supported and adds
-padding inside the processor, not another physical microphone.
+1. **Use ESPHome 2026.10.0 or newer**, then rebuild and upload the firmware.
+   Updating an HA integration does not replace the component running on an ESP.
+2. If your external-component list requests the former Audio Stack `resampler`,
+   remove that name and use ESPHome's native `platform: resampler`. Remove its
+   former private `task_core` and `task_priority` fields. Audio Stack and AFE's
+   own task settings remain supported.
+3. **Startup is asynchronous.** Put actions requiring ready hardware in
+   `esp_audio_stack.on_start`; a return from `esp_audio_stack.start` only means
+   startup was requested. Use `esp_audio_stack.is_idle` when waiting for completed
+   stop cleanup instead of adding a fixed delay.
+4. Match the actual PCM endpoints. The microphone is mono S16 at the parent's
+   `output_sample_rate` (or bus rate when omitted); the hardware speaker is S16
+   at the bus rate and configured playback channel count. Inconsistent formats
+   now fail validation. Use a resampler where playback rates differ; for a
+   48 kHz bus with AEC/AFE, set `output_sample_rate: 16000` on the parent.
+5. **Review positive Mic Gain settings.** The boost is now constant from the
+   first sample. Values used to compensate for the former automatic level gate
+   may be excessive. Check quiet and nearby loud speech for clipping; AFE AGC
+   and hardware PGA remain separate controls.
 
-The component now selects `esp_codec_dev` `2.0.0-beta5`, an Espressif prerelease.
-Custom builds that override that dependency must remove the old override or
-adapt it to the new codec API. Standard configurations obtain the dependency
-automatically. ESPHome microphone and speaker interfaces remain
-unchanged, including supported microphone-only and speaker-only configurations.
+TDM slot numbers still describe physical bus positions, including slot-level
+sensors. Keep the board's verified microphone and reference mapping. The AFE
+selects `MR` for one microphone and `MMR` for two; explicit `MMNR` adds internal
+padding rather than another physical microphone.
 
-See the [changelog](CHANGELOG.md) for audio improvements and the
-[platform migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md)
-if your firmware also uses Intercom packages.
+The component selects its supported Espressif dependencies automatically. If a
+custom build pins them separately, align that override with the current
+[dependency set](#dependencies-and-license). The standard microphone/speaker
+interfaces and microphone-only or speaker-only configurations remain supported.
+
+For the maintained Intercom firmwares, start from the updated YAML for the exact
+board and follow the [package migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md).
+See the [changelog](CHANGELOG.md) for the complete delta from the stable release.
 
 The sparse-TDM work was informed by
 [@jyoushiki's proposal and measurements](https://github.com/n-IA-hane/esphome-audio-stack/pull/14).

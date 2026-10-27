@@ -13,6 +13,9 @@ Use it when the device needs software echo cancellation but not the full AFE
 pipeline. It is lighter than ``esp_afe`` and is the normal starting point for a
 single-mic Voice Assistant device with media or VoIP playback.
 
+Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM. The parent Audio
+Stack owns the bus and sample-rate conversion.
+
 .. code-block:: yaml
 
     esp_aec:
@@ -45,6 +48,10 @@ Configuration variables:
 default for assistant devices. ``fd_*`` and ``voip_*`` modes add stronger
 full-duplex or communication-oriented suppression and should be validated on
 the actual enclosure.
+
+Maintained Intercom FULL presets choose SR HIGH initially and offer SR LOW/HIGH.
+Their VoIP-only presets retain FD choices. These package defaults are separate
+from the standalone component defaults above.
 
 ``esp_aec.set_mode`` Action
 ---------------------------

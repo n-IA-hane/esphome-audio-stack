@@ -86,7 +86,8 @@ and DC filtering retain their existing order.
 
 ## 2. Adjust analog PGA without rebuilding
 
-Digital `mic_gain` amplifies the processed output. Analog PGA changes the input
+The optional `mic_gain` number on `platform: esp_audio_stack` sets post-processor
+gain in dB. Analog PGA changes the input
 codec before digital processing. A clipped ADC signal cannot be repaired by
 reducing a digital gain later.
 
@@ -116,6 +117,11 @@ changes only that channel.
 Both controls accept 0 to 37.5 dB. Optional `initial_value` sets a first-boot
 default. A saved user setting takes precedence; without either, the existing
 codec configuration supplies the default. Values survive codec close/reopen.
+
+Codec drivers can quantize a requested gain to their supported hardware steps.
+The number and configuration getter represent the request, not a register
+readback. Use supported codec values and confirm the effective gain when exact
+microphone/reference calibration matters.
 
 Requests are applied by the existing audio owner. Changing a setting while
 idle does not open I2S or start another worker. The number shows the requested
@@ -203,15 +209,29 @@ PCM record is capped at 16 KiB. The socket worker is temporary and returns its
 queue and task resources at completion. When disabled, no buffer, worker or
 socket exists. Omitting the component removes all capture hooks at compilation.
 
-The microphone mute, a new audio generation, a format change, parent failure,
-stop action or transport failure ends the capture. It acquires and releases
-only its own microphone-consumer reference. Stopping intentionally discards
+At the natural duration limit, the producer stops admitting data and the worker
+finishes its current record before closing. Header and PCM share a one-second
+transport budget. Mute, a new audio generation, a format change, parent failure,
+explicit stop or transport failure can abort a record immediately. Capture owns
+and releases only its own microphone-consumer reference. Stopping intentionally discards
 unsent diagnostic data, so the trailing interval is not guaranteed to be
 present. Receiver `complete` means that the received framing ended cleanly,
 not proof that the requested duration or every sample was recorded. Inspect
 sample positions and drops before using a capture as a benchmark.
 
-## 4. Compare on the same board
+## 4. Choose an assistant processing profile
+
+Start with SR processing when the output feeds Micro Wake Word. FD can suppress
+useful speech features as well as echo, particularly during playback. The
+standalone defaults are AEC `sr_low_cost` and AFE `type: sr`, `mode: low_cost`.
+Maintained Intercom FULL profiles select SR HIGH initially and offer SR LOW/HIGH;
+VoIP-only profiles retain FD choices. Validate recognition and echo reduction
+with the same external voice, playback level and enclosure before selecting a
+mode. Separate microphone calibration from the recognizer's own input gain.
+
+<a id="4-compare-on-the-same-board"></a>
+
+## 5. Compare on the same board
 
 Compare single-mic AEC, averaged dual-mic AEC and dual-mic AFE with the same bus,
 playback content and application configuration. Record heap free/minimum,
@@ -220,7 +240,5 @@ not runtime free heap, and a successful compile does not measure echo reduction
 or wake-word accuracy. Keep the maintained profile until the alternative is
 validated on the actual hardware.
 
-The stage-capture workflow and the explicit two-microphone average were informed
-by [traverseda's board-specific frontend](https://github.com/traverseda/esphome_snippets/commit/103d4be1d28415d1ad2f52e0cb927e54f63bd00d).
-This implementation retains Audio Stack's existing multi-rate I2S/codec owner
-and the existing AEC/AFE backends.
+The capture taps and microphone averaging use Audio Stack's existing multi-rate
+I2S/codec owner and the existing AEC/AFE backends.

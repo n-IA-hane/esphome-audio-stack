@@ -4,16 +4,7 @@
 
 Changes since stable **2026.10.2**.
 
-> **Attention: ESPHome 2026.10.0 or newer is required.**
->
-> ESPHome 2026.10 brings substantial audio improvements, including several of
-> our accepted contributions. Thank you to the ESPHome team for your work,
-> reviews and accepted PRs! <3
->
-> Audio Stack and the coordinated VoIP Stack, Runtime Controller and device
-> packages now follow the released ESPHome interfaces. Older ESPHome versions
-> are no longer supported and their operation is not guaranteed. Upgrade the
-> builder before compiling the new firmware.
+**Requires ESPHome 2026.10.0 or newer.**
 
 ### Two microphones, your choice of processing
 
@@ -45,6 +36,12 @@ Changes since stable **2026.10.2**.
 
 ### More reliable startup, playback and recovery
 
+- Apply positive Mic Gain as a constant fixed-point boost from the first sample,
+  preserving quiet word beginnings after silence. Keep fractional dB settings,
+  symmetric rounding and S16 saturation without a level-history allocation.
+- Finish the current PCM transport record when an optional capture reaches its
+  natural duration. Header and payload share a bounded send budget; explicit
+  stop, mute and transport failure retain abort behavior.
 - Start codec/I2S asynchronously on the existing audio task. The main loop stays
   available while hardware starts; cancellation and cleanup follow the current
   request. Use `on_start` for dependent actions and `esp_audio_stack.is_idle`
@@ -87,9 +84,23 @@ Changes since stable **2026.10.2**.
   with Music Assistant **2.10.7** or newer. Audio Stack itself does not require
   Sendspin or Music Assistant.
 
-Rebuild and upload the firmware after updating. If you use Intercom device
-packages, start from the current maintained YAML and follow the
-[package migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md).
+### Breaking changes and migration
+
+- Upgrade the builder to ESPHome **2026.10.0 or newer**.
+- Remove the former external `resampler` provider and its private `task_core` /
+  `task_priority` fields; keep the native `platform: resampler` configuration.
+- Startup now returns before hardware readiness. Use `on_start` for dependent
+  actions and `esp_audio_stack.is_idle` for completed stop cleanup.
+- Exact PCM validation rejects mismatched endpoint rates or channel counts.
+  Configure microphone output on its parent and resample playback to the bus rate.
+- Recheck positive Mic Gain values after upgrading, since the gain is now constant
+  rather than following the former automatic level gate.
+
+[Upgrade steps](README.md#upgrading-from-2026102-to-2026110) |
+[Intercom package migration](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md)
+
+Rebuild and upload the firmware after updating. For maintained Intercom devices,
+start from the current YAML for the exact board.
 
 ## 2026.10.2
 

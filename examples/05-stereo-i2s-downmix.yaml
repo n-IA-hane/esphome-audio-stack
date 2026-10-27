@@ -22,8 +22,9 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+# For unpublished changes, override this source only in a private local YAML.
 external_components:
-  - source: ../esphome/components
+  - source: github://n-IA-hane/esphome-audio-stack@dev
     components: [esp_audio_stack, esp_aec]
 esp_audio_stack:
   id: audio_bus

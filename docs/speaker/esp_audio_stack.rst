@@ -12,6 +12,10 @@ rate; upstream ESPHome resampler/mixer speakers convert sources that use a
 different rate. The stack owns buffering, codec output and the
 echo-cancellation reference.
 
+The accepted stream is signed 16-bit PCM at the parent bus rate and playback
+channel count. Format declarations must match that parent; they do not add a
+converter. Use the native resampler for sources at another rate.
+
 .. code-block:: yaml
 
     esp_audio_stack:
@@ -28,12 +32,12 @@ echo-cancellation reference.
 Configuration variables:
 ------------------------
 
-- **esp_audio_stack_id** (**Required**, :ref:`config-id`): The parent
-  ``esp_audio_stack`` component.
+- **esp_audio_stack_id** (*Optional*, :ref:`config-id`): The parent
+  ``esp_audio_stack`` component; inferred when exactly one is available.
 - **id** (*Optional*, :ref:`config-id`): Manually specify the speaker ID.
-- **buffer_duration** (*Optional*, time): Playback staging buffer size.
-- **timeout** (*Optional*, time): Stop the speaker after silence. Defaults to
-  no automatic timeout.
+- **buffer_duration** (*Optional*, time): Playback staging buffer size, default 500 ms.
+- **timeout** (*Optional*, time): Auto-stop after the queue drains and no new PCM
+  is written for this interval. Defaults to no automatic timeout.
 
 See Also
 --------

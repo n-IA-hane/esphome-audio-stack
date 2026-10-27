@@ -27,8 +27,8 @@ unavailable, output is silence. The optional parent AEC switch is an explicit
 bypass that publishes converted raw mic on the same surface; there is no
 parallel raw microphone entity.
 
-This component requires the ESP-IDF framework and the ESPHome ``psram``
-component. Arduino is not supported. Maintained release targets are
+This component requires ESPHome **2026.10.0 or newer**, the ESP-IDF framework
+and the ESPHome ``psram`` component. Arduino is not supported. Maintained release targets are
 ESP32-S3 and ESP32-P4.
 
 .. code-block:: yaml
@@ -91,6 +91,11 @@ Core audio:
   secondary. Overlay ``[right, left]`` if BSS is inverted. Requires ``rx_slot_mode: stereo``.
   Omit it to keep single-mic capture via ``mic_channel``. Not an ES8311 DAC-feedback mode;
   use ``tdm_mic_slots`` on TDM.
+- **mic_mix** (*Optional*, string): ``passthrough`` (default) preserves the selected
+  microphone channels; ``average`` combines two selected physical microphones into
+  one mono input. Averaging requires two microphone slots, excludes the reference
+  and requires a bound AFE to use ``mic_num: 1`` with SE/BSS disabled. It works
+  with the supported STD-I2S or TDM layouts and is compiled only when selected.
 - **tx_channel** (*Optional*, string): TX slot placement in mono-on-stereo layouts, ``left`` or ``right``.
   Defaults to ``left``.
 - **correct_dc_offset** (*Optional*, boolean): Remove DC bias from the capture path. Defaults to ``false``.
@@ -120,7 +125,9 @@ I2S bus (single-bus mode):
   ``512``. Defaults to ``256``.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. Among the
   supported targets, this is available on ESP32-P4. Defaults to ``false``.
-- **dma_desc_num** (*Optional*, int): DMA descriptor count, ``2`` to ``16``. Defaults to ``6``.
+- **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, ``2`` to ``16``.
+  When omitted, TX uses two descriptors; RX starts at six and retains the TDM
+  capture-headroom policy. An explicit count sets TX and the RX starting count.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, ``64`` to ``4092``. When omitted, the
   component sizes descriptors at approximately 10 ms each.
 
@@ -185,6 +192,11 @@ Hardware codec (``codec:`` block):
   software boost. Set it from the amplifier circuit so the DAC volume accounts
   for the physical output gain. Other boards retain the existing default.
 
+ES8311 output additionally accepts **pa_gain** (*Optional*, float), the physical
+amplifier gain in dB (``0.0`` to ``40.0``, default ``0.0``). It is passed to
+Espressif's output-volume calibration. Use the circuit's actual gain rather than
+copying another board's value.
+
 Task, memory and diagnostics:
 
 - **task_priority** (*Optional*, int): Audio task priority, ``1`` to ``24``. Defaults to ``19``.
@@ -212,14 +224,14 @@ Task, memory and diagnostics:
 
 Automation triggers:
 
-- **on_start** (*Optional*, :ref:`Automation <automation>`): Fired when the stack leaves the idle state.
-- **on_idle** (*Optional*, :ref:`Automation <automation>`): Fired when the stack returns to the idle state.
+- **on_start** (*Optional*, :ref:`Automation <automation>`): Fired after shared hardware startup completes. Use it for actions requiring ready hardware.
+- **on_idle** (*Optional*, :ref:`Automation <automation>`): Fired for a stop request or failed start. Use ``esp_audio_stack.is_idle`` to wait for completed hardware cleanup.
 - **on_state** (*Optional*, :ref:`Automation <automation>`): Fired on any runtime state change. The new
   state (``idle``, ``mic``, ``speaker``, ``duplex``) is available as ``x`` (``std::string``).
 - **on_mic_start** / **on_mic_idle** (*Optional*, :ref:`Automation <automation>`): Fired when the
-  capture path starts or stops.
+  microphone consumer ownership starts or stops.
 - **on_speaker_start** / **on_speaker_idle** (*Optional*, :ref:`Automation <automation>`): Fired when
-  the playback path starts or stops.
+  speaker consumer ownership starts or stops.
 - **on_amplifier_required** / **on_amplifier_idle** (*Optional*, :ref:`Automation <automation>`):
   Semantic aliases of the speaker triggers, intended for boards with a GPIO-controlled amplifier or
   speaker power rail.
@@ -240,7 +252,9 @@ sleep.
 ``esp_audio_stack.start`` Action
 --------------------------------
 
-Starts the audio path explicitly.
+Requests shared hardware startup without blocking the main loop. The resident
+audio task opens codec/I2S and reports readiness through ``on_start``. Do not
+assume that the microphone is ready immediately after this action.
 
 .. code-block:: yaml
 
@@ -259,7 +273,8 @@ Requests a stop of the audio path.
 ``esp_audio_stack.is_idle`` Condition
 -------------------------------------
 
-Returns true when the stack is in the ``idle`` runtime state.
+Returns true when shared hardware is fully idle and its cleanup is complete.
+This is the condition to wait for before a hardware-dependent reconfiguration.
 
 Switch
 ------
@@ -298,6 +313,12 @@ An optional number platform exposes gain and volume controls.
   gain to prevent clipping and specify an appropriate post-processor default
   without overwriting the user's saved Mic Gain.
 - **master_volume** (*Optional*): Master volume for the speaker referenced by **speaker_id**.
+
+Optional ``input_pga`` and ``reference_pga`` number controls request analog
+codec gain, from 0 to 37.5 dB. ``input_pga`` requires an input codec;
+``reference_pga`` requires ES7210 with an explicit enabled reference channel.
+Saved values survive codec reopening. Drivers may quantize the requested gain;
+the number value is not a hardware register readback.
 
 Sensor
 ------

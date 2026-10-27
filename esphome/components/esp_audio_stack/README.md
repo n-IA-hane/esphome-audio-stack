@@ -261,7 +261,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
+      ref: dev
     components: [esp_audio_stack]
 ```
 
@@ -272,7 +272,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
+      ref: dev
     components: [esp_audio_stack, esp_aec]
     # Or with the full ESP-SR AFE pipeline:
     # components: [esp_audio_stack, esp_afe]
@@ -363,7 +363,7 @@ Split-bus constraints:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `id` | ID | Required | Component ID |
+| `id` | ID | auto-generated | Explicit ID when another block must reference the component |
 | `i2s_lrclk_pin` | pin | Required | Word Select / LR Clock pin |
 | `i2s_bclk_pin` | pin | Required | Bit Clock pin |
 | `i2s_mclk_pin` | pin | -1 | Master Clock pin (if codec requires) |
@@ -1030,7 +1030,7 @@ The driver and its helper entities log under namespaced tags so callers can mute
 
 **Telemetry overhead**
 
-When `telemetry: true` AND the global `level: DEBUG`, `audio_pipeline.cpp` logs a per-frame snapshot every `telemetry_log_interval_frames` frames (default 128 ≈ 4 s @ 16 kHz / 32 ms). The block is **fully stripped at compile time** when either flag is missing - `#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) && ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG`. Production YAMLs ship with `telemetry: false`, so no telemetry compute or log strings reach the binary regardless of log level.
+When `telemetry: true` AND the global `level: DEBUG`, `audio_pipeline.cpp` logs a per-frame snapshot every `telemetry_log_interval_frames` frames (default 128 iterations; the time interval follows the active frame cadence). The block is **fully stripped at compile time** when either flag is missing - `#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) && ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG`. Production YAMLs ship with `telemetry: false`, so no telemetry compute or log strings reach the binary regardless of log level.
 
 **Quiet AEC tuning**
 

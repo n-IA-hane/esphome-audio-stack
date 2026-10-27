@@ -20,13 +20,15 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+# For unpublished changes, override this source only in a private local YAML.
 external_components:
-  - source: ../esphome/components
+  - source: github://n-IA-hane/esphome-audio-stack@dev
     components: [esp_audio_stack, esp_aec, esp_audio_capture]
 i2c:
   sda: GPIO11
   scl: GPIO10
   frequency: 400kHz
+# This I/O-only example uses FD; use an SR mode when adding Assist/MWW.
 esp_aec:
   id: processor
   sample_rate: 16000

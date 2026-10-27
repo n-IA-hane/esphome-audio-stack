@@ -20,10 +20,9 @@ psram:                           # <-- Required external RAM, match your module.
 logger:                          # <-- ESPHome logging for setup and errors.
   level: INFO                    # <-- Ordinary operation, no per-frame logging.
 
-# Local checkout example. For a standalone YAML, replace this source with
-# github://n-IA-hane/esphome-audio-stack@main for the stable version.
+# Published development example. Use a private source override for local changes.
 external_components:             # <-- Load the maintained audio component.
-  - source: ../esphome/components  # <-- Local checkout, see standalone URL above.
+  - source: github://n-IA-hane/esphome-audio-stack@dev  # <-- Published development components.
     components: [esp_audio_stack]  # <-- No optional DSP is enabled in this example.
 
 esp_audio_stack:                 # <-- One owner of capture and playback hardware.

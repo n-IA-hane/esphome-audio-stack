@@ -19,6 +19,9 @@ worker. The parent audio task retains its hardware cadence. Input staging and
 the existing output byte stream adapt changes in ESP-SR block sizes without
 resizing the live I2S/DMA frame.
 
+Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM. The parent Audio
+Stack owns the bus and sample-rate conversion.
+
 .. code-block:: yaml
 
     esp_afe:
@@ -61,9 +64,8 @@ Configuration variables:
 - **vad_mute_playback**, **vad_enable_channel_trigger**, **continuous_vad**
   (*Optional*, boolean): Optional VAD playback/channel/standby behavior.
 - **agc_compression_gain**, **agc_target_level** (*Optional*, int): AGC level
-  controls. NS/AGC changes rebuild the AFE. ESP-SR 2.5.3 omits AGC from its
-  effective dual-microphone graph, so dual-mic profiles apply the public
-  WebRTC AGC to complete processed mono frames after the AFE. This adds a
+  controls. NS/AGC changes rebuild the AFE. The supported dual-mic path applies
+  the public WebRTC AGC to complete processed mono frames after the AFE. This adds a
   fixed 10 ms causal delay.
 - **memory_alloc_mode** (*Optional*, string): ``more_internal``,
   ``internal_psram_balance`` or ``more_psram``. Defaults to ``more_psram``.
@@ -88,6 +90,10 @@ and two real microphone inputs: ``tdm_mic_slots`` for TDM, or
 ``rx_mic_slots: [left, right]`` with ``rx_slot_mode: stereo`` for standard I2S.
 The parent supplies either a software playback reference or the configured
 hardware reference. Standard-I2S pairs use left/right slots directly.
+
+Maintained Intercom FULL presets choose SR HIGH initially and offer SR LOW/HIGH.
+Their VoIP-only presets retain FD choices. These package defaults are separate
+from the standalone component defaults above.
 
 ``esp_afe.set_mode`` Action
 ---------------------------

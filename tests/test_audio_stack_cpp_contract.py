@@ -30,9 +30,14 @@ def test_tdm_16bit_rx_extracts_only_selected_channels() -> None:
 
 def test_realtime_audio_loop_has_no_tick_delay_or_effect_allocator() -> None:
     cpp = read("audio_pipeline.cpp")
-    alc = cpp[
-        cpp.index("bool ESPAudioStack::apply_mic_alc_gain_(") :
-        cpp.index("\n#ifdef USE_ESP_AUDIO_STACK_MONO_REF", cpp.index("bool ESPAudioStack::apply_mic_alc_gain_("))
+    gain = cpp[
+        cpp.index("void ESPAudioStack::apply_post_processor_gain_(") :
+        cpp.index("void ESPAudioStack::dispatch_mic_callbacks_(")
+    ]
+    helpers = read("audio_core_audio_utils.h")
+    boost = helpers[
+        helpers.index("inline void apply_microphone_boost_q16(") :
+        helpers.index("\n#ifndef ESPHOME_AUDIO_STACK_SCALE_SAMPLE_DEFINED")
     ]
     converter = cpp[
         cpp.index("bool ESPAudioStack::tx_bit_cvt_16_to_32_(") :
@@ -44,11 +49,20 @@ def test_realtime_audio_loop_has_no_tick_delay_or_effect_allocator() -> None:
     ]
 
     assert "vTaskDelay(" not in cpp
-    assert "esp_ae_alc_open" not in alc
-    assert "esp_ae_alc_close" not in alc
+    # Check the current gain stage and its actual in-place boost helper. Fixed
+    # gain has no ALC handle to prepare, allocate or close, even on a cold path.
+    for realtime_gain in (gain, boost):
+        for forbidden in (
+            "vTaskDelay(", "vTaskDelayUntil(", "pdMS_TO_TICKS(",
+            "malloc(", "calloc(", "realloc(", "new ", ".resize(", ".reserve(",
+        ):
+            assert forbidden not in realtime_gain, forbidden
+    assert "apply_microphone_boost_q16(ctx.output_buffer" in gain
+    assert "esp_audio_libs::gain::apply(" in gain
+    assert "esp_ae_alc_open" not in cpp
+    assert "esp_ae_alc_close" not in cpp
     assert "esp_ae_bit_cvt_open" not in converter
     assert "esp_ae_bit_cvt_close" not in converter
-    assert "esp_ae_alc_open" in cold_allocate
     assert "esp_ae_bit_cvt_open" in cold_allocate
     assert "frame_interval_avg_us" in cpp
     assert "t_frame_interval_max_us" in cpp

@@ -16,6 +16,8 @@ its read and result callbacks.
 Input staging assembles ESP-SR processing blocks, while an output byte stream
 retains partial reads independently of the hardware audio frame.
 
+Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM.
+
 ```yaml
 esp_afe:
   id: afe_processor
@@ -47,9 +49,8 @@ boards that need those features.
 - **vad_mute_playback**, **vad_enable_channel_trigger**, **continuous_vad**
   (*Optional*, boolean): Optional playback, per-channel and standby behavior.
 - **agc_enabled** (*Optional*, boolean): Enable automatic gain control. ESP-SR
-  supplies the WebRTC stage for one mic; because ESP-SR 2.5.3 omits it from
-  the effective dual-mic graph, two-mic profiles use an explicit post-AFE
-  WebRTC stage with 10 ms of causal delay.
+  supplies the WebRTC stage for one mic; the supported two-mic path uses an
+  explicit post-AFE WebRTC stage with 10 ms of causal delay.
 - **agc_compression_gain**, **agc_target_level** (*Optional*, int): AGC level
   controls. NS/AGC changes rebuild the AFE.
 - **mic_num** (*Optional*, int): Number of microphone channels, `1` or `2`.
@@ -74,6 +75,10 @@ Configure the actual inputs on the parent: `tdm_mic_slots` for TDM or
 microphones. The public output is mono. `input_format` describes the AFE's
 internal `M` (microphone), `R` (reference) and `N` (padding) channels, not bus
 slot numbering. Auto selects `MR` or `MMR`; explicit `MMNR` remains supported.
+
+Maintained Intercom FULL presets choose SR HIGH initially and offer SR LOW/HIGH.
+VoIP-only presets retain FD choices. These package defaults are separate from
+the standalone component defaults above.
 
 ## Actions
 

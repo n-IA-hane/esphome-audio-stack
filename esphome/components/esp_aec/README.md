@@ -42,7 +42,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
+      ref: dev
     components: [esp_audio_stack, esp_aec]
 
 esp_aec:
@@ -61,10 +61,10 @@ esp_audio_stack:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `id` | ID | required | Component identifier referenced by `esp_audio_stack.processor_id`. |
+| `id` | ID | auto-generated | Explicit component identifier for `esp_audio_stack.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
 | `filter_length` | int | 4 | ESP-SR filter-length parameter, range 1 to 8. The library supplies the frame shape for each engine at runtime, so do not treat one value as a universal millisecond duration. Increase only after measuring echo-tail coverage and heap headroom on the target. |
-| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for real-time call audio. |
+| `mode` | string | `sr_low_cost` | AEC algorithm. Use **SR modes** for assistant/wake-word input. **FD** and **VOIP modes** are communications-oriented alternatives; measure near-end speech and echo on the actual device. |
 
 ## AEC modes
 
@@ -73,7 +73,7 @@ The supported ESP-SR API supplies SR, VOIP and FD AEC modes:
 | Mode | Engine shape | Non-linear suppression | Starting point |
 |------|--------------|------------------------|----------------|
 | `sr_low_cost` | Speech-recognition linear AEC | No | Voice Assistant/MWW when preserving recognition features matters. |
-| `sr_high_perf` | Higher-cost SR/FFT variant | No | SR experiments with verified contiguous DMA-capable heap. |
+| `sr_high_perf` | Higher-cost SR/FFT variant | No | Assistant/wake-word profile with verified contiguous DMA-capable heap. |
 | `voip_low_cost` | Voice-communication AEC | Yes | Call-focused enclosure where stronger residual suppression is useful. |
 | `voip_high_perf` | Higher-cost voice-communication variant | Yes | Call-focused target with measured CPU and heap headroom. |
 | `fd_low_cost` | Full-duplex AEC | Yes | Codec-backed two-way speech with audible speaker echo. |
@@ -116,9 +116,19 @@ it to be idle before changing mode; resume it after checking the selected mode.
 The action fragments below show selection and feedback, not a complete live
 stream shutdown sequence.
 
+Set the processor's boot mode and the selector's `initial_option` to the same
+value. A Template Select's restored value does not execute `set_action` during
+setup. The fragments below therefore use `restore_value: false`; use the
+maintained device packages or an explicit pre-setup synchronization when saved
+mode restoration is required.
+
 Mode selector fragment for a call-focused device:
 
 ```yaml
+esp_aec:
+  id: aec_processor
+  mode: voip_high_perf
+
 select:
   - platform: template
     id: aec_mode_select
@@ -128,7 +138,7 @@ select:
       - "voip_high_perf"
     initial_option: "voip_high_perf"
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - esp_aec.set_mode:
           id: aec_processor
@@ -139,6 +149,10 @@ select:
 Mode selector fragment for a speech-recognition device:
 
 ```yaml
+esp_aec:
+  id: aec_processor
+  mode: sr_low_cost
+
 select:
   - platform: template
     id: aec_mode_select
@@ -148,7 +162,7 @@ select:
       - "sr_high_perf"
     initial_option: "sr_low_cost"
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - esp_aec.set_mode:
           id: aec_processor
@@ -207,7 +221,9 @@ Make sure `esp_audio_stack` actually links `processor_id: aec_processor`. The
 component initialises silently even when nobody references it.
 
 **The far end still hears the speaker on a codec-backed full-duplex device.**
-Use `fd_low_cost` first. For ES8311 digital feedback, verify
+First verify the reference and gain staging. Assistant devices should retain an
+SR mode while checking wake-word recognition. A VoIP-only device can also
+compare FD for stronger residual suppression. For ES8311 digital feedback, verify
 `no_dac_ref: false`, `use_stereo_aec_reference: true` and
 `reference_channel: right`, because Espressif's ES8311 driver outputs
 `ADCL + DACR` in this mode.

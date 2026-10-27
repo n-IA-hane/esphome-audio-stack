@@ -85,9 +85,9 @@ For the hardware and reference walkthrough, start with the
 ```
 
 > **Note**: When Speech Enhancement is active, esp-sr prioritizes BSS over NS.
-> `afe_config_check()` may clear `ns_init` on dual-mic builds. ESP-SR 2.5.3
-> also accepts `agc_init` but omits AGC from its effective two-microphone graph.
-> When `agc_enabled` is true, this component therefore applies Espressif's
+> `afe_config_check()` may clear `ns_init` on dual-mic builds. The supported
+> dual-microphone graph uses a separate output AGC stage. When `agc_enabled`
+> is true, this component applies Espressif's
 > public WebRTC AGC to the processed mono output. The 160-sample AGC cadence
 > adds a fixed 10 ms causal delay. AGC changes still require AFE reinit.
 
@@ -127,7 +127,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
+      ref: dev
     components: [esp_audio_stack, esp_afe]
 ```
 
@@ -186,7 +186,7 @@ esp_afe:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `id` | ID | Required | Component ID |
+| `id` | ID | auto-generated | Explicit ID when another block must reference the component |
 | `type` | string | `sr` | AFE type: `sr` (speech recognition), `vc` (voice communication) or `fd` (full-duplex AFE, esp-sr 2.4+) |
 | `mode` | string | `low_cost` | AFE mode: `low_cost` or `high_perf` |
 | `mic_num` | int | `1` | Number of microphones (1 or 2). Dual-mic configs must enable `se_enabled`; SE/BSS is structural for two-mic AFE |
@@ -273,10 +273,10 @@ The combination of `type` and `mode` determines the AEC engine and DSP pipeline:
 | type + mode | AEC shape | Recognition impact | Starting point |
 |-------------|-----------|--------------------|----------------|
 | `sr` + `low_cost` | Linear speech-recognition AEC | Usually preserves wake-word features best | VA + MWW + VoIP baseline |
-| `sr` + `high_perf` | Higher-cost SR/FFT variant | Recognition-oriented | Test only with verified contiguous internal heap |
+| `sr` + `high_perf` | Higher-cost SR/FFT variant | Recognition-oriented | Use after verifying the internal-memory budget |
 | `vc` + `low_cost` | Communication AEC with residual suppression | May reduce wake-word accuracy | Call-focused target without MWW |
 | `vc` + `high_perf` | Higher-cost communication variant | May reduce wake-word accuracy | Call-focused target with measured headroom |
-| `fd` + `low_cost` | Full-duplex/NLP pipeline | Target dependent | Two-way speech baseline |
+| `fd` + `low_cost` | Full-duplex/NLP pipeline | Can suppress wake-word features | VoIP-only target after measurement |
 | `fd` + `high_perf` | Higher-cost full-duplex variant | Target dependent | Qualified target with measured headroom |
 
 > **Starting guidance**: use `sr` + `low_cost` for Voice Assistant + MWW.
@@ -410,7 +410,7 @@ select:
       - voip_high_perf
       - fd_low_cost
       - fd_high_perf
-    initial_option: "fd_high_perf"
+    initial_option: "sr_low_cost"
     optimistic: false           # do NOT auto-publish; we publish the live mode below
     restore_value: false        # HA mirrors boot config; it does not choose the boot mode
     set_action:
@@ -438,7 +438,12 @@ select:
       - lambda: 'id(afe_mode_select).publish_state(id(afe_processor).get_mode_name());'
 ```
 
-Valid mode strings: `sr_low_cost`, `sr_high_perf`, `voip_low_cost`, `voip_high_perf`, `fd_low_cost`, `fd_high_perf`.
+The selector's initial value must match the processor's boot type/mode; this
+fragment matches the standalone SR/low-cost default. `restore_value: false`
+avoids restoring only the displayed option without applying it to the DSP.
+Maintained Intercom packages synchronize restored SR choices before DSP setup.
+
+Valid standalone mode strings: `sr_low_cost`, `sr_high_perf`, `voip_low_cost`, `voip_high_perf`, `fd_low_cost`, `fd_high_perf`.
 
 `get_mode_name()` returns the live mode as a string after the reinit. The
 `optimistic: false` plus the explicit `publish_state()` at the end is the
@@ -513,7 +518,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: main
+      ref: dev
     components: [esp_audio_stack, esp_afe]
 
 esp_afe:
@@ -637,7 +642,7 @@ risk on the same network path that carries TTS/media, API and VoIP traffic.
 
 ## Known Limitations
 
-1. **Speech Enhancement replaces NS on dual-mic input**: With two microphone channels, `afe_config_check()` prioritizes SE/BSS over NS. SE/BSS is selected when the graph is built. Dual-mic AGC runs as an explicit post-AFE WebRTC stage because ESP-SR 2.5.3 omits AGC from its effective two-microphone graph.
+1. **Speech Enhancement replaces NS on dual-mic input**: With two microphone channels, `afe_config_check()` prioritizes SE/BSS over NS. SE/BSS is selected when the graph is built. Enabled dual-mic AGC runs as an explicit post-AFE WebRTC stage on the processed mono output.
 
 2. **Runtime toggles**: AEC and VAD use the active GMF control without rebuilding. NS/AGC and type/mode changes require a full AFE reinit.
 
@@ -733,8 +738,8 @@ This changes only task stack capacity, not audio buffers, packet time or latency
 
 ### WebRTC-only noise suppression builds
 
-ESP-SR 2.5.4's prebuilt neural-model dispatcher links NSNet3's initialized
-weights into internal RAM even when `CONFIG_SR_NSN_WEBRTC` selects WebRTC.
+The supported prebuilt ESP-SR neural-model dispatcher can retain NSNet3's
+initialized weights even when `CONFIG_SR_NSN_WEBRTC` selects WebRTC.
 The AFE component includes a small IDF link adapter for that configuration:
 neural-model lookup returns no handle, and the unused neural archives are not
 pulled into the application. The active WebRTC processing path is unchanged.

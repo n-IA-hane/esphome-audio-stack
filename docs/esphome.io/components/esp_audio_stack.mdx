@@ -16,19 +16,26 @@ processed audio to wake word, Voice Assistant and call components. Echo
 cancellation reduces local speaker playback in that microphone signal while
 the speaker continues playing normally.
 
-This component requires the ESP-IDF framework and the `psram` component.
+This component requires ESPHome **2026.10.0 or newer**, the ESP-IDF framework
+and the `psram` component.
 
 One resident audio task is created during setup and parks while idle. I2S
 channels, DMA and codec paths start on first consumer and stop after the last
 consumer leaves; the task TCB/stack remains allocated across those cycles.
 
 ```yaml
+# Replace GPIOXX with the board's verified pin assignments.
 i2c:
   sda: GPIOXX
   scl: GPIOXX
 
 esp_audio_stack:
   id: audio_stack
+  sample_rate: 48000         # I2S bus and hardware speaker rate.
+  output_sample_rate: 16000  # Mono microphone delivery rate for AEC/AFE.
+  bits_per_sample: 32
+  slot_bit_width: 32
+  i2s_mclk_pin: GPIOXX
   i2s_bclk_pin: GPIOXX
   i2s_lrclk_pin: GPIOXX
   i2s_din_pin: GPIOXX
@@ -64,6 +71,14 @@ board requires values different from the defaults.
 - **speaker_channels** (*Optional*, int): Playback channel count, `1` or `2`. Defaults to `1`.
 - **mic_channel** (*Optional*, string): Stereo slot carrying the microphone, `left` or `right`. Defaults to `left`.
 - **rx_slot_mode** (*Optional*, string): Read one or both stereo slots on RX, `mono` or `stereo`. Defaults to `mono`.
+- **rx_mic_slots** (*Optional*, list): Two distinct STD-I2S microphone slots, `left`
+  and `right`, in processor-channel order. Requires `rx_slot_mode: stereo` and
+  cannot be combined with TDM or ES8311 stereo-reference input. Omit it to select
+  one microphone with `mic_channel`.
+- **mic_mix** (*Optional*, string): `passthrough` (default) preserves selected
+  microphones; `average` combines two physical microphones into mono. Keep the
+  reference separate. A bound AFE must use `mic_num: 1` and `se_enabled: false`
+  for an average. The same choice supports STD I2S and TDM microphone layouts.
 - **tx_channel** (*Optional*, string): TX slot placement in mono-on-stereo layouts, `left` or `right`. Defaults to `left`.
 - **correct_dc_offset** (*Optional*, boolean): Remove DC bias from the capture path. Defaults to `false`.
 - **input_gain** (*Optional*, float): Digital gain applied before the processor, from `0.01` to `32.0`. Defaults to `1.0`.
@@ -81,7 +96,9 @@ board requires values different from the defaults.
 - **i2s_comm_fmt** (*Optional*, string): Frame format. One of `philips`, `msb`, `pcm_short`, `pcm_long`. Defaults to `philips`.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio. One of `128`, `256`, `384`, `512`. Defaults to `256`.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. In the maintained target set, only ESP32-P4 supports it. Defaults to `false`.
-- **dma_desc_num** (*Optional*, int): DMA descriptor count, from `2` to `16`. Defaults to `6`.
+- **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, from `2` to
+  `16`. Omitted: TX uses two descriptors; RX starts at six and retains its TDM
+  capture margin. An explicit value sets TX and the RX starting count.
 - **dma_frame_num** (*Optional*, int): Frames per DMA descriptor, from `64` to `4092`.
 
 ### Dual-bus I2S
@@ -128,6 +145,9 @@ ADC slot. YAML slot numbers remain physical bus positions after DMA packing.
 - Common codec fields include **address**, input **gain_db**, **use_mclk** and
   **no_dac_ref**. ES7210 additionally exposes **mic_selected**,
   **ref_channel** and **ref_gain_db**.
+- **codec.output.pa_gain** (*Optional*, float): Physical ES8311 amplifier gain in
+  dB, from `0.0` to `40.0`, default `0.0`. It calibrates the hardware volume curve;
+  use the actual amplifier circuit gain.
 
 ### Task, memory and diagnostics
 
@@ -145,7 +165,9 @@ ADC slot. YAML slot numbers remain physical bus positions after DMA packing.
 
 ## Automation triggers
 
-`on_start`, `on_idle` and `on_state` follow the aggregate runtime state.
+`on_start` reports completed shared-hardware startup. `on_idle` reports a stop
+request or failed start; `esp_audio_stack.is_idle` waits for completed cleanup.
+`on_state` follows aggregate microphone/speaker consumer state.
 `on_mic_start` / `on_mic_idle`, `on_speaker_start` / `on_speaker_idle`, and
 `on_amplifier_required` / `on_amplifier_idle` expose consumer edges without a
 timer-based lifecycle guess.
@@ -154,7 +176,8 @@ timer-based lifecycle guess.
 
 ### `esp_audio_stack.start`
 
-Starts the audio path explicitly.
+Requests startup on the resident audio task and returns without waiting for
+codec/I2S readiness. Use `on_start` for dependent actions instead of a fixed delay.
 
 ```yaml
 on_...:
@@ -169,7 +192,15 @@ Requests a stop of the audio path.
 
 ### `esp_audio_stack.is_idle`
 
-Returns true when the stack is in the `idle` runtime state.
+Returns true when shared hardware is fully idle and cleanup is complete.
+
+## Analog gain controls
+
+Optional `input_pga` and `reference_pga` number controls request analog codec
+gain, from 0 to 37.5 dB. `input_pga` requires an input codec; `reference_pga`
+requires ES7210 with an explicit enabled reference channel. Saved values survive
+codec reopening. Drivers may quantize the request; the value is not a hardware
+register readback.
 
 ## See Also
 

@@ -15,6 +15,11 @@ silence. Disabling the parent AEC switch is an explicit bypass that publishes
 converted raw mic through this same entity; it does not create a second
 microphone path.
 
+The public stream is mono signed 16-bit PCM at the parent's
+``output_sample_rate`` (or ``sample_rate`` when omitted). Configure rates on the
+parent rather than the microphone platform. A native ``MicrophoneSource`` can
+convert channels, sample width and gain; it does not resample this stream.
+
 .. code-block:: yaml
 
     esp_audio_stack:
@@ -31,8 +36,8 @@ microphone path.
 Configuration variables:
 ------------------------
 
-- **esp_audio_stack_id** (**Required**, :ref:`config-id`): The parent
-  ``esp_audio_stack`` component.
+- **esp_audio_stack_id** (*Optional*, :ref:`config-id`): The parent
+  ``esp_audio_stack`` component; inferred when exactly one is available.
 - **id** (*Optional*, :ref:`config-id`): Manually specify the microphone ID.
 
 See Also

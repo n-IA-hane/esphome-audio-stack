@@ -11,6 +11,8 @@ implements the audio-processor interface used by `esp_audio_stack`.
 Use it when the device needs software echo cancellation but not the full AFE
 pipeline.
 
+Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM.
+
 ```yaml
 esp_aec:
   id: aec_processor
@@ -31,6 +33,10 @@ The parent `esp_audio_stack` component owns the I2S bus and echo reference.
   to `8`. Defaults to `4`; effective time coverage depends on the selected
   engine/frame shape.
 - **mode** (*Optional*, string): AEC engine and profile. One of `sr_low_cost`, `sr_high_perf`, `fd_low_cost`, `fd_high_perf`, `voip_low_cost` and `voip_high_perf`. Defaults to `sr_low_cost`.
+
+Maintained Intercom FULL presets choose SR HIGH initially and offer SR LOW/HIGH.
+VoIP-only presets retain FD choices. These package defaults are separate from
+the standalone component defaults above.
 
 ## Actions
 
