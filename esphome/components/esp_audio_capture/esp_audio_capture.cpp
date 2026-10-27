@@ -29,7 +29,7 @@ void ESPAudioCapture::setup() {
 
 void ESPAudioCapture::dump_config() {
   ESP_LOGCONFIG(TAG, "Optional PCM capture: %s:%u, %u ms, %u bytes", this->address_.c_str(), this->port_,
-                this->duration_ms_, static_cast<unsigned>(this->buffer_size_));
+                static_cast<unsigned>(this->duration_ms_), static_cast<unsigned>(this->buffer_size_));
 }
 
 bool ESPAudioCapture::start() {
