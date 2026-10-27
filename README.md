@@ -2,7 +2,7 @@
 
 *Developed and maintained by n-IA-hane, with community contributions and support. [❤️ Sponsor the project](https://github.com/sponsors/n-IA-hane)*
 
-[Development preview 2026.11.0-dev](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.11.0-dev) uses the coordinated `dev` sources.
+[Stable release 2026.11.0](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.11.0) uses the coordinated `main` sources.
 
 **Capture the microphone and play the speaker at the same time, even on a
 single shared I2S bus. Feed echo-cancelled microphone audio to Micro Wake Word,
@@ -40,7 +40,7 @@ Word and OTA providers included in ESPHome. This repository supplies the bus,
 codec and optional processing components; it does not override those ESPHome
 providers.
 
-[Stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
+[Previous stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 
 Use ESPHome **2026.10.0 or newer**,
@@ -63,8 +63,8 @@ gain defaults; diagnostics remain off until explicitly requested.
 | Combine music, voice replies and calls | [Rates and playback sources](#8-combine-different-rates-and-playback-sources) | Shared output with the required resamplers/mixer and application coordination |
 
 For a maintained device, start with its defaults and the
-[progressive package examples](https://github.com/n-IA-hane/esphome-intercom/blob/dev/packages/README.md#work-through-a-full-profile).
-The reorganized development profiles use `firmware_features` to select consumers;
+[progressive package examples](https://github.com/n-IA-hane/esphome-intercom/blob/main/packages/README.md#work-through-a-full-profile).
+The maintained profiles use `firmware_features` to select consumers;
 you do not need to construct this low-level audio path again. The selected
 AFE/AEC/native backend is a separate hardware/profile choice.
 
@@ -1029,7 +1029,7 @@ The detailed pages contain option tables, actions and troubleshooting:
 The examples are configuration starting points, not prequalified firmware for
 arbitrary wiring. Their YAML can be validated without proving the physical
 microphones, codec or amplifier work. Board-specific full firmware profiles
-live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/dev/yamls).
+live in [Intercom](https://github.com/n-IA-hane/esphome-intercom/tree/main/yamls).
 
 ## Technical sources
 
@@ -1072,7 +1072,7 @@ custom build pins them separately, align that override with the current
 interfaces and microphone-only or speaker-only configurations remain supported.
 
 For the maintained Intercom firmwares, start from the updated YAML for the exact
-board and follow the [package migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md).
+board and follow the [package migration guide](https://github.com/n-IA-hane/esphome-intercom/blob/main/docs/BREAKING_CHANGES.md).
 See the [changelog](CHANGELOG.md) for the complete delta from the stable release.
 
 The sparse-TDM work was informed by
@@ -1100,7 +1100,7 @@ Dependencies selected by the current component sources:
   [the component configuration](esphome/components/esp_afe/__init__.py) to
   `b1e077aa5fd34e937752712f94b1a515d459b116` by default.
 
-The development dependency set pins GMF AI Audio 1.1.1 with a manifest compatible
+The release dependency set pins GMF AI Audio 1.1.1 with a manifest compatible
 with ESP-SR 2.6.0. The AFE adapter now uses official manager callbacks directly;
 it no longer needs the fork's separate AFE-element output callback.
 `gmf_source` remains available for explicitly identified local experiments. See

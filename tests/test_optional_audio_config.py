@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 )
 def test_optional_feature_composition(tmp_path, variant):
     config = (ROOT / "examples/04-dual-mic-downmix.yaml").read_text()
-    config = config.replace("github://n-IA-hane/esphome-audio-stack@dev", str(ROOT / "esphome/components"))
+    config = config.replace("github://n-IA-hane/esphome-audio-stack@main", str(ROOT / "esphome/components"))
     config = config.replace("!secret wifi_ssid", "test-network").replace(
         "!secret wifi_password", "test-password"
     )

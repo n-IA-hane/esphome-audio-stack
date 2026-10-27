@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.0-dev
+## 2026.11.0
 
 Changes since stable **2026.10.2**.
 
@@ -97,7 +97,7 @@ Changes since stable **2026.10.2**.
   rather than following the former automatic level gate.
 
 [Upgrade steps](README.md#upgrading-from-2026102-to-2026110) |
-[Intercom package migration](https://github.com/n-IA-hane/esphome-intercom/blob/dev/docs/BREAKING_CHANGES.md)
+[Intercom package migration](https://github.com/n-IA-hane/esphome-intercom/blob/main/docs/BREAKING_CHANGES.md)
 
 Rebuild and upload the firmware after updating. For maintained Intercom devices,
 start from the current YAML for the exact board.

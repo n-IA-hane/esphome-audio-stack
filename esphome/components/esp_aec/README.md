@@ -42,7 +42,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: dev
+      ref: main
     components: [esp_audio_stack, esp_aec]
 
 esp_aec:

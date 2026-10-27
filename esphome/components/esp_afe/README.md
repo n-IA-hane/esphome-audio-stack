@@ -127,7 +127,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: dev
+      ref: main
     components: [esp_audio_stack, esp_afe]
 ```
 
@@ -518,7 +518,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/n-IA-hane/esphome-audio-stack
-      ref: dev
+      ref: main
     components: [esp_audio_stack, esp_afe]
 
 esp_afe:
@@ -769,7 +769,7 @@ its upstream revision and the dirty source hash with the firmware artifacts.
 Omit it for the published pinned dependency. This override changes the source of
 the same GMF component; it does not select a second AFE implementation.
 
-The development preview pins GMF commit
+This release pins GMF commit
 `b1e077aa5fd34e937752712f94b1a515d459b116`. No local `gmf_source` override is
 needed for this dependency set. Native callback/lifecycle tests exercise the
 adapter, but they do not qualify device scheduling, acoustic cancellation or

@@ -54,7 +54,7 @@ def test_unnamed_stack_binds_endpoints_actions_and_idle_condition(tmp_path):
     import re
 
     text = (ROOT / "examples/00-generic-i2s-duplex.yaml").read_text().replace(
-        "github://n-IA-hane/esphome-audio-stack@dev", str(ROOT / "esphome/components")
+        "github://n-IA-hane/esphome-audio-stack@main", str(ROOT / "esphome/components")
     )
     text += """
 button:

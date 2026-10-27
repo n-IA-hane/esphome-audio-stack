@@ -34,9 +34,9 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
 
-# Published development source. Override it privately for unpublished local changes.
+# Published stable source. Override it privately for unpublished local changes.
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@dev
+  - source: github://n-IA-hane/esphome-audio-stack@main
     components:
       - esp_audio_stack
 

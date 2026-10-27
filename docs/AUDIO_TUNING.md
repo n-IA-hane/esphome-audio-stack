@@ -139,7 +139,7 @@ Add `esp_audio_capture` to the same external component source as Audio Stack:
 
 ```yaml
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@dev
+  - source: github://n-IA-hane/esphome-audio-stack@main
     components: [esp_audio_stack, esp_aec, esp_audio_capture]
 
 # Give the existing stack and microphone explicit IDs if needed.

@@ -36,7 +36,7 @@ wifi:
 # Include the backend and the optional echo canceller.
 # For unpublished changes, override this source only in a private local YAML.
 external_components:
-  - source: github://n-IA-hane/esphome-audio-stack@dev
+  - source: github://n-IA-hane/esphome-audio-stack@main
     components:
       - esp_audio_stack
       - esp_aec
