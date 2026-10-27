@@ -1,0 +1,255 @@
+// Real facade/parent method bodies are inserted below. The idle callback is a
+// deterministic switch to the independent mixer producer at an unlocked call
+// boundary, not a claim that a user callback re-enters playback.
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <optional>
+#include <vector>
+using TickType_t = unsigned;
+unsigned clock_ms = 0, waited = 0;
+unsigned millis() { return clock_ms; }
+void vTaskDelay(unsigned ticks) { waited += ticks; }
+#define ESP_LOGI(...) ((void) 0)
+#define ESP_LOGD(...) ((void) 0)
+#define ESP_LOGW(...) ((void) 0)
+#define ESP_LOGE(...) ((void) 0)
+#define LOG_STR(x) (x)
+namespace speaker { enum { STATE_STOPPED, STATE_STARTING, STATE_RUNNING, STATE_STOPPING }; }
+struct Callback {
+  std::function<void()> hook;
+  void call() { if (hook) { auto action = std::move(hook); hook = {}; action(); } }
+};
+struct OutputCallback {
+  unsigned frames = 0, calls = 0;
+  void call(uint32_t count, int64_t) { frames += count; ++calls; }
+};
+struct Buffer {
+  size_t capacity = 4096;
+  std::vector<uint8_t> queued, emitted, discarded;
+  std::function<void(unsigned)> on_played;
+  size_t free() const { return capacity - queued.size(); }
+  size_t available() const { return queued.size(); }
+  size_t write_without_replacement(const void *data, size_t count, unsigned ticks, bool = true) {
+    if (count > free()) { waited += ticks; return 0; }
+    auto *bytes = static_cast<const uint8_t *>(data);
+    queued.insert(queued.end(), bytes, bytes + count);
+    return count;
+  }
+  void reset() { discarded.insert(discarded.end(), queued.begin(), queued.end()); queued.clear(); }
+  void emit() {
+    const unsigned frames = queued.size() / 2;
+    emitted.insert(emitted.end(), queued.begin(), queued.end()); queued.clear();
+    if (frames && on_played) on_played(frames);
+  }
+};
+struct ESPAudioStack {
+  Buffer storage; Buffer *speaker_buffer_ = &storage;
+  std::atomic<bool> speaker_requested_{false}, speaker_running_{false}, has_mic_consumers_{false};
+  std::atomic<bool> request_speaker_reset_{false}, has_i2s_error_{false}, audio_stack_running_{true};
+  Callback speaker_start_callback_, speaker_idle_callback_;
+  bool starting = false, failed = false, async_start = false;
+  unsigned start_calls = 0, stop_calls = 0, generation = 0;
+  void reset_tx_playback_() { ++generation; }
+  void update_runtime_state_() {}
+  void stop() { ++stop_calls; audio_stack_running_ = false; starting = false; }
+  void start() {
+    ++start_calls;
+    if (async_start) starting = true;
+    else { audio_stack_running_ = true; failed = false; has_i2s_error_ = false; }
+  }
+  // Models the actual hardware-owner completion, including its retained
+  // speaker request, without opening I2S or creating a task.
+  void commit_start() {
+    starting = false; failed = false; audio_stack_running_ = true; has_i2s_error_ = false;
+    if (speaker_requested_) start_speaker();
+  }
+  void fail_session() { failed = true; audio_stack_running_ = false; has_i2s_error_ = true; }
+  bool has_failed_session() const { return failed; }
+  bool is_starting() const { return starting; }
+  bool is_running() const { return audio_stack_running_; }
+  bool has_i2s_error() const { return has_i2s_error_; }
+  bool has_pending_speaker_output() const { return false; }
+  size_t get_speaker_buffer_available() const { return storage.queued.size(); }
+  unsigned get_speaker_channels() const { return 1; }
+  void set_speaker_paused(bool) {}
+  void start_speaker(); void stop_speaker(); void service_speaker_reset_();
+  size_t play(const uint8_t *, size_t, TickType_t);
+};
+struct ESPAudioStackSpeaker {
+  ESPAudioStack *parent_ = nullptr;
+  int state_ = speaker::STATE_STOPPED;
+  std::atomic<bool> listener_registered_{false}, implicit_recovery_used_{false};
+  bool finishing_ = false, pause_state_ = false, i2s_error_latched_ = false, parent_requested_ = false;
+  unsigned last_write_ms_ = 0;
+  std::optional<unsigned> timeout_{1000};
+  OutputCallback audio_output_callback_;
+  bool is_failed() const { return false; }
+  bool status_has_error() const { return false; }
+  void status_set_error(const char *) {} void status_clear_error() {}
+  bool loop_enabled = true;
+  void enable_loop_soon_any_context() { loop_enabled = true; }
+  void disable_loop() { loop_enabled = false; }
+  void set_pause_state(bool value) { pause_state_ = value; parent_->set_speaker_paused(value); }
+  void start(); void stop(); void finish(); void loop(); bool has_buffered_data() const;
+  static void speaker_output_callback(void *, uint32_t, int64_t);
+  size_t play(const uint8_t *, size_t, TickType_t);
+};
+// PRODUCTION_METHODS
+struct Rig {
+  ESPAudioStack parent;
+  ESPAudioStackSpeaker sink;
+  Rig() {
+    clock_ms = 0; waited = 0; sink.parent_ = &parent;
+    parent.storage.on_played = [this](unsigned frames) {
+      ESPAudioStackSpeaker::speaker_output_callback(&sink, frames, clock_ms * 1000LL);
+    };
+  }
+  void start() { sink.start(); sink.loop(); assert(sink.state_ == speaker::STATE_RUNNING); }
+  void preannounce() {
+    start(); uint8_t pcm[128]{};
+    assert(sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm)); parent.storage.emit();
+    assert(sink.audio_output_callback_.frames == 64 && !sink.has_buffered_data());
+  }
+  void idle_timeout() {
+    clock_ms = 1501; sink.loop();
+    assert(sink.state_ == speaker::STATE_RUNNING && !sink.listener_registered_);
+  }
+};
+
+void verify_slow_start(unsigned latency_ms, bool retry_first, unsigned start_ms = 0) {
+  Rig rig;
+  rig.preannounce();
+  // Exercise the real stop path with no microphone consumer: the following
+  // playback must open the hardware asynchronously, not reuse a running bus.
+  rig.sink.stop();
+  rig.sink.loop();
+  rig.parent.service_speaker_reset_();
+  assert(rig.parent.stop_calls == 1 && !rig.parent.is_running());
+  assert(rig.sink.state_ == speaker::STATE_STOPPED);
+  rig.parent.async_start = true;
+  clock_ms = start_ms;
+  rig.sink.start();
+
+  uint8_t pcm[16];
+  for (size_t i = 0; i < sizeof(pcm); ++i) pcm[i] = static_cast<uint8_t>(i + 1);
+  const size_t emitted_before = rig.parent.storage.emitted.size();
+  const unsigned frames_before = rig.sink.audio_output_callback_.frames;
+  unsigned elapsed = 0, next_retry = 0, seen_starts = 0, ready_at = 0;
+  size_t accepted = 0;
+  auto retry = [&] {
+    if (accepted == sizeof(pcm) || elapsed < next_retry) return;
+    accepted += rig.sink.play(pcm + accepted, sizeof(pcm) - accepted, 25);
+    // Native mixer writes use a 25 ms budget. A rejected write retains its
+    // caller-owned bytes; the independent main loop may run before its retry.
+    next_retry = elapsed + 25;
+  };
+  for (; elapsed <= latency_ms + 100; ++elapsed) {
+    clock_ms = start_ms + elapsed;
+    rig.parent.service_speaker_reset_();
+    if (rig.parent.start_calls != seen_starts) {
+      seen_starts = rig.parent.start_calls;
+      ready_at = elapsed + latency_ms;
+    }
+    if (rig.parent.is_starting() && elapsed >= ready_at) {
+      rig.parent.commit_start();
+      // Production setup registers this wake on the parent's lifecycle event.
+      rig.sink.enable_loop_soon_any_context();
+    }
+    if (retry_first) retry();
+    if (rig.sink.loop_enabled) rig.sink.loop();
+    if (!retry_first) retry();
+    if (rig.parent.speaker_running_) rig.parent.storage.emit();
+    if (rig.parent.storage.emitted.size() - emitted_before == sizeof(pcm)) break;
+  }
+  assert(accepted == sizeof(pcm));
+  assert(rig.parent.storage.emitted.size() - emitted_before == sizeof(pcm));
+  assert(std::equal(std::begin(pcm), std::end(pcm), rig.parent.storage.emitted.begin() + emitted_before));
+  assert(rig.sink.audio_output_callback_.frames - frames_before == sizeof(pcm) / 2);
+  assert(rig.parent.storage.discarded.empty());
+  assert(rig.parent.start_calls == 1 && rig.parent.stop_calls == 1);
+}
+
+int main() {
+  // Ordered stop/reset/start, used as the independent positive control.
+  { Rig rig; rig.preannounce(); rig.idle_timeout(); rig.sink.loop(); rig.parent.service_speaker_reset_();
+    rig.start(); uint8_t main_pcm[32]{};
+    assert(rig.sink.play(main_pcm, sizeof(main_pcm), 9) == sizeof(main_pcm));
+    assert(waited == 0 && rig.parent.storage.discarded.empty());
+  }
+  // Actual old-stop dispatch interleaving. New play posts a start intent but
+  // must return zero until the preceding teardown has finished.
+  for (bool finish_driven : {false, true}) {
+    Rig rig; rig.preannounce();
+    if (finish_driven) {
+      // This covers the public hardware-finish contract. The maintained fixed
+      // 48 kHz mixer graph normally finishes its source, not this hardware sink.
+      rig.sink.finish(); rig.sink.loop();
+      assert(rig.sink.state_ == speaker::STATE_RUNNING && !rig.sink.listener_registered_);
+    } else {
+      rig.idle_timeout();
+    }
+    std::vector<uint8_t> main_pcm(34); for (size_t i = 0; i < main_pcm.size(); ++i) main_pcm[i] = i + 1;
+    size_t accepted = 999;
+    rig.parent.speaker_idle_callback_.hook = [&] {
+      accepted = rig.sink.play(main_pcm.data(), main_pcm.size(), 23);
+      assert(rig.sink.listener_registered_);  // The latest intent survives.
+    };
+    rig.sink.loop();
+    assert(accepted == 0 && waited == 23 && rig.parent.storage.queued.empty());
+    rig.parent.service_speaker_reset_(); assert(rig.parent.storage.discarded.empty());
+    rig.sink.loop(); assert(rig.sink.state_ == speaker::STATE_RUNNING);
+    // Retry caller-owned PCM through bounded frame-aligned partial writes.
+    rig.parent.storage.capacity = 10;
+    const size_t emitted_before = rig.parent.storage.emitted.size();
+    const unsigned frames_before = rig.sink.audio_output_callback_.frames;
+    size_t offset = 0;
+    while (offset < main_pcm.size()) {
+      size_t count = rig.sink.play(main_pcm.data() + offset, main_pcm.size() - offset, 0);
+      assert(count && count % 2 == 0); offset += count; rig.parent.storage.emit();
+    }
+    rig.parent.storage.emit();
+    assert(rig.parent.storage.discarded.empty());
+    assert(std::equal(main_pcm.begin(), main_pcm.end(), rig.parent.storage.emitted.begin() + emitted_before));
+    assert(rig.sink.audio_output_callback_.frames - frames_before == main_pcm.size() / 2);
+    assert(waited == 23);  // No extra wait on any successful RUNNING write.
+  }
+  // Finish drains; a fresh explicit start supersedes an unconsumed finish.
+  { Rig rig; rig.start(); uint8_t pcm[16]{};
+    assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm));
+    rig.sink.finish(); rig.sink.loop(); assert(rig.sink.finishing_ && rig.sink.listener_registered_);
+    rig.sink.start(); rig.parent.storage.emit(); rig.sink.loop();
+    assert(!rig.sink.finishing_ && rig.sink.state_ == speaker::STATE_RUNNING);
+    rig.sink.finish(); rig.sink.loop(); rig.sink.loop(); rig.parent.service_speaker_reset_();
+    assert(rig.sink.state_ == speaker::STATE_STOPPED); rig.start();
+    assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm));
+  }
+  // A real asynchronous STARTING phase refuses PCM and preserves zero-budget
+  // nonblocking calls. Stop can cancel it; a later start can commit normally.
+  { Rig rig; rig.parent.async_start = true; rig.parent.audio_stack_running_ = false;
+    rig.sink.start(); rig.sink.loop(); assert(rig.sink.state_ == speaker::STATE_STARTING);
+    uint8_t pcm[16]{}; assert(rig.sink.play(pcm, sizeof(pcm), 7) == 0 && waited == 7);
+    assert(rig.sink.play(pcm, sizeof(pcm), 0) == 0 && waited == 7);
+    rig.sink.stop(); rig.sink.loop(); assert(rig.sink.state_ == speaker::STATE_STOPPED);
+    rig.parent.service_speaker_reset_(); rig.sink.start(); rig.sink.loop();
+    rig.parent.commit_start(); rig.sink.loop(); assert(rig.sink.state_ == speaker::STATE_RUNNING);
+    assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm) && waited == 7);
+  }
+  // Preserve the existing single implicit recovery attempt and its wait budget.
+  { Rig rig; rig.start(); rig.parent.async_start = true; rig.parent.fail_session();
+    uint8_t pcm[16]{}; const unsigned starts_before = rig.parent.start_calls;
+    assert(rig.sink.play(pcm, sizeof(pcm), 11) == 0 && waited == 11);
+    assert(rig.sink.play(pcm, sizeof(pcm), 13) == 0 && waited == 24);
+    assert(rig.parent.start_calls == starts_before + 1);
+    rig.sink.loop(); rig.parent.commit_start(); rig.sink.loop();
+    assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm) && waited == 24);
+  }
+  for (unsigned latency : {500u, 1499u, 1501u})
+    for (bool retry_first : {false, true}) verify_slow_start(latency, retry_first);
+  for (bool retry_first : {false, true}) verify_slow_start(1501, retry_first, UINT32_MAX - 1000u);
+  std::puts("PASS: ordered restart, idle-stop race, exact PCM/credits after partial retries, finish/start, async cancel, recovery budgets, slow-start retry orders and clock wrap");
+}

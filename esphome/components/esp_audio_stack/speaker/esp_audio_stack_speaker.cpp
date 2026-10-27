@@ -114,7 +114,9 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t
     this->start();
   }
 
-  if (!this->listener_registered_.load(std::memory_order_acquire)) {
+  if (!this->listener_registered_.load(std::memory_order_acquire) || this->state_ != speaker::STATE_RUNNING) {
+    // A queued start retains the intent, but cannot admit PCM into the previous
+    // session while its stop/reset is still being dispatched.
     // Honor the producer's backpressure budget, as the native I2S speaker does.
     // A zero budget remains nonblocking; retry scheduling belongs to that caller.
     vTaskDelay(ticks_to_wait);
@@ -254,6 +256,8 @@ void ESPAudioStackSpeaker::loop() {
         this->state_ = speaker::STATE_STOPPED;
         break;
       }
+      // The idle budget starts when hardware is ready, not while opening it.
+      this->last_write_ms_ = millis();
       this->state_ = speaker::STATE_RUNNING;
       break;
 
