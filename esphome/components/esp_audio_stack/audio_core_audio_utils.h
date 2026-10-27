@@ -10,6 +10,31 @@ namespace esphome::esp_audio_stack {
 // 16 kHz). Processors assemble larger native frames through their staging.
 inline constexpr size_t DEFAULT_AUDIO_FRAME_SAMPLES = 256;
 
+// Post-processor boost is a constant multiplier, not an automatic level
+// controller. Compute its Q16.16 coefficient only when the control changes.
+inline uint32_t microphone_boost_to_q16(float gain) {
+  if (!(gain > 1.0f) || !std::isfinite(gain))
+    return 1U << 16;
+  return static_cast<uint32_t>(std::lround(static_cast<double>(gain > 32.0f ? 32.0f : gain) * 65536.0));
+}
+
+// Operates on individual interleaved S16 samples, independently of channels,
+// chunk boundaries and previous audio. Round magnitude to nearest, ties to
+// even, then restore its sign so small negative samples have no DC bias.
+inline void apply_microphone_boost_q16(int16_t *samples, size_t count, uint32_t gain_q16) {
+  if (samples == nullptr || gain_q16 == (1U << 16))
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    const int64_t product = static_cast<int64_t>(samples[i]) * gain_q16;
+    const uint64_t magnitude = product < 0 ? -product : product;
+    uint64_t rounded = magnitude >> 16;
+    const uint32_t fraction = magnitude & 0xffffU;
+    rounded += fraction > 0x8000U || (fraction == 0x8000U && (rounded & 1U));
+    const int64_t value = product < 0 ? -static_cast<int64_t>(rounded) : static_cast<int64_t>(rounded);
+    samples[i] = static_cast<int16_t>(value > 32767 ? 32767 : value < -32768 ? -32768 : value);
+  }
+}
+
 #ifndef ESPHOME_AUDIO_STACK_SCALE_SAMPLE_DEFINED
 #define ESPHOME_AUDIO_STACK_SCALE_SAMPLE_DEFINED
 // Scale a 16-bit PCM sample by a float gain with saturation clamping.

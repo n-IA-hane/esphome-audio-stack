@@ -308,8 +308,8 @@ class ESPAudioStack final : public Component {
   bool is_processor_enabled() const { return this->processor_enabled_.load(std::memory_order_relaxed); }
 
   // Mic gain control. Attenuation uses esp-audio-libs Q31 in the hot path;
-  // positive dB boost uses Espressif esp_ae_alc because Q31 gain cannot
-  // represent amplification above unity.
+  // Positive gain uses a constant Q16.16 multiplier with PCM saturation,
+  // preserving fractional dB and the beginning of a quiet utterance.
   void set_mic_gain(float gain);
   float get_mic_gain() const { return this->mic_gain_.load(std::memory_order_relaxed); }
 
@@ -626,7 +626,7 @@ class ESPAudioStack final : public Component {
 #endif
 
     // ── Per-iteration snapshots from atomics ──
-    int8_t mic_gain_boost_db{0};
+    uint32_t mic_gain_boost_q16{1U << 16};
     int32_t mic_gain_q31{INT32_MAX};
     float input_gain_boost{1.0f};
     int32_t input_gain_q31{INT32_MAX};
@@ -680,7 +680,6 @@ class ESPAudioStack final : public Component {
   void capture_raw_audio_(const AudioTaskCtx &ctx);
   AudioCaptureObserver *capture_observer_{nullptr};
 #endif
-  bool apply_mic_alc_gain_(int16_t *samples, size_t sample_count, int8_t gain_db);
 #ifdef USE_ESP_AUDIO_STACK_SLOT_LEVELS
   void update_tdm_slot_levels_(const AudioTaskCtx &ctx);
 #endif
@@ -950,7 +949,7 @@ class ESPAudioStack final : public Component {
   // Gain controls (atomic: written from main loop, read from audio task via snapshot)
   std::atomic<float> mic_gain_{1.0f};             // Public/debug value, applied AFTER AEC.
   std::atomic<int32_t> mic_gain_q31_{INT32_MAX};  // Official esp-audio-libs attenuation path.
-  std::atomic<int8_t> mic_gain_boost_db_{0};      // >0 dB via official esp_ae_alc.
+  std::atomic<uint32_t> mic_gain_boost_q16_{1U << 16};  // Constant positive gain, preserving fractional dB.
   std::atomic<float> input_gain_{1.0f};           // Public/debug value before the processor.
   std::atomic<int32_t> input_gain_q31_{INT32_MAX};
   std::atomic<float> input_gain_boost_{1.0f};
@@ -960,8 +959,6 @@ class ESPAudioStack final : public Component {
   std::atomic<int32_t> master_volume_q31_{INT32_MAX};      // board master volume
   std::atomic<float> master_volume_linear_{1.0f};          // unclipped user value for hardware codec volume APIs
   std::atomic<float> master_volume_min_db_{-49.0f};                     // 0..100% master curve floor; 0% remains hard mute
-  void *mic_alc_handle_{nullptr};
-  int8_t mic_alc_gain_db_{0};
   bool use_stereo_aec_ref_{false};  // ES8311 digital feedback: RX stereo with L=mic, R=ref
   bool ref_channel_right_{false};   // Which channel is AEC reference: false=L, true=R
 

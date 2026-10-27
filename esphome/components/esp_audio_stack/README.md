@@ -918,13 +918,19 @@ switch controls echo cancellation while leaving other AFE stages active.
   the right hooks for amplifier power gating; do not use the generic audio-stack
   `on_start`/`on_idle` for speaker power if wake word or VA can keep the mic
   path active.
-- **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/VoIP/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, A zero linear multiplier means silence; **0 dB means unity gain**. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. Positive gain can clip any sample that exceeds the PCM range. Check the ADC
-and pre-processor levels first: AGC after processing cannot recover a waveform
-already clipped by the ADC or software input gain. The optional
-`mic_gain.initial_value` defaults to 0 dB and is applied only if no saved value
-exists. Both saved and initial values are clamped to the configured number
-range before they are applied and published. Setup does not replace a saved
-user preference.
+- **Mic Gain**: post-AEC/AFE microphone trim, from -20 to +30 dB in 1 dB
+  steps. It affects the PCM supplied to VA, VoIP and MWW. **0 dB is unity**;
+  a zero linear multiplier produces silence.
+
+  Attenuation uses ESPHome's Q31 `esp-audio-libs` gain path. Positive gain
+  uses a constant multiplier from the first sample, including after quiet
+  intervals. Samples that exceed the PCM range saturate. Check ADC and
+  pre-processor levels first: later gain adjustment cannot restore an
+  already clipped waveform.
+
+  The value is saved and restored on boot. `mic_gain.initial_value` defaults
+  to 0 dB and applies when no saved preference exists. Saved and initial
+  values are clamped to the configured number range.
 
 ### Audio task lifecycle
 

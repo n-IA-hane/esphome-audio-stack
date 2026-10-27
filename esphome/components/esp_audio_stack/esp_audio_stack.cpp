@@ -67,16 +67,6 @@ int32_t attenuation_factor_to_q31(float gain) {
   return esp_audio_libs::gain::db_to_q31(20.0f * std::log10(gain));
 }
 
-int8_t gain_factor_to_positive_db(float gain) {
-  if (!(gain > 1.0f))
-    return 0;
-  const int32_t db = static_cast<int32_t>(std::lround(20.0f * std::log10(gain)));
-  if (db <= 0)
-    return 0;
-  if (db > 30)
-    return 30;
-  return static_cast<int8_t>(db);
-}
 
 [[maybe_unused]] int32_t multiply_q31(int32_t a, int32_t b) {
   if (a <= 0 || b <= 0)
@@ -111,7 +101,7 @@ void ESPAudioStack::set_mic_gain(float gain) {
   gain = sanitize_gain_factor(gain);
   this->mic_gain_.store(gain, std::memory_order_relaxed);
   this->mic_gain_q31_.store(attenuation_factor_to_q31(gain), std::memory_order_relaxed);
-  this->mic_gain_boost_db_.store(gain_factor_to_positive_db(gain), std::memory_order_relaxed);
+  this->mic_gain_boost_q16_.store(microphone_boost_to_q16(gain), std::memory_order_relaxed);
 }
 
 void ESPAudioStack::set_input_gain(float gain) {
@@ -487,6 +477,7 @@ void ESPAudioStack::loop() {
     this->request_audio_preallocation_();
   }
 }
+
 
 void ESPAudioStack::dump_config() {
   ESP_LOGCONFIG(TAG, "ESP Audio Stack:");

@@ -90,6 +90,11 @@ Digital `mic_gain` amplifies the processed output. Analog PGA changes the input
 codec before digital processing. A clipped ADC signal cannot be repaired by
 reducing a digital gain later.
 
+Mic Gain applies a constant factor, including the beginning of a quiet phrase.
+It is independent of the AFE's optional automatic gain control. Positive gain
+saturates at the PCM limits; keep enough headroom for nearby speech as well
+as distant voices.
+
 These optional numbers add analog controls:
 
 ```yaml
