@@ -82,6 +82,12 @@ def binary(tmp_path_factory):
         "saturated",
         "registry-full",
         "inflight",
+        "deadline-header",
+        "deadline-payload",
+        "stop-header",
+        "mute-payload",
+        "shutdown-header",
+        "stalled-header",
     ],
 )
 def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
@@ -90,6 +96,7 @@ def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
     server.listen(2)
     server.settimeout(5)
     errors = []
+    terminal_errors = []
     manifests = []
     release_slow_peer = threading.Event()
 
@@ -113,9 +120,10 @@ def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
                     writer.close(complete=True)
                 except (OSError, ValueError) as error:
                     writer.close(error=error)
+                    terminal_errors.append(str(error))
                     # Stop deliberately discards the unsent tail, so abrupt
                     # stop/overflow recordings may end on a partial record.
-                    if scenario == "happy":
+                    if scenario in ("happy", "deadline-header", "deadline-payload"):
                         errors.append(error)
                 manifests.append(writer.manifest)
         except Exception as error:
@@ -138,6 +146,17 @@ def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
     assert not thread.is_alive()
     assert result.returncode == 0, result.stdout + result.stderr
     assert not errors, errors
+    if scenario in ("deadline-header", "deadline-payload"):
+        assert manifests[0]["complete"]
+        assert len(manifests[0]["records"]) == 1
+        assert not terminal_errors
+    if scenario in ("stop-header", "mute-payload", "shutdown-header", "stalled-header"):
+        assert not manifests[0]["complete"]
+        expected = "truncated PCM frame" if scenario == "mute-payload" else "oversized or truncated capture header"
+        assert terminal_errors == [expected]
+        assert not manifests[0]["records"]
+    if scenario == "stalled-header":
+        assert "record_wait_budget_us=1000000" in result.stdout
     if scenario == "happy":
         assert len(manifests[0]["records"]) == 5
         with wave.open(str(tmp_path / "0/raw_mic.wav")) as wav:

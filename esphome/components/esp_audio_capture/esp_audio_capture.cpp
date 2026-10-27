@@ -97,12 +97,16 @@ void ESPAudioCapture::loop() {
   }
   const uint32_t generation = this->bound_generation_.load(std::memory_order_acquire);
   if (this->microphone_->get_mute_state() || this->parent_->has_failed_session() ||
-      (generation != UINT32_MAX && generation != this->parent_->capture_generation()) ||
-      uint64_t(esp_timer_get_time()) >= this->deadline_us_) {
+      (generation != UINT32_MAX && generation != this->parent_->capture_generation())) {
     this->stop();
   }
   if (this->stopping_.load(std::memory_order_acquire)) {
     if (this->writers_.load(std::memory_order_seq_cst) == 0) this->wake_worker_();
+    return;
+  }
+  // Duration ends admission, while the worker completes its current record.
+  if (uint64_t(esp_timer_get_time()) >= this->deadline_us_) {
+    if (this->active_.exchange(false, std::memory_order_seq_cst)) this->wake_worker_();
     return;
   }
   if (this->connected_.load(std::memory_order_acquire) && !this->microphone_held_) {
@@ -213,11 +217,10 @@ bool ESPAudioCapture::connect_() {
   return !this->stopping_.load(std::memory_order_acquire);
 }
 
-bool ESPAudioCapture::send_all_(const void* data, size_t bytes) {
+bool ESPAudioCapture::send_all_(const void* data, size_t bytes, int64_t send_deadline) {
   const auto* cursor = static_cast<const uint8_t*>(data);
-  // One bounded send budget per record part, unrelated to audio pacing.
-  const int64_t send_deadline = std::min<int64_t>(this->deadline_us_, esp_timer_get_time() + 1000000);
   while (bytes > 0 && !this->stopping_.load(std::memory_order_acquire)) {
+    if (esp_timer_get_time() >= send_deadline) return false;
     const ssize_t count = ::send(this->socket_fd_, cursor, bytes, 0);
     if (count > 0) {
       cursor += count;
@@ -247,7 +250,10 @@ bool ESPAudioCapture::send_record_(const CaptureRecord& record, const void* pcm,
       static_cast<unsigned long long>(record.timestamp_us), static_cast<unsigned long>(record.generation),
       static_cast<unsigned long>(record.sample_rate), static_cast<unsigned long>(record.frames), record.channels,
       record.bits, static_cast<unsigned long>(record.dropped), static_cast<unsigned>(bytes));
-  return len > 0 && size_t(len) < sizeof(header) && this->send_all_(header, len) && this->send_all_(pcm, bytes);
+  // Header and PCM share one finite transport budget, independent of capture duration.
+  const int64_t send_deadline = esp_timer_get_time() + 1000000;
+  return len > 0 && size_t(len) < sizeof(header) && this->send_all_(header, len, send_deadline) &&
+         this->send_all_(pcm, bytes, send_deadline);
 }
 
 void ESPAudioCapture::close_socket_() {
@@ -265,7 +271,7 @@ void ESPAudioCapture::worker_() {
   if (this->connect_()) {
     this->connected_.store(true, std::memory_order_release);
     this->enable_loop_soon_any_context();
-    while (!this->stopping_.load(std::memory_order_acquire)) {
+    while (!this->stopping_.load(std::memory_order_acquire) && uint64_t(esp_timer_get_time()) < this->deadline_us_) {
       size_t bytes = 0;
       void* item = this->queue_->receive_item(&bytes);
       if (item != nullptr) {

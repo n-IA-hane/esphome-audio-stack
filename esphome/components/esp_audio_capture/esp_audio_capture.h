@@ -51,7 +51,7 @@ class ESPAudioCapture final : public Component, public esp_audio_stack::AudioCap
   static void worker_entry_(void* self);
   void worker_();
   bool connect_();
-  bool send_all_(const void* data, size_t bytes);
+  bool send_all_(const void* data, size_t bytes, int64_t send_deadline);
   void close_socket_();
   void wake_worker_();
   bool send_record_(const CaptureRecord& record, const void* pcm, size_t bytes);

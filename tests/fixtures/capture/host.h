@@ -50,7 +50,8 @@ inline void vTaskDelete(TaskHandle_t task){{std::lock_guard guard(task->mutex);t
 inline SemaphoreHandle_t xSemaphoreCreateMutex(){static std::mutex lock;return &lock;}
 inline void xSemaphoreTake(SemaphoreHandle_t lock,unsigned){lock->lock();}
 inline void xSemaphoreGive(SemaphoreHandle_t lock){lock->unlock();}
-inline int64_t esp_timer_get_time(){return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+inline std::atomic<int64_t> capture_clock_override_us{-1};
+inline int64_t esp_timer_get_time(){const auto now=capture_clock_override_us.load();return now>=0?now:std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 namespace esphome::esp_audio_stack {
 inline std::atomic<unsigned> queues=0;
 class HostRing {
