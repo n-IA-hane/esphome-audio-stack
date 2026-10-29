@@ -42,6 +42,7 @@ enum esp_ae_rate_cvt_perf_type_t {ESP_AE_RATE_CVT_PERF_TYPE_MEMORY,ESP_AE_RATE_C
 struct esp_ae_rate_cvt_cfg_t {uint32_t src_rate=0,dest_rate=0;uint8_t channel=0,bits_per_sample=0,complexity=0;esp_ae_rate_cvt_perf_type_t perf_type{};};
 using esp_ae_rate_cvt_handle_t=esp_ae_rate_cvt_cfg_t*;
 int esp_ae_rate_cvt_open(esp_ae_rate_cvt_cfg_t*c,esp_ae_rate_cvt_handle_t*h){*h=new esp_ae_rate_cvt_cfg_t(*c);return 0;}
+int esp_ae_rate_cvt_reset(esp_ae_rate_cvt_handle_t){return 0;}
 void esp_ae_rate_cvt_close(esp_ae_rate_cvt_handle_t h){delete h;}
 int esp_ae_rate_cvt_process(esp_ae_rate_cvt_handle_t h,void*in,uint32_t n,void*out,uint32_t*count){
   const auto ratio=h->src_rate/h->dest_rate;assert(*count==n/ratio);

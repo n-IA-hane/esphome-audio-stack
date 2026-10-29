@@ -99,7 +99,7 @@ struct Rig{
  if(preloaded)driver.curr_ptr=pcm[N-1].data();}
  ~Rig(){vQueueDelete(driver.ready);vQueueDelete(stack.tx_completion_event_queue_);
 #ifdef CAUSAL_DMA
- vQueueDelete(stack.tx_ready_queue_);vQueueDelete(stack.tx_free_queue_);heap_caps_free(stack.tx_staging_records_);heap_caps_free(stack.tx_staging_data_);
+ vQueueDelete(stack.tx_ready_queue_);vQueueDelete(stack.tx_free_queue_);heap_caps_free(stack.tx_staging_records_);heap_caps_free(stack.tx_staging_data_);heap_caps_free(stack.tx_dma_descriptors_);
 #else
  vQueueDelete(stack.tx_completion_record_queue_);
 #endif
@@ -129,6 +129,22 @@ void replace_generation_before_refill(Queue *queue){
 #endif
 int main(int argc,char**argv){assert(argc==2);int scenario=std::stoi(argv[1]);
 #ifdef CAUSAL_DMA
+ if(scenario==24){now_us=0;Rig r;r.write(true);
+  for(unsigned i=0;i<20;++i){r.irq();r.drain();assert(r.stack.write_tx_dma_blocks_(r.ctx,nullptr,Rig::BYTES,0));}
+  for(unsigned i=0;i<Rig::N+1;++i){r.irq();r.drain();}
+  assert(r.stack.notified==256&&r.actual_frames==256&&r.stack.tx_completion_pending_real_records_==0);
+  assert(!r.stack.write_tx_dma_blocks_(r.ctx,nullptr,Rig::BYTES,2));return 0;
+ }
+ if(scenario==25){Rig r;assert(!r.stack.prime_tx_completion_records_(true));r.stack.tx_completion_tracking_active_=false;
+  memset(r.stack.tx_staging_data_,0x7f,r.stack.tx_staging_bytes_);assert(r.stack.prime_tx_completion_records_(true));
+  for(size_t i=0;i<Rig::BYTES;++i)assert(r.stack.tx_staging_data_[i]==0);return 0;
+ }
+ if(scenario==26){Rig r;r.stack.tx_completion_tracking_active_=false;
+  for(size_t n=2;n<=16;++n){r.stack.tx_dma_descriptor_count_=n;assert(r.stack.prepare_tx_completion_tracking_());assert(r.stack.tx_dma_descriptor_capacity_==n);}
+  auto*retained=r.stack.tx_dma_descriptors_;r.stack.tx_dma_descriptor_count_=2;assert(r.stack.prepare_tx_completion_tracking_());
+  assert(r.stack.tx_dma_descriptors_==retained&&r.stack.tx_dma_descriptor_capacity_==16);
+  r.stack.tx_completion_dma_frames_=UINT16_MAX+1U;assert(!r.stack.prepare_tx_completion_tracking_());return 0;
+ }
  if(scenario>=20 && scenario<=23){now_us=0;Rig r;const unsigned quantum=1U<<(scenario-20);
   r.stack.tx_completion_tracking_active_=false;r.stack.tx_logical_frame_size_=quantum*256;
   assert(r.stack.prepare_tx_completion_tracking_());r.stack.tx_completion_tracking_active_=true;
@@ -149,7 +165,7 @@ int main(int argc,char**argv){assert(argc==2);int scenario=std::stoi(argv[1]);
     // Force all cold allocations to be needed again, then fail each prefix.
     heap_caps_free(r.stack.tx_staging_records_);r.stack.tx_staging_records_=nullptr;r.stack.tx_staging_record_capacity_=0;
     heap_caps_free(r.stack.tx_staging_data_);r.stack.tx_staging_data_=nullptr;r.stack.tx_staging_bytes_=0;
-    heap_caps_free(r.stack.tx_completion_silence_);r.stack.tx_completion_silence_=nullptr;r.stack.tx_completion_silence_bytes_=0;
+    heap_caps_free(r.stack.tx_dma_descriptors_);r.stack.tx_dma_descriptors_=nullptr;r.stack.tx_dma_descriptor_capacity_=0;
     fail_allocation=allocation_count+failure;assert(!r.stack.prepare_tx_completion_tracking_());
     assert(!r.stack.tx_completion_tracking_active_);fail_allocation=0;
     assert(r.stack.prepare_tx_completion_tracking_());r.stack.tx_completion_tracking_active_=true;r.write(true);

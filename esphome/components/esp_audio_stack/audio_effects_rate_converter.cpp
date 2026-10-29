@@ -135,7 +135,7 @@ class BitCvtHandle {
       for (size_t i = 0; i < count; i++) mic_mono[i] = average_microphones(ch[0][i], ch[1][i]);
     } else
 #endif
-    memcpy(mic_mono, ch[0], count * sizeof(int16_t));
+    if (mic_mono != ch[0]) memcpy(mic_mono, ch[0], count * sizeof(int16_t));
   }
 
   if (num_mic_ch >= 2 && nch >= 2) {
@@ -148,9 +148,9 @@ class BitCvtHandle {
         return false;
       }
     }
-    if (ref_out != nullptr && nch >= 3)
+    if (ref_out != nullptr && nch >= 3 && ref_out != ch[2])
       memcpy(ref_out, ch[2], count * sizeof(int16_t));
-  } else if (ref_out != nullptr && nch >= 2) {
+  } else if (ref_out != nullptr && nch >= 2 && ref_out != ch[1]) {
     memcpy(ref_out, ch[1], count * sizeof(int16_t));
   }
   return true;
@@ -162,16 +162,28 @@ class RateCvtHandle {
 
   void init(uint32_t ratio, uint32_t src_rate, uint32_t dest_rate, uint8_t channels, uint8_t complexity,
             uint8_t perf_type) {
+    const auto normalized_complexity = std::min<uint8_t>(std::max<uint8_t>(complexity, 1), 3);
+    const auto normalized_perf = perf_type == 0 ? ESP_AE_RATE_CVT_PERF_TYPE_MEMORY : ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
+    if (this->ratio_ == ratio && this->src_rate_ == src_rate && this->dest_rate_ == dest_rate &&
+        this->channels_ == channels && this->complexity_ == normalized_complexity && this->perf_type_ == normalized_perf) {
+      this->reset();
+      return;
+    }
+    this->close_handle_();
     this->ratio_ = ratio;
     this->src_rate_ = src_rate;
     this->dest_rate_ = dest_rate;
     this->channels_ = channels;
-    this->complexity_ = std::min<uint8_t>(std::max<uint8_t>(complexity, 1), 3);
-    this->perf_type_ = perf_type == 0 ? ESP_AE_RATE_CVT_PERF_TYPE_MEMORY : ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
-    this->close_handle_();
+    this->complexity_ = normalized_complexity;
+    this->perf_type_ = normalized_perf;
   }
 
-  void reset() { this->close_handle_(); }
+  void reset() {
+    // Only the audio owner calls init/reset between sessions, never while
+    // process() is using the handle. Preserve the allocated filter state.
+    if (this->handle_ != nullptr && esp_ae_rate_cvt_reset(this->handle_) != ESP_AE_ERR_OK)
+      this->close_handle_();
+  }
   bool passthrough() const { return this->ratio_ <= 1; }
 
   bool ready() {
@@ -340,7 +352,7 @@ class MultiChannelAudioEffectsRateConverterImpl {
       if (this->out_ch_[i] != nullptr)
         heap_caps_free(this->out_ch_[i]);
     }
-    for (uint8_t i = 0; i < MAX_DEINTLV_CH; i++) {
+    for (uint8_t i = 0; i < MAX_RATE_CVT_CHANNELS; i++) {
       if (this->deintlv_ch_[i] != nullptr)
         heap_caps_free(this->deintlv_ch_[i]);
     }
@@ -359,7 +371,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
 
   void reset() { this->rate_cvt_.reset(); }
 
-  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit) {
+  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit,
+               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1) {
     const uint8_t nch = std::min<uint8_t>(num_channels, MAX_RATE_CVT_CHANNELS);
     if (nch == 0 || nch != this->channels_ || source_channels == 0 || source_channels > MAX_DEINTLV_CH)
       return false;
@@ -369,7 +382,7 @@ class MultiChannelAudioEffectsRateConverterImpl {
       return true;
     if (!this->ensure_deintlv_buffers_(nch, in_count))
       return false;
-    return this->ensure_output_buffers_(nch, out_count) && this->rate_cvt_.ready();
+    return this->ensure_output_buffers_(nch, out_count, mic_mono, ref_out, num_mic_ch) && this->rate_cvt_.ready();
   }
 
   bool process_multi(const int16_t *in, size_t out_count, size_t stride, const uint8_t *offsets,
@@ -413,12 +426,24 @@ class MultiChannelAudioEffectsRateConverterImpl {
       selected[c] = this->deintlv_ch_[c];
     }
 
-    if (!this->ensure_output_buffers_(this->channels_, out_count))
+    int16_t *mono_destination = mic_mono;
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+    // A custom caller can request both the raw dual-mic output and downmix.
+    // Keep the first channel separate until those two outputs are delivered.
+    if (mic_interleaved != nullptr && num_mic_ch >= 2) mono_destination = nullptr;
+#endif
+    if (!this->ensure_output_buffers_(this->channels_, out_count, mono_destination, ref_out, num_mic_ch))
       return false;
-    if (!this->rate_cvt_.process_deintlv(selected, in_count, this->out_ch_, out_count, "multi"))
+    // Borrowed destinations are local to this call. Only out_ch_ owns memory
+    // and the destructor never sees a pointer owned by the Audio Stack parent.
+    int16_t *outputs[MAX_RATE_CVT_CHANNELS]{};
+    for (uint8_t c = 0; c < this->channels_; c++) {
+      outputs[c] = c == 0 && mono_destination != nullptr ? mono_destination
+                   : c == num_mic_ch && ref_out != nullptr ? ref_out : this->out_ch_[c];
+    }
+    if (!this->rate_cvt_.process_deintlv(selected, in_count, outputs, out_count, "multi"))
       return false;
-    return distribute_channels(this->out_ch_, this->channels_, out_count, mic_interleaved, mic_mono, ref_out,
-                               num_mic_ch);
+    return distribute_channels(outputs, this->channels_, out_count, mic_interleaved, mic_mono, ref_out, num_mic_ch);
   }
 
   template<typename T>
@@ -480,7 +505,7 @@ class MultiChannelAudioEffectsRateConverterImpl {
   }
 
   bool ensure_deintlv_buffers_(uint8_t source_channels, size_t in_count) {
-    if (source_channels == 0 || source_channels > MAX_DEINTLV_CH)
+    if (source_channels == 0 || source_channels > MAX_RATE_CVT_CHANNELS)
       return false;
     for (uint8_t c = 0; c < source_channels; c++) {
       if (!ensure_buffer(this->deintlv_ch_[c], this->deintlv_cap_[c], in_count, "AEDeintlv"))
@@ -489,8 +514,10 @@ class MultiChannelAudioEffectsRateConverterImpl {
     return true;
   }
 
-  bool ensure_output_buffers_(uint8_t channels, size_t out_count) {
+  bool ensure_output_buffers_(uint8_t channels, size_t out_count, int16_t *mic_mono = nullptr,
+                              int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1) {
     for (uint8_t c = 0; c < channels; c++) {
+      if ((c == 0 && mic_mono != nullptr) || (c == num_mic_ch && ref_out != nullptr)) continue;
       if (!ensure_buffer(this->out_ch_[c], this->out_cap_[c], out_count, "MCRateCvt"))
         return false;
     }
@@ -503,8 +530,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
   uint8_t channels_{0};
   RateCvtHandle rate_cvt_;
   BitCvtHandle bit_cvt_;
-  int16_t *deintlv_ch_[MAX_DEINTLV_CH]{};
-  size_t deintlv_cap_[MAX_DEINTLV_CH]{};
+  int16_t *deintlv_ch_[MAX_RATE_CVT_CHANNELS]{};
+  size_t deintlv_cap_[MAX_RATE_CVT_CHANNELS]{};
   int16_t *out_ch_[MAX_RATE_CVT_CHANNELS]{};
   size_t out_cap_[MAX_RATE_CVT_CHANNELS]{};
   int16_t *bit_scratch_{nullptr};
@@ -546,8 +573,10 @@ void MultiChannelAudioEffectsRateConverter::init(uint32_t ratio, uint8_t num_cha
 }
 void MultiChannelAudioEffectsRateConverter::reset() { this->impl_->reset(); }
 bool MultiChannelAudioEffectsRateConverter::prepare(size_t in_count, size_t out_count, uint8_t num_channels,
-                                                    uint8_t source_channels, bool source_32bit) {
-  return this->impl_->prepare(in_count, out_count, num_channels, source_channels, source_32bit);
+                                                    uint8_t source_channels, bool source_32bit, int16_t *mic_mono,
+                                                    int16_t *ref_out, uint8_t num_mic_ch) {
+  return this->impl_->prepare(in_count, out_count, num_channels, source_channels, source_32bit,
+                              mic_mono, ref_out, num_mic_ch);
 }
 bool MultiChannelAudioEffectsRateConverter::process_multi(const int16_t *in, size_t out_count, size_t in_stride,
                                                           const uint8_t *channel_offsets, int16_t *mic_interleaved,

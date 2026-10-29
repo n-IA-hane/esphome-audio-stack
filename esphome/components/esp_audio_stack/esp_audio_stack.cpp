@@ -376,15 +376,20 @@ void ESPAudioStack::setup() {
   // interleaved L/R.
   // PREFER_PSRAM: staging buffer between API play() and the i2s write path, not
   // realtime-critical itself (the task drains it at priority 19), so PSRAM is fine.
-  const size_t speaker_bytes_per_second = this->sample_rate_ * sizeof(int16_t) * this->get_speaker_channels();
-  this->speaker_buffer_size_ =
-      std::max<size_t>(SPEAKER_BUFFER_MIN_BYTES,
-                       (speaker_bytes_per_second * static_cast<size_t>(this->speaker_buffer_duration_ms_)) / 1000);
-  this->speaker_buffer_ = create_prefer_psram(this->speaker_buffer_size_, "audio_stack.speaker");
-  if (!this->speaker_buffer_) {
-    ESP_LOGE(TAG, "Failed to create speaker ring buffer (%u bytes)", (unsigned) this->speaker_buffer_size_);
-    this->mark_failed();
-    return;
+  // A clock-only TX channel still clocks microphone capture, but cannot
+  // consume playback PCM. Physical DOUT preserves direct C++ play() users,
+  // independently of whether a speaker facade has been declared.
+  if (this->has_tx_output_()) {
+    const size_t speaker_bytes_per_second = this->sample_rate_ * sizeof(int16_t) * this->get_speaker_channels();
+    this->speaker_buffer_size_ =
+        std::max<size_t>(SPEAKER_BUFFER_MIN_BYTES,
+                         (speaker_bytes_per_second * static_cast<size_t>(this->speaker_buffer_duration_ms_)) / 1000);
+    this->speaker_buffer_ = create_prefer_psram(this->speaker_buffer_size_, "audio_stack.speaker");
+    if (!this->speaker_buffer_) {
+      ESP_LOGE(TAG, "Failed to create speaker ring buffer (%u bytes)", (unsigned) this->speaker_buffer_size_);
+      this->mark_failed();
+      return;
+    }
   }
   this->log_memory_snapshot_("after_speaker_ring");
 
@@ -1331,7 +1336,7 @@ bool ESPAudioStack::prepare_tx_completion_tracking_() {
   if (this->tx_handle_ == nullptr) return true;
   const size_t descriptors = this->tx_dma_descriptor_count_;
   const size_t frames = this->tx_completion_dma_frames_;
-  if (this->tx_completion_dma_buffer_bytes_ == 0 || frames == 0 || descriptors < 2 ||
+  if (this->tx_completion_dma_buffer_bytes_ == 0 || frames == 0 || frames > UINT16_MAX || descriptors < 2 ||
       descriptors > MAX_TX_DMA_DESCRIPTORS || this->tx_logical_frame_size_ == 0) return false;
   // Admit one complete DSP quantum before returning to the RX owner. Metadata
   // and staging indices have their own bound, independent of the hardware ring.
@@ -1360,13 +1365,15 @@ bool ESPAudioStack::prepare_tx_completion_tracking_() {
     this->tx_staging_data_ = static_cast<uint8_t *>(heap_caps_calloc(1, staging_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     this->tx_staging_bytes_ = this->tx_staging_data_ != nullptr ? staging_bytes : 0;
   }
-  if (this->tx_completion_dma_buffer_bytes_ > this->tx_completion_silence_bytes_) {
-    heap_caps_free(this->tx_completion_silence_);
-    this->tx_completion_silence_ = static_cast<uint8_t *>(heap_caps_calloc(1, this->tx_completion_dma_buffer_bytes_,
-                                                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    this->tx_completion_silence_bytes_ = this->tx_completion_silence_ != nullptr ? this->tx_completion_dma_buffer_bytes_ : 0;
+  // Only the cold hardware owner may resize this array, while I2S is
+  // disabled. Retain it across sessions with the same or smaller geometry.
+  if (descriptors > this->tx_dma_descriptor_capacity_) {
+    heap_caps_free(this->tx_dma_descriptors_);
+    this->tx_dma_descriptors_ = static_cast<TxDmaDescriptor *>(
+        heap_caps_calloc(descriptors, sizeof(TxDmaDescriptor), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    this->tx_dma_descriptor_capacity_ = this->tx_dma_descriptors_ != nullptr ? descriptors : 0;
   }
-  if (this->tx_staging_data_ == nullptr || this->tx_staging_records_ == nullptr || this->tx_completion_silence_ == nullptr)
+  if (this->tx_staging_data_ == nullptr || this->tx_staging_records_ == nullptr || this->tx_dma_descriptors_ == nullptr)
     return false;
   this->tx_staging_capacity_ = blocks;
   this->reset_tx_completion_tracking_();
@@ -1375,9 +1382,14 @@ bool ESPAudioStack::prepare_tx_completion_tracking_() {
 
 bool ESPAudioStack::prime_tx_completion_records_(bool preload_dma) {
   if (this->tx_handle_ == nullptr || !preload_dma) return true;
+  if (this->tx_completion_tracking_active_.load(std::memory_order_acquire) || this->tx_staging_data_ == nullptr)
+    return false;
+  // Before I2S enable no producer or ISR owns a staging block. Reuse block
+  // zero for the initial silent DMA preload; no persistent zero copy is needed.
+  memset(this->tx_staging_data_, 0, this->tx_completion_dma_buffer_bytes_);
   for (size_t i = 0; i < this->tx_dma_descriptor_count_; ++i) {
     size_t loaded = 0;
-    if (i2s_channel_preload_data(this->tx_handle_, this->tx_completion_silence_, this->tx_completion_dma_buffer_bytes_,
+    if (i2s_channel_preload_data(this->tx_handle_, this->tx_staging_data_, this->tx_completion_dma_buffer_bytes_,
                                 &loaded) != ESP_OK || loaded != this->tx_completion_dma_buffer_bytes_)
       return false;
   }
@@ -1410,7 +1422,7 @@ void ESPAudioStack::reset_tx_completion_tracking_() {
     xQueueReset(this->tx_free_queue_);
     for (uint16_t i = 0; i < this->tx_staging_capacity_; ++i) xQueueSend(this->tx_free_queue_, &i, 0);
   }
-  for (auto &descriptor : this->tx_dma_descriptors_) descriptor = {};
+  for (size_t i = 0; i < this->tx_dma_descriptor_capacity_; ++i) this->tx_dma_descriptors_[i] = {};
 }
 
 void ESPAudioStack::dispatch_speaker_output_callbacks_(uint32_t frames, int64_t timestamp) {
@@ -1439,7 +1451,7 @@ void ESPAudioStack::drain_tx_completion_events_() {
 
 bool ESPAudioStack::queue_tx_dma_block_(const void *data, size_t bytes, const TxCompletionRecord &record) {
   if (!this->tx_completion_tracking_active_.load(std::memory_order_acquire) ||
-      bytes != this->tx_completion_dma_buffer_bytes_ || data == nullptr) return false;
+      bytes != this->tx_completion_dma_buffer_bytes_) return false;
   this->drain_tx_completion_events_();
   uint16_t block = 0;
   // Wait for an actual refill slot, with a full DMA-ring deadline. A stopped
@@ -1453,7 +1465,12 @@ bool ESPAudioStack::queue_tx_dma_block_(const void *data, size_t bytes, const Tx
     xQueueSend(this->tx_free_queue_, &block, 0);
     return false;
   }
-  memcpy(this->tx_staging_data_ + static_cast<size_t>(block) * bytes, data, bytes);
+  auto *destination = this->tx_staging_data_ + static_cast<size_t>(block) * bytes;
+  if (data != nullptr) {
+    memcpy(destination, data, bytes);
+  } else {
+    memset(destination, 0, bytes);
+  }
   auto current = record;
   current.generation = this->tx_playback_generation_.load(std::memory_order_acquire);
   this->tx_staging_records_[block] = current;

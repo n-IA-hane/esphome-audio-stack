@@ -193,7 +193,7 @@ def test_speaker_output_callbacks_follow_i2s_completion_not_buffer_acceptance() 
 
     # Completion metadata comes from the actual descriptor that finished, not
     # an application FIFO guessed before the opaque IDF writer selects a buffer.
-    assert "queue_tx_dma_block_(bytes + offset" in dma_write
+    assert "queue_tx_dma_block_(bytes != nullptr ? bytes + offset : nullptr" in dma_write
     assert "i2s_channel_write(" not in pipeline_cpp
     assert "codec_backend_.write(" not in pipeline_cpp
     assert "dispatch_speaker_output_callbacks_" not in dma_write

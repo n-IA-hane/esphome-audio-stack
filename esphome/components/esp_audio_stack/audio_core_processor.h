@@ -72,6 +72,10 @@ class AudioProcessor {
   /// Frame layout this processor expects and produces.
   virtual FrameSpec frame_spec() const = 0;
 
+  /// Maximum public mono output samples, including later reconfiguration.
+  /// Zero means unknown: callers retain the historical conservative reserve.
+  virtual size_t maximum_output_samples() const { return 0; }
+
   /// Process one frame.
   /// @param in_mic  mic input buffer. Layout depends on mic_channels_in:
   ///                1 = mono (input_samples contiguous samples)

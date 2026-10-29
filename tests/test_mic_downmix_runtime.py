@@ -30,8 +30,8 @@ def converter(tmp_path_factory, request):
         + r"""
 int16_t value(unsigned slot,unsigned frame){return int16_t((slot%2 ? -1 : 1)*(300*(slot+1)+7*frame));}
 int main(int argc,char**argv){
-  assert(argc==6||argc==7);unsigned bits=std::atoi(argv[1]),ratio=std::atoi(argv[2]),mics=std::atoi(argv[3]),ref=std::atoi(argv[4]);
-  bool memory=std::atoi(argv[5]);constexpr size_t count=16;unsigned channels=mics+ref,stride=argc==7 ? std::atoi(argv[6]) : 4;
+  assert(argc>=6&&argc<=8);unsigned bits=std::atoi(argv[1]),ratio=std::atoi(argv[2]),mics=std::atoi(argv[3]),ref=std::atoi(argv[4]);
+  bool memory=std::atoi(argv[5]);constexpr size_t count=16;unsigned channels=mics+ref,stride=argc>=7 ? std::atoi(argv[6]) : 4;bool borrow=argc==8&&std::atoi(argv[7]);
 #ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
   assert(average_microphones(INT16_MIN,INT16_MIN)==INT16_MIN);
   assert(average_microphones(INT16_MAX,INT16_MAX)==INT16_MAX);
@@ -42,14 +42,15 @@ int main(int argc,char**argv){
   {
     MultiChannelAudioEffectsRateConverterImpl c;
     c.init(ratio,channels,16000*ratio,16000,3,1);
-    assert(c.prepare(count*ratio,count,channels,stride,bits==32));
-    if(memory){
-      size_t expected=(bits==32 ? count*ratio*stride*2 : 0);
-      if(ratio>1)expected+=count*ratio*channels*2+count*channels*2;
-      assert(live_bytes()==expected&&"only necessary conversion buffers may be allocated");
-    }
     std::vector<int16_t> in16(count*ratio*stride),mono(count+2,12345),interleaved(count*mics,12345),reference(count+2,12345);
     std::vector<int32_t> in32(in16.size());
+    assert(c.prepare(count*ratio,count,channels,stride,bits==32,
+                     borrow?mono.data()+1:nullptr,borrow&&ref?reference.data()+1:nullptr,mics));
+    if(memory){
+      size_t expected=(bits==32 ? count*ratio*stride*2 : 0);
+      if(ratio>1)expected+=count*ratio*channels*2+count*(channels-(borrow?1+ref:0))*2;
+      assert(live_bytes()==expected&&"only necessary conversion buffers may be allocated");
+    }
     for(unsigned i=0;i<count*ratio;++i)for(unsigned ch=0;ch<stride;++ch){in16[i*stride+ch]=value(ch,i);in32[i*stride+ch]=int32_t(value(ch,i))*65536+17;}
     int16_t *stereo=nullptr;
 #ifndef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
@@ -166,3 +167,17 @@ def test_downmix_schema_accepts_mono_backend_and_rejects_dual_backend(
             )
     finally:
         fv.full_config.reset(token)
+
+
+@pytest.mark.parametrize("bits", [16, 32])
+@pytest.mark.parametrize("ratio", [1, 2, 3, 6])
+@pytest.mark.parametrize("mics,reference", [(1, 0), (1, 1), (2, 0), (2, 1)])
+@pytest.mark.parametrize("stride", [4, 8])
+def test_borrowed_outputs_preserve_frames_without_duplicate_allocations(
+    converter, bits, ratio, mics, reference, stride
+):
+    result = subprocess.run(
+        [str(converter), str(bits), str(ratio), str(mics), str(reference), "1", str(stride), "1"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr

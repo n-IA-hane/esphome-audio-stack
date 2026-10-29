@@ -140,8 +140,12 @@ class MultiChannelAudioEffectsRateConverter {
             uint8_t perf_type = 1);
   void reset();
   // Preallocate scratch and per-channel output buffers before the first
-  // realtime TDM/stereo conversion frame.
-  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit);
+  // realtime TDM/stereo conversion frame. Optional mono/ref destinations are
+  // borrowed only during each process call and must cover out_count samples.
+  // A downmix caller also requesting raw dual-mic output must leave mic_mono
+  // null here so the independent first-channel scratch is retained.
+  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit,
+               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1);
 
   // Convert N channels from strided int16 TDM input, producing:
   //   - mic_interleaved: [mic1, mic2, mic1, mic2, ...] (num_mic_ch interleaved, for AFE)
@@ -594,7 +598,6 @@ class ESPAudioStack final : public Component {
     int16_t *spk_ref_buffer{nullptr};
     int16_t *tx_ref_mono_buffer{nullptr};
     int16_t *tx_interleave_buffer{nullptr};
-    int16_t *tx_clock_buffer{nullptr};
     int16_t *tx_32_buffer{nullptr};
     int16_t *aec_output{nullptr};
 
@@ -692,8 +695,8 @@ class ESPAudioStack final : public Component {
 #endif
 
   struct TxCompletionRecord {
-    uint32_t real_frames{0};
-    uint32_t trailing_silence_frames{0};
+    uint16_t real_frames{0};
+    uint16_t trailing_silence_frames{0};
     uint32_t generation{0};
   };
   struct TxCompletionEvent {
@@ -731,6 +734,19 @@ class ESPAudioStack final : public Component {
   bool allocate_audio_buffers_(AudioTaskCtx &ctx);
   void request_audio_preallocation_();
   void preallocate_audio_buffers_from_task_();
+
+  bool has_rx_input_() const {
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
+    if (this->dual_i2s_bus_) return this->rx_bus_.din_pin >= 0;
+#endif
+    return this->din_pin_ >= 0;
+  }
+  bool has_tx_output_() const {
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
+    if (this->dual_i2s_bus_) return this->tx_bus_.dout_pin >= 0;
+#endif
+    return this->dout_pin_ >= 0;
+  }
 
   // Pin configuration
   int lrclk_pin_{-1};
@@ -906,7 +922,8 @@ class ESPAudioStack final : public Component {
   // PCM staging and descriptor identity are owned here, not inferred from the
   // opaque buffers selected by i2s_channel_write(). All ISR surfaces are internal.
   static constexpr size_t MAX_TX_DMA_DESCRIPTORS = 16;
-  TxDmaDescriptor tx_dma_descriptors_[MAX_TX_DMA_DESCRIPTORS]{};
+  TxDmaDescriptor *tx_dma_descriptors_{nullptr};
+  size_t tx_dma_descriptor_capacity_{0};
   TxCompletionRecord *tx_staging_records_{nullptr};
   size_t tx_staging_record_capacity_{0};
   size_t tx_dma_descriptor_count_{0};
@@ -915,8 +932,6 @@ class ESPAudioStack final : public Component {
   size_t tx_staging_bytes_{0};
   size_t tx_staging_capacity_{0};
   std::atomic<uint32_t> tx_playback_generation_{0};
-  uint8_t *tx_completion_silence_{nullptr};
-  size_t tx_completion_silence_bytes_{0};
   size_t tx_completion_queue_size_{0};
   size_t tx_completion_dma_buffer_bytes_{0};
   uint32_t tx_completion_dma_frames_{0};
@@ -1014,7 +1029,6 @@ class ESPAudioStack final : public Component {
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
   int16_t *prealloc_tx_interleave_buffer_{nullptr};
 #endif
-  int16_t *prealloc_tx_clock_buffer_{nullptr};
 #ifdef USE_ESP_AUDIO_STACK_32BIT
   int16_t *prealloc_tx_32_buffer_{nullptr};
 #endif
@@ -1028,7 +1042,6 @@ class ESPAudioStack final : public Component {
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
   size_t prealloc_tx_interleave_buffer_bytes_{0};
 #endif
-  size_t prealloc_tx_clock_buffer_bytes_{0};
 #ifdef USE_ESP_AUDIO_STACK_32BIT
   size_t prealloc_tx_32_buffer_bytes_{0};
 #endif

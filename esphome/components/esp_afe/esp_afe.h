@@ -12,6 +12,8 @@
 #include "esphome/components/switch/switch.h"
 #endif
 #include "../esp_audio_stack/audio_core_processor.h"
+#include "../esp_audio_stack/audio_core_audio_utils.h"
+#include "afe_diagnostic_counter.h"
 
 #ifdef USE_ESP32
 
@@ -104,6 +106,9 @@ class EspAfe final : public Component, public AudioProcessor {
   // AudioProcessor interface
   bool is_initialized() const override { return this->instance_ready_.load(std::memory_order_acquire); }
   FrameSpec frame_spec() const override;
+  // The external bridge quantum is capped before first publication and is
+  // preserved when the manager graph or algorithm mode changes.
+  size_t maximum_output_samples() const override { return esp_audio_stack::DEFAULT_AUDIO_FRAME_SAMPLES; }
   bool process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) override;
   uint32_t frame_spec_revision() const override { return this->frame_spec_revision_.load(std::memory_order_acquire); }
   FeatureControl feature_control(AudioFeature feature) const override;
@@ -420,25 +425,25 @@ class EspAfe final : public Component, public AudioProcessor {
   uint8_t rms_sensor_divider_{0};
   int warmup_remaining_{3};
   // Feed/fetch diagnostics.
-  std::atomic<uint32_t> input_ring_drop_{0};   // process() could not enqueue (NOSPLIT full)
-  std::atomic<uint32_t> process_frame_count_{0};  // process() calls while the AFE is active
-  std::atomic<uint32_t> process_output_miss_{0};  // process() found no complete processed output frame
-  std::atomic<uint32_t> feed_ok_{0};           // Manager input callback accepted a frame
-  std::atomic<uint32_t> feed_rejected_{0};     // Manager input callback timed out or saw a bad frame
-  std::atomic<uint32_t> fetch_ok_{0};          // Manager result callback delivered a frame
-  std::atomic<uint32_t> fetch_timeout_{0};     // GMF fetch returned no usable frame
-  std::atomic<uint32_t> output_ring_drop_{0};  // fetch_output_ring_ full
-  std::atomic<uint32_t> feed_queue_frames_{0};
-  std::atomic<uint32_t> feed_queue_peak_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 1> input_ring_drop_{0};   // process() could not enqueue (NOSPLIT full)
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 2> process_frame_count_{0};  // process() calls while the AFE is active
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 3> process_output_miss_{0};  // process() found no complete processed output frame
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 4> feed_ok_{0};           // Manager input callback accepted a frame
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 5> feed_rejected_{0};     // Manager input callback timed out or saw a bad frame
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 6> fetch_ok_{0};          // Manager result callback delivered a frame
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 7> fetch_timeout_{0};     // GMF fetch returned no usable frame
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 8> output_ring_drop_{0};  // fetch_output_ring_ full
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 9> feed_queue_frames_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 10> feed_queue_peak_{0};
   std::atomic<uint32_t> fetch_queue_frames_{0};
-  std::atomic<uint32_t> fetch_queue_peak_{0};
-  std::atomic<uint32_t> process_us_last_{0};
-  std::atomic<uint32_t> process_us_max_{0};
-  std::atomic<uint32_t> feed_us_last_{0};
-  std::atomic<uint32_t> feed_us_max_{0};
-  std::atomic<uint32_t> fetch_us_last_{0};
-  std::atomic<uint32_t> fetch_us_max_{0};
-  std::atomic<float> ringbuf_free_pct_{1.0f};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 11> fetch_queue_peak_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 12> process_us_last_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 13> process_us_max_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 14> feed_us_last_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 15> feed_us_max_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 16> fetch_us_last_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<uint32_t, 17> fetch_us_max_{0};
+  [[no_unique_address]] AfeDiagnosticCounter<float, 18, 1> ringbuf_free_pct_{1.0f};
   std::atomic<uint32_t> frame_spec_revision_{0};
   // Requested activity and the acquisition epoch share one atomic word: an
   // inactive transition advances the epoch even if a new consumer arrives

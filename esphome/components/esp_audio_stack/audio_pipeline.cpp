@@ -70,21 +70,14 @@ static inline void free_i16_buffer(int16_t **buffer, size_t *buffer_bytes = null
 }
 
 size_t ESPAudioStack::get_mic_callback_buffer_size() const {
-  // ESPHome microphone callbacks are copied from the realtime audio task, so
-  // the backing vector must already cover later processor frame_spec bumps.
-  // GMF AFE on P4/S3 can publish 1024-sample output frames after setup.
-  size_t samples = std::max<size_t>(DEFAULT_AUDIO_FRAME_SAMPLES, 1024);
+  size_t samples = DEFAULT_AUDIO_FRAME_SAMPLES;
 #ifdef USE_AUDIO_PROCESSOR
-  const esp_audio_stack::FrameSpec default_spec{};
-  samples = std::max(samples, std::max(default_spec.input_samples, default_spec.output_samples));
   if (this->processor_ != nullptr) {
+    const size_t maximum = this->processor_->maximum_output_samples();
     const auto spec = this->processor_->frame_spec();
-    if (spec.input_samples > 0) {
-      samples = std::max(samples, spec.input_samples);
-    }
-    if (spec.output_samples > 0) {
-      samples = std::max(samples, spec.output_samples);
-    }
+    // Unknown/custom processors keep the legacy 1024-sample reserve. A
+    // published larger frame remains supported even before setup completes.
+    samples = std::max<size_t>(maximum != 0 ? maximum : 1024, std::max(spec.input_samples, spec.output_samples));
   }
 #endif
   return samples * sizeof(int16_t);
@@ -98,7 +91,6 @@ void ESPAudioStack::release_audio_buffers_() {
   free_i16_buffer(&this->prealloc_spk_ref_buffer_, &this->prealloc_spk_ref_buffer_bytes_);
   free_i16_buffer(&this->prealloc_tx_ref_mono_buffer_, &this->prealloc_tx_ref_mono_buffer_bytes_);
   free_i16_buffer(&this->prealloc_aec_output_, &this->prealloc_aec_output_bytes_);
-  free_i16_buffer(&this->prealloc_tx_clock_buffer_, &this->prealloc_tx_clock_buffer_bytes_);
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
   free_i16_buffer(&this->prealloc_tx_interleave_buffer_, &this->prealloc_tx_interleave_buffer_bytes_);
 #endif
@@ -139,7 +131,13 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 #ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
   dual_mic_configured = dual_mic_configured || this->std_second_mic_slot_ >= 0;
 #endif
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+  // The physical inputs remain dual, but only mono reaches the processor.
+  const uint8_t worst_mic_ch = 1;
+  (void) dual_mic_configured;
+#else
   const uint8_t worst_mic_ch = dual_mic_configured ? 2 : 1;
+#endif
   bool processor_buffers_needed = false;
 #ifdef USE_AUDIO_PROCESSOR
   // Allocate for the processor once its frame shape is known, even if AFE
@@ -147,8 +145,9 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   // first media/call activation without starting I2S or esp-sr work.
   processor_buffers_needed = this->processor_ != nullptr && ctx.processor_spec_loaded;
 #endif
-  const size_t rx_bytes = ctx.rx_frame_bytes;
-  const size_t mic_bytes = ctx.mic_separate ? ctx.input_frame_bytes : 0;
+  const bool have_rx = this->has_rx_input_();
+  const size_t rx_bytes = have_rx ? ctx.rx_frame_bytes : 0;
+  const size_t mic_bytes = have_rx && ctx.mic_separate ? ctx.input_frame_bytes : 0;
   const size_t processor_mic_bytes =
       (processor_buffers_needed && worst_mic_ch > 1) ? ctx.input_frame_bytes * worst_mic_ch : 0;
   const size_t spk_bytes = ctx.speaker_frame_bytes;
@@ -165,7 +164,6 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
                             ? ctx.bus_frame_size * ctx.num_ch * sizeof(int16_t)
                             : 0;
 #endif
-  const size_t tx_clock_bytes = ctx.bus_frame_size * (ctx.use_tdm_bus ? 1 : ctx.num_ch) * ctx.i2s_bps;
   size_t tx_32_bytes = 0;
 #ifdef USE_ESP_AUDIO_STACK_32BIT
   tx_32_bytes = ctx.i2s_bps == 4 ? (ctx.bus_frame_size * (ctx.use_tdm_bus ? 1 : ctx.num_ch) * ctx.i2s_bps) : 0;
@@ -175,14 +173,20 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     bool ready = true;
     bool rx_prepared = false;
 #ifdef USE_ESP_AUDIO_STACK_MULTI_RX
-    if (ctx.use_tdm_bus || ctx.use_stereo_aec_ref || ctx.rx_slot_mode_stereo) {
+    if (have_rx && (ctx.use_tdm_bus || ctx.use_stereo_aec_ref || ctx.rx_slot_mode_stereo)) {
       ready = this->rx_rate_converter_.prepare(ctx.bus_frame_size, ctx.input_frame_size, ctx.rx_rate_converter_channels,
-                                               ctx.use_tdm_bus ? ctx.rx_slot_count : 2, ctx.i2s_bps == 4);
+                                               ctx.use_tdm_bus ? ctx.rx_slot_count : 2, ctx.i2s_bps == 4,
+                                               this->prealloc_mic_buffer_, this->prealloc_spk_ref_buffer_,
+#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+                                               2);
+#else
+                                               ctx.processor_mic_channels);
+#endif
       rx_prepared = true;
     }
 #endif
 #ifdef USE_ESP_AUDIO_STACK_MONO_RX
-    if (!rx_prepared && (ctx.ratio > 1 || ctx.i2s_bps == 4)) {
+    if (have_rx && !rx_prepared && (ctx.ratio > 1 || ctx.i2s_bps == 4)) {
       // Mono RX uses esp_audio_effects for both rate and bit-depth conversion.
       ready = this->mic_rate_converter_.prepare(ctx.bus_frame_size, ctx.i2s_bps == 4);
       rx_prepared = true;
@@ -251,8 +255,8 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 
   if (this->audio_buffers_allocated_) {
     const bool fits =
-        this->prealloc_rx_buffer_ != nullptr && this->prealloc_rx_buffer_bytes_ >= rx_bytes &&
-        (!ctx.mic_separate ||
+        (rx_bytes == 0 || (this->prealloc_rx_buffer_ != nullptr && this->prealloc_rx_buffer_bytes_ >= rx_bytes)) &&
+        (mic_bytes == 0 ||
          (this->prealloc_mic_buffer_ != nullptr && this->prealloc_mic_buffer_bytes_ >= mic_bytes)) &&
         (processor_mic_bytes == 0 || (this->prealloc_processor_mic_buffer_ != nullptr &&
                                       this->prealloc_processor_mic_buffer_bytes_ >= processor_mic_bytes)) &&
@@ -267,7 +271,6 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
         && (tx_interleave_bytes == 0 || (this->prealloc_tx_interleave_buffer_ != nullptr &&
                                          this->prealloc_tx_interleave_buffer_bytes_ >= tx_interleave_bytes))
 #endif
-        && (this->prealloc_tx_clock_buffer_ != nullptr && this->prealloc_tx_clock_buffer_bytes_ >= tx_clock_bytes)
 #ifdef USE_ESP_AUDIO_STACK_32BIT
         && (tx_32_bytes == 0 ||
             (this->prealloc_tx_32_buffer_ != nullptr && this->prealloc_tx_32_buffer_bytes_ >= tx_32_bytes))
@@ -286,7 +289,7 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 
   alloc_i16_buffer(&this->prealloc_rx_buffer_, &this->prealloc_rx_buffer_bytes_, rx_bytes, buf_caps, false);
 
-  if (ctx.mic_separate) {
+  if (mic_bytes > 0) {
     alloc_i16_buffer(&this->prealloc_mic_buffer_, &this->prealloc_mic_buffer_bytes_, mic_bytes, buf_caps, true);
   }
 
@@ -313,12 +316,6 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
                      tx_interleave_bytes, buf_caps, true);
   }
 #endif
-
-  alloc_i16_buffer(&this->prealloc_tx_clock_buffer_, &this->prealloc_tx_clock_buffer_bytes_, tx_clock_bytes, buf_caps,
-                   false);
-  if (this->prealloc_tx_clock_buffer_ != nullptr) {
-    memset(this->prealloc_tx_clock_buffer_, 0, tx_clock_bytes);
-  }
 
 #ifdef USE_ESP_AUDIO_STACK_32BIT
   if (tx_32_bytes > 0) {
@@ -381,11 +378,11 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 #endif
 
   // Validate required allocations
-  if (!this->prealloc_rx_buffer_ || !this->prealloc_spk_buffer_) {
+  if ((rx_bytes > 0 && !this->prealloc_rx_buffer_) || !this->prealloc_spk_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
-  if (ctx.mic_separate && !this->prealloc_mic_buffer_) {
+  if (mic_bytes > 0 && !this->prealloc_mic_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
@@ -534,6 +531,15 @@ bool ESPAudioStack::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proce
     ESP_LOGI(TAG, "Audio task started (stereo=%s, tdm=%s, rate_conversion=%ux)", ctx.use_stereo_aec_ref ? "YES" : "no",
              ctx.use_tdm_bus ? (ctx.use_tdm_ref ? "YES/ref" : "YES/mic") : "no", (unsigned) ctx.ratio);
   }
+
+#ifdef USE_ESP_AUDIO_STACK_MONO_RX
+  this->mic_rate_converter_.init(ctx.ratio, this->sample_rate_, this->get_output_sample_rate(),
+                                 this->rate_cvt_complexity_, this->rate_cvt_perf_type_);
+#endif
+#ifdef USE_ESP_AUDIO_STACK_MONO_REF
+  this->play_ref_rate_converter_.init(ctx.ratio, this->sample_rate_, this->get_output_sample_rate(),
+                                      this->rate_cvt_complexity_, this->rate_cvt_perf_type_);
+#endif
 
   // Determine frame sizes: processors may consume and produce different frame
   // lengths.
@@ -734,7 +740,6 @@ void ESPAudioStack::audio_session_() {
   ctx.tx_32_buffer = this->prealloc_tx_32_buffer_;
 #endif
   ctx.aec_output = this->prealloc_aec_output_;
-  ctx.tx_clock_buffer = this->prealloc_tx_clock_buffer_;
 #ifdef USE_ESP_AUDIO_STACK_TDM_BUS
   if (ctx.use_tdm_bus) {
     ctx.tdm_tx_frame_bytes = ctx.bus_frame_size * ctx.i2s_bps;
@@ -1581,7 +1586,7 @@ bool ESPAudioStack::format_tx_frame_(AudioTaskCtx &ctx, void **tx_data, size_t *
 // TX PATH: ring buffer read → volume → Espressif format conversion → I2S write
 // ════════════════════════════════════════════════════════════════════════════
 bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes, size_t real_speaker_bytes) {
-  if (tx_data == nullptr || tx_bytes == 0) {
+  if (tx_bytes == 0 || (tx_data == nullptr && real_speaker_bytes != 0)) {
     return false;
   }
   if (this->tx_completion_dma_buffer_bytes_ == 0 || this->tx_completion_dma_frames_ == 0) {
@@ -1610,7 +1615,7 @@ bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_
     TxCompletionRecord record{};
     record.real_frames = real_frames;
     record.trailing_silence_frames = real_frames != 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
-    if (!this->queue_tx_dma_block_(bytes + offset, this->tx_completion_dma_buffer_bytes_, record)) {
+    if (!this->queue_tx_dma_block_(bytes != nullptr ? bytes + offset : nullptr, this->tx_completion_dma_buffer_bytes_, record)) {
       if (this->audio_stack_running_.load(std::memory_order_relaxed))
         this->mark_tx_completion_desync_("TX DMA staging admission failed");
       return false;
@@ -1655,7 +1660,7 @@ void ESPAudioStack::save_tx_reference_(AudioTaskCtx &ctx, const int16_t *samples
 #endif
 
 void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
-  if (!this->tx_handle_ || ctx.tx_clock_buffer == nullptr)
+  if (!this->tx_handle_)
     return;
 
   const size_t tx_bytes = ctx.use_tdm_bus ? ctx.tdm_tx_frame_bytes : ctx.bus_frame_size * ctx.num_ch * ctx.i2s_bps;
@@ -1668,10 +1673,10 @@ void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
   // audio is playing. It contains no public speaker frames, but the I2S ISR
   // still emits TX completion events, so queue zero-frame records to keep the
   // completion stream in lockstep without notifying speaker consumers.
-  const bool written = this->write_tx_dma_blocks_(ctx, ctx.tx_clock_buffer, tx_bytes, 0);
+  const bool written = this->write_tx_dma_blocks_(ctx, nullptr, tx_bytes, 0);
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
-  // The clock buffer uses the hardware bit/channel layout. The public mono
-  // reference is silence and still advances its rate converter once per period.
+  // Staging silence uses the hardware bit/channel layout. The public mono
+  // reference still advances its rate converter once per period.
   memset(ctx.spk_buffer, 0, ctx.speaker_frame_bytes);
   this->save_tx_reference_(ctx, written ? ctx.spk_buffer : nullptr);
 #else

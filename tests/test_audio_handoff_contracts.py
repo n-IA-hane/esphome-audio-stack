@@ -187,7 +187,8 @@ struct ESPAudioStack {
  void fill_mono_aec_reference_(AudioTaskCtx&);
  bool format_tx_frame_(AudioTaskCtx &ctx,void **data,size_t *n){*data=ctx.spk_buffer;*n=ctx.speaker_frame_bytes;return true;}
  bool write_tx_dma_blocks_(AudioTaskCtx&,void *data,size_t n,size_t){
-  if(!write_ok)return false;auto *p=static_cast<int16_t*>(data);wire.assign(p,p+n/2);return true;
+  if(!write_ok)return false;auto *p=static_cast<int16_t*>(data);
+  if(p)wire.assign(p,p+n/2);else wire.assign(n/2,0);return true;
  }
 };
 """

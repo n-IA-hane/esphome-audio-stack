@@ -49,7 +49,7 @@ def completion_source():
     if causal:
         code='#define CAUSAL_DMA\n'+code
         a=header.index('  QueueHandle_t tx_ready_queue_')
-        b=header.index('  uint8_t *tx_completion_silence_',a)
+        b=header.index('  size_t tx_completion_queue_size_',a)
         code=code.replace('// CAUSAL_STATE_FIELDS',header[a:b])
     return code
 
@@ -80,5 +80,11 @@ def test_refill_resources_and_fail_closed(completion_binary, scenario):
 
 @pytest.mark.parametrize('scenario', [20, 21, 22, 23], ids=['quantum256', 'quantum512', 'quantum1024', 'quantum2048'])
 def test_quantum_admission_keeps_rx_and_pcm_continuous(completion_binary, scenario):
+    result = subprocess.run([str(completion_binary), str(scenario)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("scenario", [24, 25, 26], ids=["owned-staging-silence", "disabled-dma-prime", "descriptor-capacity-and-frame-bound"])
+def test_compact_memory_preserves_dma_ownership(completion_binary, scenario):
     result = subprocess.run([str(completion_binary), str(scenario)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

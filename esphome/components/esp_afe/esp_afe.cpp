@@ -84,7 +84,7 @@ static constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS = true;
 static constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS = false;
 #endif
 
-static inline void diag_add(std::atomic<uint32_t> &counter, uint32_t value = 1) {
+template<typename Counter> static inline void diag_add(Counter &counter, uint32_t value = 1) {
   if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
     counter.fetch_add(value, std::memory_order_relaxed);
   } else {
@@ -93,7 +93,7 @@ static inline void diag_add(std::atomic<uint32_t> &counter, uint32_t value = 1) 
   }
 }
 
-static inline uint32_t diag_increment_and_get(std::atomic<uint32_t> &counter) {
+template<typename Counter> static inline uint32_t diag_increment_and_get(Counter &counter) {
   if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
     return counter.fetch_add(1, std::memory_order_relaxed) + 1;
   } else {
@@ -102,7 +102,7 @@ static inline uint32_t diag_increment_and_get(std::atomic<uint32_t> &counter) {
   }
 }
 
-static inline void update_peak_atomic(std::atomic<uint32_t> &peak, uint32_t value) {
+template<typename Counter> static inline void update_peak_atomic(Counter &peak, uint32_t value) {
   if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
     uint32_t current = peak.load(std::memory_order_relaxed);
     while (value > current &&
@@ -114,7 +114,7 @@ static inline void update_peak_atomic(std::atomic<uint32_t> &peak, uint32_t valu
   }
 }
 
-static inline void decrement_if_nonzero(std::atomic<uint32_t> &counter) {
+template<typename Counter> static inline void decrement_if_nonzero(Counter &counter) {
   if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
     uint32_t current = counter.load(std::memory_order_relaxed);
     while (current > 0 &&
