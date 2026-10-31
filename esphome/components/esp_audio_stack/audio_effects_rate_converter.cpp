@@ -294,7 +294,9 @@ class AudioEffectsRateConverterImpl {
     }
     if (this->ratio_ <= 1)
       return true;
-    return ensure_buffer(this->scratch_, this->scratch_cap_, in_count, "RateCvt") && this->rate_cvt_.ready();
+    if (source_32bit && !ensure_buffer(this->scratch_, this->scratch_cap_, in_count, "RateCvt"))
+      return false;
+    return this->rate_cvt_.ready();
   }
 
   bool process(const int16_t *in, int16_t *out, size_t in_count) {

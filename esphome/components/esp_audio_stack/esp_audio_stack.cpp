@@ -1744,6 +1744,12 @@ void ESPAudioStack::unregister_mic_consumer(void *token) {
   if (last_consumer_gone) {
     ESP_LOGI(TAG, "Last mic consumer removed (token=%p), mic path idle", token);
     this->mic_idle_callback_.call();
+    // An idle automation may hand capture to another consumer synchronously.
+    // Its current intent supersedes this removal's earlier idle snapshot.
+    if (this->has_mic_consumers_.load(std::memory_order_acquire)) {
+      this->update_runtime_state_();
+      return;
+    }
     // Tell the audio processor it can suspend background work until a new
     // consumer arrives. Without this hint esp_afe's GMF pipeline/task (and
     // the esp-sr internal worker on Core 1) keep cycling on every frame
@@ -1790,17 +1796,19 @@ void ESPAudioStack::start_speaker() {
 }
 
 void ESPAudioStack::stop_speaker() {
+  // Close PCM admission before callbacks can request the next stream. Its
+  // producer retries after the audio owner has discarded the old stream.
+  this->request_speaker_reset_.store(true, std::memory_order_release);
   this->speaker_requested_.store(false, std::memory_order_release);
   if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
     this->speaker_idle_callback_.call();
     this->update_runtime_state_();
   }
-  // Request audio task to reset ring buffers (avoids concurrent access).
-  this->request_speaker_reset_.store(true, std::memory_order_release);
   // If no mic consumers either, tear down the audio stack pipeline. This signals
   // the audio processor (e.g. AFE) it can suspend its workers and parks the
   // audio task. Once it is idle, loop() deletes the I2S channels.
-  if (!this->has_mic_consumers_.load(std::memory_order_relaxed)) {
+  if (!this->speaker_requested_.load(std::memory_order_acquire) &&
+      !this->has_mic_consumers_.load(std::memory_order_acquire)) {
     ESP_LOGI(TAG, "Audio stack going idle (speaker stopped, no mic consumers)");
 #ifdef USE_AUDIO_PROCESSOR
     if (this->processor_ != nullptr) {

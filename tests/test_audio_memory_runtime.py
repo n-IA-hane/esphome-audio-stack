@@ -160,6 +160,108 @@ int main(){
     compile_run(tmp_path, code)
 
 
+def mono_converter_fixture():
+    source = (COMPONENT / "audio_effects_rate_converter.cpp").read_text()
+    helpers = source[source.index("namespace {"):source.index("}  // namespace") + len("}  // namespace")]
+    start = source.index("class AudioEffectsRateConverterImpl {")
+    mono = source[start:source.index("\n};", start) + len("\n};")]
+    fixture = (ROOT / "tests/fixtures/rate_conversion.cpp").read_text()
+    fixture = fixture.replace(
+        "unsigned allocation_calls=0;",
+        "unsigned allocation_calls=0,free_calls=0,rate_open_calls=0,rate_opens=0,rate_resets=0,rate_closes=0,"
+        "bit_opens=0,bit_closes=0;bool rate_open_failure=false;",
+    )
+    fixture = fixture.replace(
+        "void heap_caps_free(void*p){allocations.erase(p);std::free(p);}",
+        "void heap_caps_free(void*p){if(p){++free_calls;assert(allocations.erase(p)==1);}std::free(p);}",
+    )
+    fixture = fixture.replace(
+        "*h=new esp_ae_bit_cvt_cfg_t(*c);return 0;",
+        "++bit_opens;*h=new esp_ae_bit_cvt_cfg_t(*c);return 0;",
+    )
+    fixture = fixture.replace(
+        "void esp_ae_bit_cvt_close(esp_ae_bit_cvt_handle_t h){delete h;}",
+        "void esp_ae_bit_cvt_close(esp_ae_bit_cvt_handle_t h){++bit_closes;delete h;}",
+    )
+    fixture = fixture.replace(
+        "*h=new esp_ae_rate_cvt_cfg_t(*c);return 0;",
+        "++rate_open_calls;if(rate_open_failure)return 1;++rate_opens;*h=new esp_ae_rate_cvt_cfg_t(*c);return 0;",
+    )
+    fixture = fixture.replace(
+        "int esp_ae_rate_cvt_reset(esp_ae_rate_cvt_handle_t){return 0;}",
+        "int esp_ae_rate_cvt_reset(esp_ae_rate_cvt_handle_t){++rate_resets;return 0;}",
+    )
+    fixture = fixture.replace(
+        "void esp_ae_rate_cvt_close(esp_ae_rate_cvt_handle_t h){delete h;}",
+        "void esp_ae_rate_cvt_close(esp_ae_rate_cvt_handle_t h){++rate_closes;delete h;}",
+    )
+    return fixture + helpers + "\n" + mono
+
+
+@pytest.mark.parametrize("ratio", [1, 3, 6])
+def test_mono_converter_reserves_only_32bit_scratch_and_retains_it_between_formats(tmp_path, ratio):
+    # The Espressif stub checks wrapper routing and exact output samples, not DSP quality.
+    code = mono_converter_fixture() + r"""
+int main(){
+ constexpr size_t ratio=TEST_RATIO,quantum=256,in_count=quantum*ratio;
+ std::vector<int16_t> input16(in_count),out(quantum);
+ std::vector<int32_t> input32(in_count);
+ for(size_t i=0;i<in_count;++i){
+   input16[i]=static_cast<int16_t>(static_cast<int>(i*193%65536)-32768);
+   input32[i]=static_cast<int32_t>(input16[i])*65536+static_cast<int32_t>(i%65536);
+ }
+ const auto expected_rate_opens=ratio>1?1u:0u;
+ {
+   AudioEffectsRateConverterImpl c;c.init(ratio,16000*ratio,16000,3,1);
+   assert(c.prepare(in_count,false));
+   assert(allocation_calls==0&&live_bytes()==0); // 16-bit samples go directly to the rate converter.
+   assert(rate_open_calls==expected_rate_opens&&rate_opens==expected_rate_opens&&bit_opens==0);
+   auto check_output=[&]{for(size_t i=0;i<quantum;++i)assert(out[i]==input16[i*ratio]);};
+   for(unsigned frame=0;frame<128;++frame){
+     assert(c.process(input16.data(),out.data(),in_count));check_output();
+     assert(allocation_calls==0&&rate_opens==expected_rate_opens);
+   }
+   assert(c.prepare(in_count,true));
+   // 48 -> 16 kHz with a 256-sample output quantum requires exactly 1536 scratch bytes.
+   const auto expected_scratch=ratio>1?in_count*sizeof(int16_t):0;
+   assert(live_bytes()==expected_scratch&&allocation_calls==(ratio>1?1u:0u));
+   assert(rate_open_calls==expected_rate_opens&&rate_opens==expected_rate_opens&&bit_opens==1);
+   const auto warm_allocations=allocation_calls;
+   for(unsigned frame=0;frame<128;++frame){
+     assert(c.process_strided_32(input32.data(),out.data(),quantum,1,0));check_output();
+   }
+   assert(c.prepare(in_count,false));
+   for(unsigned frame=0;frame<128;++frame){
+     assert(c.process_strided(input16.data(),out.data(),quantum,1,0));check_output();
+   }
+   assert(c.prepare(in_count,true));
+   for(unsigned frame=0;frame<128;++frame){
+     assert(c.process_strided_32(input32.data(),out.data(),quantum,1,0));check_output();
+   }
+   assert(live_bytes()==expected_scratch&&allocation_calls==warm_allocations&&free_calls==0);
+   assert(rate_open_calls==expected_rate_opens&&rate_opens==expected_rate_opens&&rate_resets==0&&rate_closes==0);
+   assert(bit_opens==1&&bit_closes==0);
+ }
+ assert(allocations.empty()&&free_calls==(ratio>1?1u:0u));
+ assert(rate_closes==expected_rate_opens&&bit_closes==1);
+}
+"""
+    compile_run(tmp_path, code, f"-DTEST_RATIO={ratio}")
+
+
+def test_mono_16bit_prepare_still_reports_rate_converter_open_failure(tmp_path):
+    code = mono_converter_fixture() + r"""
+int main(){
+ AudioEffectsRateConverterImpl c;c.init(3,48000,16000,3,1);
+ rate_open_failure=true;
+ assert(!c.prepare(768,false));
+ assert(rate_open_calls==1&&rate_opens==0&&bit_opens==0);
+ assert(allocation_calls==0&&allocations.empty());
+}
+"""
+    compile_run(tmp_path, code)
+
+
 @pytest.mark.parametrize("dual", [False, True])
 def test_clock_only_capture_omits_playback_ring_but_direct_cpp_output_keeps_it(tmp_path, dual):
     owner = (COMPONENT / "esp_audio_stack.cpp").read_text()

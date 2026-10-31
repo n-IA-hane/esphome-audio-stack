@@ -88,6 +88,81 @@ int main(){
     run_cpp(tmp_path, code)
 
 
+@pytest.mark.parametrize("kind", ["microphone", "speaker"])
+@pytest.mark.parametrize("background", [False, True])
+def test_idle_callback_handoff_preserves_current_consumer_and_pcm_admission(tmp_path, kind, background):
+    code = failure_source().replace(
+        "#include <algorithm>", "#include <algorithm>\n#include <mutex>",
+    ).replace(
+        "struct Callback {unsigned count=0;void call(){++count;}};",
+        "struct Callback {unsigned count=0;std::function<void()> fn;void call(){++count;if(fn)fn();}};\n"
+        "struct ScopedLock {std::unique_lock<std::mutex> lock;ScopedLock(std::mutex*m):lock(*m){}};",
+    ).replace(
+        "Callback start_callback_,idle_callback_",
+        "std::mutex registry_mutex;std::mutex*mic_consumers_mutex_=&registry_mutex;"
+        "void*mic_consumers_[MAX_LISTENERS]{};size_t mic_consumer_count_=0;\n"
+        "  Callback mic_start_callback_,mic_idle_callback_;\n  Callback start_callback_,idle_callback_",
+    ).replace(
+        "bool register_mic_consumer(void*){return true;}", "bool register_mic_consumer(void*);",
+    ).replace(
+        "void unregister_mic_consumer(void*){}", "void unregister_mic_consumer(void*);",
+    )
+    owner = (COMPONENT / "esp_audio_stack.cpp").read_text()
+    code += method(owner, "bool ESPAudioStack::register_mic_consumer(") + "\n"
+    code += method(owner, "void ESPAudioStack::unregister_mic_consumer(") + "\n"
+    code += r"""
+void run_owner(ESPAudioStack &p){p.service_audio_lifecycle_();p.finish_audio_lifecycle_();}
+int main(){
+ ESPAudioStack p;p.has_mic_consumers_=false;p.speaker_requested_=false;
+ int old_token=1,new_token=2;
+"""
+    if kind == "microphone":
+        code += f"p.speaker_requested_={str(background).lower()};\n" + r"""
+ assert(p.register_mic_consumer(&old_token));run_owner(p);
+ assert(p.is_running()&&p.processor.active);
+ bool registered=false;
+ p.mic_idle_callback_.fn=[&]{registered=p.register_mic_consumer(&new_token);};
+ p.unregister_mic_consumer(&old_token);
+ assert(registered&&p.mic_consumer_count_==1&&p.has_mic_consumers_);
+ assert(p.is_running()&&p.start_requested_&&p.processor.active);
+ run_owner(p);
+ assert(p.is_running()&&p.processor.active&&p.opens==1&&p.closes==0);
+ assert(p.register_mic_consumer(&new_token)&&p.mic_consumer_count_==1);
+ assert(p.mic_idle_callback_.count==1&&p.mic_start_callback_.count==2);
+ p.mic_idle_callback_.fn={};p.unregister_mic_consumer(&new_token);
+ assert(!p.has_mic_consumers_&&!p.processor.active);run_owner(p);
+"""
+        code += f"assert(p.is_running()=={str(background).lower()});\n"
+        if background:
+            code += "p.stop_speaker();run_owner(p);assert(!p.is_running());\n"
+    else:
+        if background:
+            code += "assert(p.register_mic_consumer(&old_token));\n"
+        code += r"""
+ p.start_speaker();run_owner(p);assert(p.is_running()&&p.speaker_running_);
+ uint8_t next_pcm[64]{};size_t callback_written=99;
+ p.speaker_idle_callback_.fn=[&]{
+   p.start_speaker();callback_written=p.play(next_pcm,sizeof(next_pcm),0);
+ };
+ const auto old_bytes=p.ring.queued;p.stop_speaker();
+ assert(p.speaker_idle_callback_.count==1);
+ assert(p.is_running()&&p.start_requested_&&p.speaker_requested_&&p.speaker_running_);
+ // The reset owner has not run yet. New PCM must remain owned by its caller.
+ assert(p.request_speaker_reset_&&callback_written==0&&p.ring.queued==old_bytes);
+ p.service_speaker_reset_();assert(!p.request_speaker_reset_&&p.ring.queued==0);
+ assert(p.play(next_pcm,sizeof(next_pcm),0)==sizeof(next_pcm));
+ assert(p.ring.queued==sizeof(next_pcm));run_owner(p);
+ assert(p.is_running()&&p.speaker_running_&&p.opens==1&&p.closes==0);
+ p.speaker_idle_callback_.fn={};p.stop_speaker();p.service_speaker_reset_();run_owner(p);
+ assert(!p.speaker_requested_&&!p.speaker_running_&&p.ring.queued==0);
+"""
+        code += f"assert(p.is_running()=={str(background).lower()});\n"
+        if background:
+            code += "assert(p.processor.active);p.unregister_mic_consumer(&old_token);run_owner(p);assert(!p.is_running());\n"
+    code += "}\n"
+    run_cpp(tmp_path, code, "-O1", "-g", "-fsanitize=address,undefined")
+
+
 def test_microphone_unmute_during_callback_is_not_overwritten(tmp_path):
     import esphome.components.microphone as upstream
 
