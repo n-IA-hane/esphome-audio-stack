@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026.11.1-dev
+
+Changes since stable **2026.11.0**.
+
+### Reliable audio handoffs
+
+- Idle automations can immediately hand microphone capture to another consumer
+  or start the next speaker stream. The audio owner honors those new requests
+  while retiring the previous stream.
+- Speaker reset closes PCM admission before idle callbacks run, keeping the
+  next producer's samples with that producer until the old stream is cleared.
+
+### Smaller working buffers
+
+- Reuse Espressif rate-converter state between sessions with matching formats.
+  Multichannel conversion can write selected microphone and reference channels
+  into their existing destination buffers, reducing intermediate copies.
+- Allocate mono 32-to-16-bit conversion scratch only for a 32-bit source that
+  needs resampling. Native 16-bit input uses its existing samples directly.
+- Size microphone staging for the selected processing path and use the
+  existing TX DMA staging for clock-only silence. The resulting memory saving
+  depends on the configured formats, channels and processing backend.
+
+### Updating
+
+Existing YAML, wiring and gain settings remain valid. Refresh the `dev`
+component sources, rebuild and upload to apply these changes. The supported
+ESPHome version and Espressif dependencies remain those of 2026.11.0.
+
 ## 2026.11.0
 
 Changes since stable **2026.10.2**.
