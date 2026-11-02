@@ -240,6 +240,10 @@ class ESPAudioStack final : public Component {
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   void set_codec_i2c_bus(i2c::InternalI2CBus *bus) { this->codec_backend_.set_i2c_bus(bus); }
+  void set_aw88298_reset_pin(GPIOPin *pin) { this->codec_backend_.set_aw88298_reset_pin(pin); }
+  void set_aw88298_hw_gain(float pa_gain, float pa_voltage, float codec_dac_voltage) {
+    this->codec_backend_.set_aw88298_hw_gain(pa_gain, pa_voltage, codec_dac_voltage);
+  }
   void configure_es7210_codec(uint8_t address, uint8_t mic_selected, float input_gain_db, bool has_ref_channel_gain,
                               uint8_t ref_channel, float ref_channel_gain_db) {
     CodecDevBackend::Es7210Config cfg;

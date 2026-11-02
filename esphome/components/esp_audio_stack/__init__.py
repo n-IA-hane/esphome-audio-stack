@@ -9,6 +9,8 @@ Multi-rate support: set output_sample_rate to convert mic audio internally.
 If output_sample_rate is omitted, no rate conversion occurs (backward compatible).
 """
 
+import math
+
 from esphome import automation, pins
 import esphome.codegen as cg
 from esphome.components import i2c, psram
@@ -27,11 +29,13 @@ from esphome.const import (
     CONF_I2C_ID,
     CONF_ID,
     CONF_INPUT,
+    CONF_MODE,
     CONF_NUM_CHANNELS,
     CONF_ON_IDLE,
     CONF_ON_START,
     CONF_ON_STATE,
     CONF_OUTPUT,
+    CONF_RESET_PIN,
     CONF_SAMPLE_RATE,
     CONF_TYPE,
     Framework,
@@ -97,6 +101,8 @@ CONF_REF_GAIN_DB = "ref_gain_db"
 CONF_USE_MCLK = "use_mclk"
 CONF_NO_DAC_REF = "no_dac_ref"
 CONF_PA_GAIN = "pa_gain"
+CONF_PA_VOLTAGE = "pa_voltage"
+CONF_CODEC_DAC_VOLTAGE = "codec_dac_voltage"
 CONF_ON_MIC_START = "on_mic_start"
 CONF_ON_MIC_IDLE = "on_mic_idle"
 CONF_ON_SPEAKER_START = "on_speaker_start"
@@ -109,6 +115,7 @@ CODEC_KIND = {
     "es8388": 2,
     "es8374": 3,
     "es8389": 4,
+    "aw88298": 5,
 }
 RATE_CVT_PERF_TYPES = ("speed", "memory")
 
@@ -198,6 +205,19 @@ CODEC_INPUT_SCHEMA = cv.typed_schema(
     default_type="es7210",
 )
 
+
+def _validate_codec_reset_pin(config):
+    if not config[CONF_MODE][CONF_OUTPUT]:
+        raise cv.Invalid("Codec reset_pin requires output mode", [CONF_MODE])
+    return config
+
+
+def _finite_codec_gain(value):
+    if not math.isfinite(value):
+        raise cv.Invalid("Codec hardware gain values must be finite")
+    return value
+
+
 CODEC_OUTPUT_SCHEMA = cv.typed_schema(
     {
         "es8311": cv.Schema(
@@ -223,6 +243,21 @@ CODEC_OUTPUT_SCHEMA = cv.typed_schema(
                 cv.Optional(CONF_ADDRESS, default=0x20): cv.i2c_address,
                 cv.Optional(CONF_USE_MCLK, default=True): cv.boolean,
                 cv.Optional(CONF_NO_DAC_REF, default=True): cv.boolean,
+            }
+        ),
+        "aw88298": cv.Schema(
+            {
+                cv.Optional(CONF_ADDRESS, default=0x36): cv.i2c_address,
+                cv.Optional(CONF_PA_GAIN, default=30.0): cv.All(cv.decibel, _finite_codec_gain),
+                cv.Optional(CONF_PA_VOLTAGE, default=5.0): cv.All(
+                    cv.voltage, _finite_codec_gain, cv.float_range(min=0, min_included=False)
+                ),
+                cv.Optional(CONF_CODEC_DAC_VOLTAGE, default=3.3): cv.All(
+                    cv.voltage, _finite_codec_gain, cv.float_range(min=0, min_included=False)
+                ),
+                cv.Optional(CONF_RESET_PIN): cv.All(
+                    pins.gpio_output_pin_schema, _validate_codec_reset_pin
+                ),
             }
         ),
     },
@@ -904,6 +939,17 @@ async def to_code(config):
                         output_conf[CONF_ADDRESS],
                         output_conf.get(CONF_USE_MCLK, True),
                         output_conf.get(CONF_NO_DAC_REF, True),
+                    )
+                )
+            if output_conf[CONF_TYPE] == "aw88298":
+                if CONF_RESET_PIN in output_conf:
+                    reset_pin = await cg.gpio_pin_expression(output_conf[CONF_RESET_PIN])
+                    cg.add(var.set_aw88298_reset_pin(reset_pin))
+                cg.add(
+                    var.set_aw88298_hw_gain(
+                        output_conf[CONF_PA_GAIN],
+                        output_conf[CONF_PA_VOLTAGE],
+                        output_conf[CONF_CODEC_DAC_VOLTAGE],
                     )
                 )
 

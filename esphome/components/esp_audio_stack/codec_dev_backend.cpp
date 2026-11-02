@@ -22,6 +22,10 @@
 #ifdef USE_ESP_AUDIO_STACK_CODEC_ES8389
 #include <es8389_codec.h>
 #endif
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+#include <aw88298_dac.h>
+#include <vector>
+#endif
 #include <esp_codec_dev_types.h>
 #include <freertos/FreeRTOS.h>
 
@@ -40,6 +44,62 @@ namespace esphome::esp_audio_stack {
 static const char *const TAG = "i2s_codec_dev";
 
 namespace {
+
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+// The vendor GPIO callbacks have no context argument. Positive virtual IDs
+// route each codec's reset operations to its ESPHome pin (including expanders).
+// ID zero is reserved because the AW88298 driver skips reset_pin <= 0.
+static std::vector<GPIOPin *> codec_reset_pins;
+
+static GPIOPin *codec_reset_pin(int16_t id) {
+  if (id <= 0 || static_cast<size_t>(id) > codec_reset_pins.size())
+    return nullptr;
+  return codec_reset_pins[id - 1];
+}
+
+static int16_t register_codec_reset_pin(GPIOPin *pin) {
+  for (size_t i = 0; i < codec_reset_pins.size(); ++i) {
+    if (codec_reset_pins[i] == nullptr) {
+      codec_reset_pins[i] = pin;
+      return static_cast<int16_t>(i + 1);
+    }
+  }
+  if (codec_reset_pins.size() >= INT16_MAX)
+    return -1;
+  codec_reset_pins.push_back(pin);
+  return static_cast<int16_t>(codec_reset_pins.size());
+}
+
+static int codec_gpio_setup(int16_t id, audio_gpio_dir_t dir, audio_gpio_mode_t mode) {
+  auto *pin = codec_reset_pin(id);
+  if (pin == nullptr || dir != AUDIO_GPIO_DIR_OUT || mode != AUDIO_GPIO_MODE_FLOAT)
+    return ESP_CODEC_DEV_INVALID_ARG;
+  // Preserve the output mode and inversion validated by ESPHome's pin schema.
+  pin->setup();
+  return ESP_CODEC_DEV_OK;
+}
+
+static int codec_gpio_set(int16_t id, bool high) {
+  auto *pin = codec_reset_pin(id);
+  if (pin == nullptr)
+    return ESP_CODEC_DEV_INVALID_ARG;
+  pin->digital_write(high);
+  return ESP_CODEC_DEV_OK;
+}
+
+static bool codec_gpio_get(int16_t id) {
+  auto *pin = codec_reset_pin(id);
+  return pin != nullptr && pin->digital_read();
+}
+
+static const audio_codec_gpio_if_t codec_gpio_if = {
+    .setup = codec_gpio_setup,
+    .set = codec_gpio_set,
+    .get = codec_gpio_get,
+    .add_isr = nullptr,
+    .remove_isr = nullptr,
+};
+#endif
 
 #ifdef USE_I2C
 struct EsphomeI2cCtrl {
@@ -200,6 +260,8 @@ const char *CodecDevBackend::codec_kind_name_(CodecKind kind) {
       return "ES8374";
     case CodecKind::ES8389:
       return "ES8389";
+    case CodecKind::AW88298:
+      return "AW88298";
     default:
       return "none";
   }
@@ -273,6 +335,29 @@ const audio_codec_if_t *CodecDevBackend::new_generic_codec_(const GenericCodecCo
       cfg.adc_cfg.digital_mic = false;
       cfg.dac_cfg.ref_enable = !config.no_dac_ref;
       return es8389_codec_new(&cfg);
+    }
+#endif
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+    case CodecKind::AW88298: {
+      aw88298_codec_cfg_t cfg = {};
+      cfg.ctrl_if = *ctrl;
+      cfg.gpio_if = nullptr;
+      cfg.pa_cfg.pa_pin = -1;
+      cfg.reset_cfg.reset_pin = -1;
+      cfg.reset_cfg.reset_active_low = true;
+      if (this->aw88298_reset_pin_ != nullptr) {
+        this->aw88298_reset_id_ = register_codec_reset_pin(this->aw88298_reset_pin_);
+        if (this->aw88298_reset_id_ < 0) {
+          ESP_LOGE(TAG, "Failed to register AW88298 reset pin");
+          return nullptr;
+        }
+        cfg.gpio_if = &codec_gpio_if;
+        cfg.reset_cfg.reset_pin = this->aw88298_reset_id_;
+      }
+      cfg.pa_cfg.hw_gain.pa_gain = config.pa_gain_db;
+      cfg.pa_cfg.hw_gain.pa_voltage = config.pa_voltage;
+      cfg.pa_cfg.hw_gain.codec_dac_voltage = config.codec_dac_voltage;
+      return aw88298_codec_new(&cfg);
     }
 #endif
     default:
@@ -450,7 +535,19 @@ bool CodecDevBackend::make_tx_sample_info_(const SampleConfig &config, esp_codec
   const auto &hw = this->tx_codec_if_->hw_base;
   const esp_codec_dev_device_map_info_t *maps = nullptr;
   int count = 0;
-  if (hw.get_order_list == nullptr || hw.get_order_list(&hw, &maps, &count) != ESP_CODEC_DEV_OK) return false;
+  if (hw.get_order_list == nullptr) {
+    // Amplifiers such as the AW88298 expose no channel-order table. CodecDev
+    // then performs no software remap, so physical TDM slots map 1:1 onto
+    // logical channels and the configured mask already selects the right slot.
+    ESP_LOGW(TAG, "Output codec %s has no TDM channel map; keeping slot mask 0x%x", this->output_codec_name(),
+             static_cast<unsigned>(fs.channel_mask));
+    return fs.channel_mask != 0;
+  }
+  const int order_ret = hw.get_order_list(&hw, &maps, &count);
+  if (order_ret != ESP_CODEC_DEV_OK) {
+    ESP_LOGE(TAG, "Cannot query the %s TDM channel map (ret=0x%x)", this->output_codec_name(), order_ret);
+    return false;
+  }
   for (int i = 0; i < count; ++i) {
     if (maps[i].mode != output_mode || maps[i].channels != config.channels) continue;
     uint16_t logical_mask = 0;
@@ -478,10 +575,27 @@ bool CodecDevBackend::read_layout_(esp_codec_dev_type_t direction, const SampleC
   const auto dev = output ? this->tx_dev_ : this->rx_dev_;
   layout = {};
   if (data_if == nullptr || data_if->get_bus_info == nullptr ||
-      data_if->get_bus_info(data_if, direction, &layout.bus) != ESP_CODEC_DEV_OK ||
-      esp_codec_dev_get_data_layout(dev, &layout.memory) != ESP_CODEC_DEV_OK) {
+      data_if->get_bus_info(data_if, direction, &layout.bus) != ESP_CODEC_DEV_OK) {
     ESP_LOGE(TAG, "Cannot query effective %s codec layout", output ? "TX" : "RX");
     return false;
+  }
+  // AW88298 implements the codec control and stream open APIs, but its
+  // esp_codec_dev adapter does not expose a channel-order/data-layout map.
+  // The bus layout is still authoritative for the standard I2S path, so do
+  // not reject an otherwise successful open just because this optional
+  // diagnostic query returns ESP_ERR_NOT_SUPPORTED (0x106).
+  const int layout_ret = esp_codec_dev_get_data_layout(dev, &layout.memory);
+  if (layout_ret != ESP_CODEC_DEV_OK) {
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+    if (output && this->output_codec_.enabled && this->output_codec_.kind == CodecKind::AW88298 &&
+        layout_ret == ESP_CODEC_DEV_NOT_SUPPORT) {
+      ESP_LOGW(TAG, "TX codec does not provide a data layout map; continuing with bus layout");
+    } else
+#endif
+    {
+      ESP_LOGE(TAG, "Cannot query effective %s codec layout (ret=%d)", output ? "TX" : "RX", layout_ret);
+      return false;
+    }
   }
   if (layout.bus.sample_rate != requested.sample_rate || layout.bus.data_bit != requested.bits_per_sample) {
     ESP_LOGE(TAG, "%s codec format differs from requested audio format", output ? "TX" : "RX");
@@ -524,7 +638,10 @@ bool CodecDevBackend::tx_dma_layout_matches(const SampleConfig &requested) const
     }
     if (!found) return false;
   } else if (layout.bus.mode == ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS && this->tx_codec_if_ != nullptr) {
-    return false;
+    // No channel-order table (AW88298): CodecDev performs no software remap, so
+    // the DMA order equals the negotiated slot order. Frame geometry was
+    // already validated above.
+    return true;
   }
   uint32_t dma_order = 0;
   uint8_t selected = 0;
@@ -555,6 +672,7 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
       ESP_LOGE(TAG, "Failed to open TX codec device: %d", ret);
       return false;
     }
+
     this->apply_output_volume_curve_();
   }
   if (this->rx_dev_ != nullptr && rx_config != nullptr) {
@@ -590,15 +708,77 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
       (rx_config != nullptr && this->rx_dev_ != nullptr &&
        !this->read_layout_(ESP_CODEC_DEV_TYPE_IN, *rx_config, this->rx_layout_)) ||
       (tx_config != nullptr && this->tx_dev_ != nullptr && !this->tx_dma_layout_matches(*tx_config))) {
+    ESP_LOGE(TAG, "Codec stream layout does not match the requested audio format");
     if (this->rx_dev_ != nullptr) esp_codec_dev_close(this->rx_dev_);
     if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
     this->rx_layout_ = {};
     this->tx_layout_ = {};
     return false;
   }
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+  if (!this->apply_aw88298_tdm_framing_(this->tx_layout_)) {
+    if (this->rx_dev_ != nullptr) esp_codec_dev_close(this->rx_dev_);
+    if (this->tx_dev_ != nullptr) esp_codec_dev_close(this->tx_dev_);
+    this->rx_layout_ = {};
+    this->tx_layout_ = {};
+    return false;
+  }
+#endif
   this->open_ = true;
   return true;
 }
+
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+// esp_codec_dev's AW88298 driver only programs the word length (I2SCTRL
+// I2SFS[7:6]) and the sample rate; I2SBCK[5:4] stays at 32*fs, i.e. a two-slot
+// frame. The ES7210 forces a four-slot TDM bus, so the amplifier has to be moved
+// to the matching frame length before playback can lock onto the same frame.
+bool CodecDevBackend::apply_aw88298_tdm_framing_(const StreamLayout &layout) {
+  static constexpr int I2SCTRL_REG = 0x06;    // AW88298 I2SCTRL
+  static constexpr int I2SBCK_MASK = 0x0030;  // I2SCTRL[5:4]: frame length
+  if (!this->output_codec_.enabled || this->output_codec_.kind != CodecKind::AW88298 ||
+      layout.bus.mode != ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS || this->tx_codec_if_ == nullptr) {
+    return true;
+  }
+  const auto &hw = this->tx_codec_if_->hw_base;
+  if (hw.get_reg == nullptr || hw.set_reg == nullptr) {
+    ESP_LOGE(TAG, "AW88298 driver does not expose register access");
+    return false;
+  }
+  const unsigned frame_bits = static_cast<unsigned>(layout.bus.total_slot) * layout.bus.slot_bit;
+  int bck_mode;
+  switch (frame_bits) {
+    case 32:
+      bck_mode = 0x0;  // 32 * fs
+      break;
+    case 48:
+      bck_mode = 0x1;  // 48 * fs
+      break;
+    case 64:
+      bck_mode = 0x2;  // 64 * fs
+      break;
+    default:
+      ESP_LOGE(TAG, "AW88298 cannot frame %u bits (slots=%u slot_bits=%u)", frame_bits,
+               static_cast<unsigned>(layout.bus.total_slot), static_cast<unsigned>(layout.bus.slot_bit));
+      return false;
+  }
+  int i2sctrl = 0;
+  if (hw.get_reg(&hw, I2SCTRL_REG, &i2sctrl) != ESP_CODEC_DEV_OK) {
+    ESP_LOGE(TAG, "Failed to read AW88298 I2SCTRL");
+    return false;
+  }
+  const int updated = (i2sctrl & ~I2SBCK_MASK) | (bck_mode << 4);
+  if (updated == i2sctrl) {
+    return true;
+  }
+  if (hw.set_reg(&hw, I2SCTRL_REG, updated) != ESP_CODEC_DEV_OK) {
+    ESP_LOGE(TAG, "Failed to configure the AW88298 TDM frame length");
+    return false;
+  }
+  ESP_LOGI(TAG, "AW88298 TDM frame length: I2SCTRL 0x%04x -> 0x%04x (%u * fs)", i2sctrl, updated, frame_bits);
+  return true;
+}
+#endif
 
 void CodecDevBackend::close() {
   this->rx_layout_ = {};
@@ -713,6 +893,13 @@ void CodecDevBackend::destroy_codecs_() {
     audio_codec_delete_codec_if(this->tx_codec_if_);
     this->tx_codec_if_ = nullptr;
   }
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+  // The driver can still access reset during close, so release only after it.
+  if (this->aw88298_reset_id_ > 0) {
+    codec_reset_pins[this->aw88298_reset_id_ - 1] = nullptr;
+    this->aw88298_reset_id_ = -1;
+  }
+#endif
   if (this->es7210_ctrl_ != nullptr) {
     audio_codec_delete_ctrl_if(this->es7210_ctrl_);
     this->es7210_ctrl_ = nullptr;
