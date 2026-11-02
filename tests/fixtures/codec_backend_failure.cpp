@@ -10,7 +10,9 @@
 #define USE_ESP_AUDIO_STACK_CODEC_ES7210
 #define ESP_LOGE(...) ((void)0)
 #define ESP_LOGI(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
 constexpr int ESP_CODEC_DEV_OK=0;
+#define ESP_CODEC_DEV_NOT_SUPPORT -2
 #define ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel) (1U << (channel))
 constexpr int ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS=1;
 using i2s_chan_handle_t=void*;
@@ -19,7 +21,7 @@ enum esp_codec_dev_type_t {ESP_CODEC_DEV_TYPE_IN,ESP_CODEC_DEV_TYPE_OUT};
 struct esp_codec_dev_channel_map_t {uint32_t value=0;};
 constexpr unsigned ESP_CODEC_DEV_MAX_MAP_CHANNELS=8;
 struct esp_codec_dev_device_map_info_t {int mode;uint8_t channels;esp_codec_dev_channel_map_t map;};
-struct audio_hw_base_t {int(*get_order_list)(const audio_hw_base_t*,const esp_codec_dev_device_map_info_t**,int*)=nullptr;};
+struct audio_hw_base_t {int(*get_order_list)(const audio_hw_base_t*,const esp_codec_dev_device_map_info_t**,int*)=nullptr;int(*get_reg)(const audio_hw_base_t*,int,int*)=nullptr;int(*set_reg)(const audio_hw_base_t*,int,int)=nullptr;};
 struct esp_codec_dev_bus_info_t {uint32_t sample_rate=0;unsigned data_bit=0,slot_bit=0,total_slot=0,slot_mask=0;int mode=0;};
 struct esp_codec_dev_sample_info_t {unsigned sample_rate,bits_per_sample,channel,channel_mask,mclk_multiple;};
 struct audio_codec_i2s_cfg_t {unsigned port;void *rx_handle;void *tx_handle;int clk_src;};
@@ -68,6 +70,7 @@ void audio_codec_delete_codec_if(const audio_codec_if_t*c){assert(resources.coun
 void audio_codec_delete_ctrl_if(const audio_codec_ctrl_if_t*c){release(c);}
 void audio_codec_delete_data_if(const audio_codec_data_if_t*d){release(d);}
 #define private public
+namespace esphome { class GPIOPin; }
 // PRODUCTION_CLASS
 #undef private
 namespace esphome::esp_audio_stack {
