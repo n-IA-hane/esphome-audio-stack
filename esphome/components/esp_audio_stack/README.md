@@ -75,7 +75,7 @@ and gain. These are the knobs users most often need when building a new target:
 | Knob | Why it matters |
 |---|---|
 | `sample_rate` / `output_sample_rate` | Run codec/speaker at the bus rate while feeding mic/AEC/VA at the processor rate. |
-| `codec.input` / `codec.output` | Select `es7210`, `es8311`, `es8388`, `es8374` or `es8389` through `esp_codec_dev`. |
+| `codec.input` / `codec.output` | Select `es7210`, `es8311`, `es8388`, `es8374`, `es8389` or `aw88298` through `esp_codec_dev` |
 | `codec.i2c_id` | Select a native I2C controller. Multiplexer channels are not supported by the codec device identity contract. |
 | `rx_bus` / `tx_bus` | Use separate I2S controllers for discrete mic and amplifier. |
 | `bits_per_sample` / `slot_bit_width` | Required for 24/32-bit codecs and 32-bit MEMS microphones. |
@@ -506,6 +506,15 @@ esp_audio_stack:
 | `es8388` | yes | yes | Stereo-capable codec through `esp_codec_dev`; board analog routing still decides which channels are useful. |
 | `es8374` | yes | yes | Codec-dev supported ADC/DAC codec. |
 | `es8389` | yes | yes | Codec-dev supported ADC/DAC codec; `use_mclk` and `no_dac_ref` are passed through. |
+| `aw88298` | no | yes | Amplifier/DAC, default I2C address `0x36`; accepts `pa_gain`, `pa_voltage` and `codec_dac_voltage`; optional `reset_pin` supports ESPHome GPIO output pins, including IO expanders. |
+
+AW88298 accepts `pa_gain` in dB (default `30`), `pa_voltage` in volts
+(default `5`), and `codec_dac_voltage` in volts (default `3.3`) directly on the
+codec output. All values must be finite, and both voltages must be greater than
+zero. Any field may be omitted to use its default. The driver calculates
+hardware gain as `pa_gain + 20 * log10(codec_dac_voltage / pa_voltage)` and uses
+it for volume compensation; these settings describe the board's hardware and
+do not change its physical amplifier gain or supply voltage.
 
 ES8311 output also accepts `pa_gain` (0 to 40 dB, default 0) for the external
 amplifier's hardware gain. The value is passed to `esp_codec_dev` volume

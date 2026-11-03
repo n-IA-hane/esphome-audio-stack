@@ -1,0 +1,127 @@
+"""Exercise AW88298 pin code generation and the production GPIO adapter."""
+
+import importlib.util
+import subprocess
+import sys
+
+import pytest
+from test_codec_backend_failure_runtime import BACKEND, ROOT, method
+
+from esphome import config_validation as cv
+
+
+@pytest.fixture
+def aw88298_gain_schema():
+    spec = importlib.util.spec_from_file_location("aw88298_schema", BACKEND / "__init__.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def validate(overrides):
+        validated = module.CODEC_OUTPUT_SCHEMA({"type": "aw88298", **overrides})
+        return {key: validated[key] for key in ("pa_gain", "pa_voltage", "codec_dac_voltage")}
+
+    return validate
+
+
+def test_aw88298_gain_defaults_and_units(aw88298_gain_schema):
+    assert aw88298_gain_schema({}) == {"pa_gain": 30.0, "pa_voltage": 5.0, "codec_dac_voltage": 3.3}
+    assert aw88298_gain_schema({"pa_gain": "24 dB", "pa_voltage": "12 V", "codec_dac_voltage": "1.8 V"}) == {
+        "pa_gain": 24.0, "pa_voltage": 12.0, "codec_dac_voltage": 1.8,
+    }
+    assert aw88298_gain_schema({"pa_gain": "-3 dB"})["pa_gain"] == -3.0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("pa_voltage", 0), ("codec_dac_voltage", -1),
+    ("pa_gain", float("nan")), ("pa_gain", float("inf")),
+    ("pa_voltage", float("inf")), ("codec_dac_voltage", float("nan")),
+])
+def test_aw88298_rejects_invalid_gain_values(aw88298_gain_schema, field, value):
+    with pytest.raises(cv.Invalid):
+        aw88298_gain_schema({field: value})
+
+
+@pytest.mark.parametrize("pin", ["none", "internal", "expander", "input_only"])
+def test_aw88298_pin_codegen(tmp_path, pin):
+    text = (ROOT / "tests/components/esp_audio_stack/test.esp32-s3-idf.yaml").read_text()
+    text = text.replace("    output:\n      type: es8311", "    output:\n      type: aw88298")
+    if pin == "internal":
+        text = text.replace("      type: aw88298", "      type: aw88298\n      reset_pin: GPIO0")
+    elif pin in ("expander", "input_only"):
+        mode = "OUTPUT" if pin == "expander" else "INPUT"
+        text = text.replace("      type: aw88298", f"""      type: aw88298
+      reset_pin:
+        pcf8574: codec_io
+        number: 0
+        mode: {mode}""")
+        text += "\npcf8574:\n  - id: codec_io\n    address: 0x20\n"
+    if pin == "expander":
+        text = text.replace("      type: aw88298", """      type: aw88298
+      pa_gain: 24 dB
+      pa_voltage: 12 V
+      codec_dac_voltage: 1.8 V""")
+    text += f"""
+external_components:
+  - source:
+      type: local
+      path: {ROOT / 'esphome/components'}
+    components: [esp_audio_stack]
+"""
+    config = tmp_path / "audio.yaml"
+    config.write_text(text)
+    result = subprocess.run(
+        [sys.executable, "-m", "esphome", "compile", str(config), "--only-generate"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    output = result.stdout + result.stderr
+    if pin == "input_only":
+        assert result.returncode != 0, output
+        assert "output" in output.lower(), output
+        assert "Traceback" not in output
+        return
+    assert result.returncode == 0, output
+    generated = next(tmp_path.rglob("main.cpp")).read_text()
+    assert "->configure_output_codec(5, 0x36, true, true)" in generated
+    assert ("->set_aw88298_reset_pin(" in generated) == (pin != "none")
+    gain = "24.0f, 12.0f, 1.8f" if pin == "expander" else "30.0f, 5.0f, 3.3f"
+    assert f"->set_aw88298_hw_gain({gain})" in generated
+    if pin == "expander":
+        assert "pcf8574::PCF8574GPIOPin" in generated
+        assert "->set_pin(0)" in generated
+
+
+def test_aw88298_reset_adapter_lifetime(tmp_path):
+    source = (BACKEND / "codec_dev_backend.cpp").read_text()
+    header = (BACKEND / "codec_dev_backend.h").read_text()
+    header = "\n".join(line for line in header.splitlines() if not line.startswith("#include"))
+    fixture = (ROOT / "tests/fixtures/codec_backend_failure.cpp").read_text()
+    fixture = fixture[:fixture.index("int main(){")]
+    fixture = fixture.replace("// PRODUCTION_CLASS", '#include "backend.h"')
+    fixture = fixture.replace("// PRODUCTION_METHODS", "\n".join(method(source, signature) for signature in [
+        "const audio_codec_if_t *CodecDevBackend::new_generic_codec_",
+        "bool CodecDevBackend::setup(",
+        "bool CodecDevBackend::apply_aw88298_tdm_framing_(",
+        "bool CodecDevBackend::read_layout_",
+        "bool CodecDevBackend::tx_dma_layout_matches",
+        "bool CodecDevBackend::open(",
+        "bool CodecDevBackend::set_input_gain(",
+        "bool CodecDevBackend::set_input_channel_gain(",
+        "void CodecDevBackend::close()",
+        "void CodecDevBackend::destroy_codecs_",
+        "void CodecDevBackend::teardown()",
+    ]))
+    adapter_start = source.index("// The vendor GPIO callbacks")
+    adapter = source[adapter_start:source.index("#endif", adapter_start)]
+    additions = (ROOT / "tests/fixtures/aw88298_reset.cpp").read_text()
+    fixture = fixture.replace("#define private public", additions + "\n#define private public")
+    fixture = fixture.replace("CodecDevBackend::~CodecDevBackend()", adapter + "\nCodecDevBackend::~CodecDevBackend()")
+    fixture += "\n" + (ROOT / "tests/fixtures/aw88298_reset_main.cpp").read_text()
+    (tmp_path / "backend.h").write_text(header)
+    cpp = tmp_path / "codec.cpp"
+    cpp.write_text(fixture)
+    binary = tmp_path / "codec"
+    subprocess.run([
+        "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter",
+        "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(cpp), "-o", str(binary),
+    ], check=True, capture_output=True, text=True)
+    subprocess.run([str(binary)], check=True, capture_output=True, text=True)

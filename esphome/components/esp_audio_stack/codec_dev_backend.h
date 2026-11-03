@@ -1,7 +1,7 @@
 #pragma once
 
 #include "esphome/core/defines.h"
-
+#include "esphome/core/gpio.h"
 #if defined(USE_ESP32) && defined(USE_ESP_AUDIO_STACK_HARDWARE_CODEC)
 
 #include <driver/i2s_types.h>
@@ -28,6 +28,7 @@ class CodecDevBackend {
     ES8388,
     ES8374,
     ES8389,
+    AW88298,
   };
 
   struct Es7210Config {
@@ -48,6 +49,8 @@ class CodecDevBackend {
     bool no_dac_ref{true};
     float input_gain_db{24.0f};
     float pa_gain_db{0.0f};
+    float pa_voltage{5.0f};
+    float codec_dac_voltage{3.3f};
   };
 
   struct SampleConfig {
@@ -74,6 +77,13 @@ class CodecDevBackend {
   void set_es7210_config(const Es7210Config &config) { this->es7210_ = config; }
   void set_input_codec_config(const GenericCodecConfig &config) { this->input_codec_ = config; }
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
+
+  void set_aw88298_reset_pin(GPIOPin *pin) { this->aw88298_reset_pin_ = pin; }
+  void set_aw88298_hw_gain(float pa_gain, float pa_voltage, float codec_dac_voltage) {
+    this->output_codec_.pa_gain_db = pa_gain;
+    this->output_codec_.pa_voltage = pa_voltage;
+    this->output_codec_.codec_dac_voltage = codec_dac_voltage;
+  }
 
   bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
              i2s_clock_src_t clk_src);
@@ -109,6 +119,9 @@ class CodecDevBackend {
   void apply_output_volume_curve_();
   bool read_layout_(esp_codec_dev_type_t direction, const SampleConfig &requested, StreamLayout &layout);
   bool make_tx_sample_info_(const SampleConfig &config, esp_codec_dev_sample_info_t &fs);
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+  bool apply_aw88298_tdm_framing_(const StreamLayout &layout);
+#endif
   const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config,
                                              const audio_codec_ctrl_if_t **ctrl);
   void destroy_codecs_();
@@ -141,6 +154,11 @@ class CodecDevBackend {
 
   bool prepared_{false};
   bool open_{false};
+
+  GPIOPin *aw88298_reset_pin_{nullptr};
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+  int16_t aw88298_reset_id_{-1};
+#endif
 };
 
 }  // namespace esphome::esp_audio_stack
