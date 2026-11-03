@@ -56,5 +56,59 @@ int main() {
   assert(aw_configs.back().gpio_if == nullptr);
   a.teardown();
   assert(resources.empty());
+  // Public open uses the real no-map fallback, negotiated TDM geometry and
+  // register adapter. Keep all bits outside I2SBCK[5:4] unchanged.
+  CodecDevBackend::SampleConfig fs;
+  fs.channels = 4;
+  fs.channel_mask = 5;
+  reset_faults();
+  assert(start(a));
+  auto *hw = &a.tx_codec_if_->hw_base;
+  const int original = aw_registers.at(hw);
+  const int writes_before = aw_writes;
+  assert(a.open(&fs, nullptr));
+  assert(aw_registers.at(hw) == ((original & ~0x30) | 0x20));
+  assert(aw_writes == writes_before + 1);
+  a.close();
+  assert(a.open(&fs, nullptr));
+  assert(aw_writes == writes_before + 1);  // Already-correct framing is left alone.
+  a.teardown();
+  assert(resources.empty());
+  for (bool fail_read : {false, true}) {
+    reset_faults();
+    assert(start(a));
+    aw_read_failure = fail_read;
+    aw_write_failure = !fail_read;
+    assert(!a.open(&fs, nullptr));
+    assert_closed(a);
+    assert(!a.tx_dev_->open);
+    aw_read_failure = aw_write_failure = false;
+    assert(a.open(&fs, nullptr));
+    a.teardown();
+    assert(resources.empty());
+  }
+  reset_faults();
+  assert(start(a));
+  fixture_slot_bits = 32;  // Four slots at 32 bits exceed AW88298's 64-bit frame.
+  const int reads_before = aw_reads;
+  assert(!a.open(&fs, nullptr));
+  assert(aw_reads == reads_before);
+  assert_closed(a);
+  assert(!a.tx_dev_->open);
+  fixture_slot_bits = 16;
+  assert(a.open(&fs, nullptr));
+  a.teardown();
+  assert(resources.empty());
+
+  // Other codecs retain the pre-PR rejection of a missing channel-order table.
+  output.kind = CodecDevBackend::CodecKind::ES8311;
+  a.set_output_codec_config(output);
+  fixture_missing_order = true;
+  assert(start(a));
+  assert(!a.open(&fs, nullptr));
+  assert(!a.tx_dev_->open);
+  a.teardown();
+  fixture_missing_order = false;
+  assert(resources.empty());
   for (auto *pin : codec_reset_pins) assert(pin == nullptr);
 }

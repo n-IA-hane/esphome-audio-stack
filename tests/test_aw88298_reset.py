@@ -96,10 +96,36 @@ def test_aw88298_reset_adapter_lifetime(tmp_path):
     header = "\n".join(line for line in header.splitlines() if not line.startswith("#include"))
     fixture = (ROOT / "tests/fixtures/codec_backend_failure.cpp").read_text()
     fixture = fixture[:fixture.index("int main(){")]
+    fixture = fixture.replace("struct audio_codec_if_t {", "struct audio_codec_if_t {bool aw_codec=false;")
+    fixture = fixture.replace(
+        "struct audio_codec_data_if_t {",
+        "using esp_codec_dev_i2s_mode_t=int; struct audio_codec_data_if_t {"
+        "int (*get_mode)(const audio_codec_data_if_t*,int*,int*);",
+    )
+    fixture = fixture.replace(
+        "if(p)p->get_bus_info=bus_info;",
+        "if(p){p->get_bus_info=bus_info;p->get_mode=[](const audio_codec_data_if_t*,int*i,int*o)"
+        "{*i=*o=ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS;return 0;};}",
+    )
+    fixture = fixture.replace("float channel_gains[4]{};", "unsigned fixture_slot_bits=16; float channel_gains[4]{};")
+    fixture = fixture.replace("int order_list(", "bool fixture_missing_order=false; int order_list(")
+    fixture = fixture.replace("p->hw_base.get_order_list=order_list;",
+                              "p->hw_base.get_order_list=fixture_missing_order?nullptr:order_list;")
+    fixture = fixture.replace("*b={16000,16,16,4,5,", "*b={16000,16,fixture_slot_bits,4,5,")
+    fixture = fixture.replace(
+        "int esp_codec_dev_get_data_layout(Dev*,esp_codec_dev_channel_map_t*m){",
+        "int esp_codec_dev_get_data_layout(Dev*d,esp_codec_dev_channel_map_t*m){"
+        "if(d->cfg.codec_if->aw_codec)return ESP_CODEC_DEV_NOT_SUPPORT;",
+    )
+    fixture = fixture.replace(
+        "bool CodecDevBackend::make_tx_sample_info_(const SampleConfig&c,esp_codec_dev_sample_info_t&f)"
+        "{f=make_sample_info_(c);return true;}", "",
+    )
     fixture = fixture.replace("// PRODUCTION_CLASS", '#include "backend.h"')
     fixture = fixture.replace("// PRODUCTION_METHODS", "\n".join(method(source, signature) for signature in [
         "const audio_codec_if_t *CodecDevBackend::new_generic_codec_",
         "bool CodecDevBackend::setup(",
+        "bool CodecDevBackend::make_tx_sample_info_(",
         "bool CodecDevBackend::apply_aw88298_tdm_framing_(",
         "bool CodecDevBackend::read_layout_",
         "bool CodecDevBackend::tx_dma_layout_matches",
@@ -125,3 +151,28 @@ def test_aw88298_reset_adapter_lifetime(tmp_path):
         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(cpp), "-o", str(binary),
     ], check=True, capture_output=True, text=True)
     subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+
+
+def test_aw88298_disabled_keeps_backend_configuration_budget(tmp_path):
+    header = (BACKEND / "codec_dev_backend.h").read_text()
+    header = "\n".join(line for line in header.splitlines() if not line.startswith("#include"))
+    fixture = (ROOT / "tests/fixtures/codec_backend_failure.cpp").read_text()
+    fixture = fixture[:fixture.index("// PRODUCTION_CLASS")]
+    fixture += r'''
+#include "backend.h"
+#undef private
+#include <type_traits>
+template<class T, class = void> struct has_reset_pin : std::false_type {};
+template<class T> struct has_reset_pin<T, std::void_t<decltype(T::aw88298_reset_pin_)>> : std::true_type {};
+static_assert(sizeof(esphome::esp_audio_stack::CodecDevBackend::GenericCodecConfig) == 16,
+              "disabled AW88298 must retain the codec configuration budget");
+static_assert(!has_reset_pin<esphome::esp_audio_stack::CodecDevBackend>::value,
+              "disabled AW88298 must not retain reset-pin storage");
+int main() {}
+'''
+    (tmp_path / "backend.h").write_text(header)
+    cpp = tmp_path / "budget.cpp"
+    cpp.write_text(fixture)
+    subprocess.run([
+        "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(tmp_path / "budget"),
+    ], check=True, capture_output=True, text=True)

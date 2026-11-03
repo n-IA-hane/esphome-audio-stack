@@ -539,9 +539,14 @@ bool CodecDevBackend::make_tx_sample_info_(const SampleConfig &config, esp_codec
     // Amplifiers such as the AW88298 expose no channel-order table. CodecDev
     // then performs no software remap, so physical TDM slots map 1:1 onto
     // logical channels and the configured mask already selects the right slot.
-    ESP_LOGW(TAG, "Output codec %s has no TDM channel map; keeping slot mask 0x%x", this->output_codec_name(),
-             static_cast<unsigned>(fs.channel_mask));
-    return fs.channel_mask != 0;
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+    if (this->output_codec_.enabled && this->output_codec_.kind == CodecKind::AW88298) {
+      ESP_LOGW(TAG, "Output codec %s has no TDM channel map; keeping slot mask 0x%x", this->output_codec_name(),
+               static_cast<unsigned>(fs.channel_mask));
+      return fs.channel_mask != 0;
+    }
+#endif
+    return false;
   }
   const int order_ret = hw.get_order_list(&hw, &maps, &count);
   if (order_ret != ESP_CODEC_DEV_OK) {
@@ -638,10 +643,12 @@ bool CodecDevBackend::tx_dma_layout_matches(const SampleConfig &requested) const
     }
     if (!found) return false;
   } else if (layout.bus.mode == ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS && this->tx_codec_if_ != nullptr) {
-    // No channel-order table (AW88298): CodecDev performs no software remap, so
-    // the DMA order equals the negotiated slot order. Frame geometry was
-    // already validated above.
-    return true;
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+    // AW88298 performs no software remap; retain strict handling for other codecs.
+    return this->output_codec_.enabled && this->output_codec_.kind == CodecKind::AW88298;
+#else
+    return false;
+#endif
   }
   uint32_t dma_order = 0;
   uint8_t selected = 0;

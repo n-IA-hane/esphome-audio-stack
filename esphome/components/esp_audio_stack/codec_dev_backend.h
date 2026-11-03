@@ -1,7 +1,9 @@
 #pragma once
 
 #include "esphome/core/defines.h"
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
 #include "esphome/core/gpio.h"
+#endif
 #if defined(USE_ESP32) && defined(USE_ESP_AUDIO_STACK_HARDWARE_CODEC)
 
 #include <driver/i2s_types.h>
@@ -49,8 +51,10 @@ class CodecDevBackend {
     bool no_dac_ref{true};
     float input_gain_db{24.0f};
     float pa_gain_db{0.0f};
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
     float pa_voltage{5.0f};
     float codec_dac_voltage{3.3f};
+#endif
   };
 
   struct SampleConfig {
@@ -78,12 +82,14 @@ class CodecDevBackend {
   void set_input_codec_config(const GenericCodecConfig &config) { this->input_codec_ = config; }
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
 
+#ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
   void set_aw88298_reset_pin(GPIOPin *pin) { this->aw88298_reset_pin_ = pin; }
   void set_aw88298_hw_gain(float pa_gain, float pa_voltage, float codec_dac_voltage) {
     this->output_codec_.pa_gain_db = pa_gain;
     this->output_codec_.pa_voltage = pa_voltage;
     this->output_codec_.codec_dac_voltage = codec_dac_voltage;
   }
+#endif
 
   bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
              i2s_clock_src_t clk_src);
@@ -155,8 +161,8 @@ class CodecDevBackend {
   bool prepared_{false};
   bool open_{false};
 
-  GPIOPin *aw88298_reset_pin_{nullptr};
 #ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
+  GPIOPin *aw88298_reset_pin_{nullptr};
   int16_t aw88298_reset_id_{-1};
 #endif
 };
