@@ -31,6 +31,7 @@ def test_callback_reserve_uses_lifetime_bound_and_keeps_unknown_processor_fallba
 #define USE_AUDIO_PROCESSOR
 constexpr size_t DEFAULT_AUDIO_FRAME_SAMPLES=256;
 struct Spec {size_t input_samples=0,output_samples=0;};
+namespace esp_audio_stack {using FrameSpec=Spec;}
 struct Processor {size_t maximum=0,output=0;size_t maximum_output_samples()const{return maximum;}Spec frame_spec()const{return {output,output};}};
 struct ESPAudioStack {Processor *processor_=nullptr;size_t get_mic_callback_buffer_size()const;};
 """ + method(pipeline, "size_t ESPAudioStack::get_mic_callback_buffer_size() const") + r"""
