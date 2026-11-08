@@ -156,9 +156,11 @@ class HardwareGainNumber final : public number::Number, public Component {
       value = this->parent_->get_hardware_gain(this->reference_);
     this->parent_->add_on_hardware_gain_callback([this]() {
       float accepted;
-      if (this->parent_->hardware_gain_result(this->reference_, &accepted)) {
+      bool persist = false;
+      if (this->parent_->hardware_gain_result(this->reference_, &accepted, &persist)) {
         this->publish_state(accepted);
-        this->pref_.save(&accepted);
+        if (persist && !this->pref_.save(&accepted))
+          this->status_momentary_warning("gain_preference", 2000);
       }
     });
     this->control(value);
@@ -167,11 +169,9 @@ class HardwareGainNumber final : public number::Number, public Component {
 
  protected:
   void control(float value) override {
-    if (!this->parent_->request_hardware_gain(this->reference_, value)) return;
-    // This is the requested configuration; an owner-side write failure
-    // republishes the last accepted value through the callback above.
-    this->publish_state(value);
-    this->pref_.save(&value);
+    // The owner normalizes old preferences and reports configured/read-back
+    // state asynchronously. Never persist an unacknowledged hardware request.
+    this->parent_->request_hardware_gain(this->reference_, value);
   }
 
   ESPAudioStack *parent_{nullptr};

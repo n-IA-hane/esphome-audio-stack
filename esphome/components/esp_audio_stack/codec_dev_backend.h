@@ -78,8 +78,8 @@ class CodecDevBackend {
   CodecDevBackend &operator=(const CodecDevBackend &) = delete;
 
   void set_i2c_bus(i2c::InternalI2CBus *bus) { this->i2c_bus_ = bus; }
-  void set_es7210_config(const Es7210Config &config) { this->es7210_ = config; }
-  void set_input_codec_config(const GenericCodecConfig &config) { this->input_codec_ = config; }
+  void set_es7210_config(const Es7210Config &config);
+  void set_input_codec_config(const GenericCodecConfig &config);
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
 
 #ifdef USE_ESP_AUDIO_STACK_CODEC_AW88298
@@ -104,6 +104,20 @@ class CodecDevBackend {
   void set_output_mute(bool mute);
   bool set_input_gain(float gain_db, bool opening = false);
   bool set_input_channel_gain(uint8_t channel, float gain_db, bool opening = false);
+  // Match esp_codec_dev 2.0.0-beta5, including its ES7210 boundary behavior.
+  float normalize_input_gain(float gain_db) const;
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  struct GainReadback {
+    float microphone;
+    float reference;
+  };
+  // Only the audio owner may access codec registers. NaN means unreadable or
+  // different microphone channels, never the previous cached setting.
+  GainReadback read_hardware_gains(bool diagnostics = false);
+  bool hardware_gain_readback_supported() const {
+    return this->es7210_.enabled || this->input_codec_.kind == CodecKind::ES8311;
+  }
+#endif
 
   bool has_tx() const { return this->tx_dev_ != nullptr; }
   bool has_rx() const { return this->rx_dev_ != nullptr; }

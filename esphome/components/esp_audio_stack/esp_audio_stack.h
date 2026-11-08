@@ -327,9 +327,14 @@ class ESPAudioStack final : public Component {
   void set_input_gain(float gain);
   float get_input_gain() const { return this->input_gain_.load(std::memory_order_relaxed); }
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  enum class HardwareGainState : uint8_t { GAIN_CONFIGURED, GAIN_WRITE_CONFIRMED, GAIN_READ_BACK, GAIN_UNKNOWN };
   bool request_hardware_gain(bool reference, float db);
   float get_hardware_gain(bool reference) const { return this->hardware_gain_applied_[reference ? 1 : 0].load(); }
-  bool hardware_gain_result(bool reference, float *value) const;
+  HardwareGainState get_hardware_gain_state(bool reference) const { return this->hardware_gain_state_[reference ? 1 : 0].load(); }
+  bool hardware_gain_result(bool reference, float *value, bool *persist = nullptr) const;
+#ifdef USE_ESP_AUDIO_STACK_GAIN_DIAGNOSTICS
+  void request_hardware_gain_diagnostics();
+#endif
   template<typename F> void add_on_hardware_gain_callback(F &&callback) {
     this->hardware_gain_callback_.add(std::forward<F>(callback));
   }
@@ -544,11 +549,16 @@ class ESPAudioStack final : public Component {
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
   void configure_hardware_gain_defaults_(float mic, bool has_ref, uint8_t channel, float reference);
   void apply_pending_hardware_gains_();
+  void refresh_hardware_gain_readback_(bool diagnostics = false);
   std::atomic<float> hardware_gain_requested_[2]{};
   std::atomic<float> hardware_gain_applied_[2]{};
   std::atomic<uint32_t> hardware_gain_revision_[2]{};
   std::atomic<uint32_t> hardware_gain_result_revision_[2]{};
   std::atomic<bool> hardware_gain_failed_[2]{};
+  std::atomic<HardwareGainState> hardware_gain_state_[2]{};
+#ifdef USE_ESP_AUDIO_STACK_GAIN_DIAGNOSTICS
+  std::atomic<bool> hardware_gain_diagnostics_requested_{false};
+#endif
   std::atomic<uint8_t> hardware_gains_dirty_{0};
   std::atomic<bool> hardware_gain_result_pending_{false};
   bool hardware_reference_gain_available_{false};

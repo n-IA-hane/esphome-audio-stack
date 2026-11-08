@@ -20,6 +20,7 @@ CONF_MASTER_VOLUME = "master_volume"
 CONF_SPEAKER_ID = "speaker_id"
 CONF_INPUT_PGA = "input_pga"
 CONF_REFERENCE_PGA = "reference_pga"
+CONF_HARDWARE_GAIN_DIAGNOSTICS = "hardware_gain_diagnostics"
 
 # Number classes
 MicGainNumber = esp_audio_stack_ns.class_("MicGainNumber", number.Number, cg.Component)
@@ -65,6 +66,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MIC_GAIN): MIC_GAIN_SCHEMA,
         cv.Optional(CONF_INPUT_PGA): HARDWARE_GAIN_SCHEMA,
         cv.Optional(CONF_REFERENCE_PGA): HARDWARE_GAIN_SCHEMA,
+        cv.Optional(CONF_HARDWARE_GAIN_DIAGNOSTICS, default=False): cv.boolean,
         cv.Optional(CONF_MASTER_VOLUME): number.number_schema(
             MasterVolumeNumber,
             entity_category=ENTITY_CATEGORY_CONFIG,
@@ -81,6 +83,8 @@ CONFIG_SCHEMA = cv.Schema(
 
 def _validate_hardware_gains(config):
     if CONF_INPUT_PGA not in config and CONF_REFERENCE_PGA not in config:
+        if config.get(CONF_HARDWARE_GAIN_DIAGNOSTICS):
+            raise cv.Invalid("hardware_gain_diagnostics requires input_pga or reference_pga")
         return config
     stacks = fv.full_config.get().get("esp_audio_stack", [])
     if isinstance(stacks, dict):
@@ -94,6 +98,11 @@ def _validate_hardware_gains(config):
         raise cv.Invalid(
             "input_pga/reference_pga require a hardware input codec; mic_gain is the digital control"
         )
+    config["_hardware_gain_es8311"] = codec.get("type") == "es8311"
+    if config["_hardware_gain_es8311"] and (
+        config.get(CONF_INPUT_PGA, {}).get(CONF_INITIAL_VALUE, 0) > 36
+    ):
+        raise cv.Invalid("ES8311 input_pga ADC scale is limited to 0..36 dB")
     if CONF_REFERENCE_PGA in config and (
         codec.get("type") != "es7210" or "ref_channel" not in codec
     ):
@@ -130,6 +139,8 @@ async def _setup_mic_gain(config, key, parent):
 
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_ESP_AUDIO_STACK_ID])
+    if config.get(CONF_HARDWARE_GAIN_DIAGNOSTICS):
+        cg.add_define("USE_ESP_AUDIO_STACK_GAIN_DIAGNOSTICS")
 
     await _setup_mic_gain(config, CONF_MIC_GAIN, parent)
     for key in (CONF_INPUT_PGA, CONF_REFERENCE_PGA):
@@ -137,7 +148,11 @@ async def to_code(config):
             continue
         cg.add_define("USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL")
         conf = config[key]
-        var = await number.new_number(conf, min_value=0, max_value=37.5, step=0.5)
+        es8311 = config.get("_hardware_gain_es8311", False)
+        var = await number.new_number(
+            conf, min_value=0, max_value=36 if es8311 else 37.5,
+            step=6 if es8311 else 0.5,
+        )
         await cg.register_component(var, conf)
         cg.add(var.set_parent(parent))
         cg.add(var.set_reference(key == CONF_REFERENCE_PGA))

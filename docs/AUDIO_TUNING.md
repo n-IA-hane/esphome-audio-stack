@@ -84,81 +84,90 @@ is necessary. The 32-to-16-bit conversion still uses Espressif's converter;
 rate-changing paths retain the existing Audio Effects resampler. Digital gain
 and DC filtering retain their existing order.
 
-## 2. Adjust analog PGA without rebuilding
+## 2. Give each gain a specific job
 
-Keep the gain controls separate when comparing recordings:
+A loud signal before AEC and a quiet voice at the far end of a call can coexist.
+Measure the signal at both boundaries. Turning up the input also changes the
+acoustic echo path; a call-only level adjustment should affect only the call.
 
-| Control | Unit | Where it acts |
+| Control | Unit | Scope |
 | --- | --- | --- |
-| `number.input_pga` on `platform: esp_audio_stack` | dB | Input codec microphone channels, before digital processing |
-| `number.reference_pga` on `platform: esp_audio_stack` | dB | The configured physical reference channel only |
-| `esp_audio_stack.input_gain` | Linear factor | Microphone PCM before the processor |
-| `number.mic_gain` on `platform: esp_audio_stack` | dB | Public processor output, before microphone consumers |
-| `esp_afe.afe_linear_gain` | Linear factor | Inside the vendor AFE fetch path |
+| `number.input_pga` | dB | Input codec before AFE. Analog PGA on ES7210; digital ADC scale on ES8311. |
+| `number.reference_pga` | dB | Independent physical ES7210 reference channel; never the microphones. |
+| `esp_audio_stack.input_gain` | Linear factor | Microphone PCM before the processor. |
+| `esp_afe.afe_linear_gain` | Linear factor | Vendor AFE output path; may also affect VAD and channel selection. |
+| `number.mic_gain` | dB | Shared processor output delivered to all microphone consumers. |
+| VoIP Stack `number.mic_gain` | dB | Call TX only, after microphone processing. Does not change MWW or Assist. |
+| Master volume | Percent | Playback, including its actual configured DAC curve. Percent is not dB. |
 
-The microphone PGA is already reflected in `raw_mic`. A clipped ADC signal
-cannot be repaired by reducing gain later. The reference PGA calibrates the
-playback reference supplied to AEC; it does not change microphone ADC gain.
-Choose each from the board's wiring and measured levels, including nearby
-speech and simultaneous playback. Values from another board or enclosure are
-not universal defaults.
+**0 dB means a factor of 1**, not mute. Positive digital gain can saturate PCM;
+lowering another stage cannot recover lost samples. `raw_mic` already contains
+the input codec's analog and digital scaling. Its name does not mean unamplified
+ADC data. Reference amplitude need not equal microphone amplitude: verify its
+routing, timing and headroom instead of forcing equal RMS.
 
-**0 dB means a linear factor of 1**, not zero or mute. The optional digital
-`mic_gain` applies a constant factor, including the beginning of a quiet phrase,
-and is independent of automatic gain control. Positive gain can saturate PCM;
-lowering a later stage cannot recover samples already clipped.
-
-These optional numbers add analog controls:
+For an ES7210 with a separately wired reference:
 
 ```yaml
 number:
   - platform: esp_audio_stack
     input_pga:
-      name: "Microphone Gain (pre-processing)"
+      name: Microphone Gain (pre-processing)
     reference_pga:
-      name: "AEC Reference Gain"
+      name: AEC Reference Gain
 ```
 
-`input_pga` requires a configured hardware input codec. `reference_pga` requires
-ES7210 with an explicit physical `codec.input.ref_channel`. This is a codec
-channel index, not a TDM memory-slot index. Use the board's verified mapping.
-That reference must be enabled in `codec.input.mic_selected`. The microphone
-control excludes that reference channel; the reference control
-changes only that channel.
+`reference_pga` requires an explicit physical `codec.input.ref_channel` enabled
+in `mic_selected`. The index identifies a codec channel, not a DMA/TDM slot.
+Microphone writes exclude that channel. For ES8311 use only `input_pga`: the
+internal playback feedback has no independently adjustable reference gain in
+this driver. Its pre-AFE control adjusts digital ADC scale, not the separate
+analog PGA initialized by the codec driver.
 
-Both controls accept 0 to 37.5 dB. Optional `initial_value` sets a first-boot
-default. A saved user setting takes precedence; without either, the existing
-codec configuration supplies the default. Values survive codec close/reopen.
+ES7210 controls accept 0..37.5 dB and normalize through the resolved vendor
+mapping. In esp_codec_dev 2.0.0-beta5, requested20 dB becomes18 and20.5 becomes21.
+The ES8311 control exposes0..36 dB in6 dB steps, rounding down. Omitting
+`initial_value` preserves the saved setting or codec default. Existing saved
+requests normalize to the same physical gain the driver previously applied.
+Do not copy calibration values from another board or enclosure.
 
-Codec drivers can quantize a requested gain to their supported hardware steps.
-The number and configuration getter represent the request, not a register
-readback. Use supported codec values and confirm the effective gain when exact
-microphone/reference calibration matters.
+The existing audio owner applies requests. A closed codec accepts configuration
+without claiming a hardware write. On supported codecs the owner reads physical
+registers; matching microphone gains and the separate reference are reported
+independently. An unreadable or mixed multichannel result is unknown, rather
+than an invented previous value. A failed multichannel write may have changed
+some registers. Values are saved only when valid and reproducible; preference
+saving follows ESPHome's deferred flash behavior.
 
-Requests are applied by the existing audio owner. Changing a setting while
-idle does not open I2S or start another worker. The number shows the requested
-configuration; if a live driver write fails, it returns to the last accepted
-value and logs the failure. A newer pending request is not overwritten by an
-older result. Changing analog levels may require the echo canceller to adapt
-again; no universal PGA, DAC boost or filter setting is imposed on all boards.
+Omitting these controls excludes their control code. Optional
+`hardware_gain_diagnostics: true` on the number platform compiles a one-shot
+register dump requested with `id(audio_stack).request_hardware_gain_diagnostics()`
+(use your actual stack ID). It does not create another worker, open an idle
+codec or reset AFE. The normal controls need no diagnostic logging.
 
-Omit these numbers to exclude their runtime control code. Ordinary fixed codec
-gains keep working as before.
-
-Native AFE gain is also a signal-level control, not AEC strength. Its unity
-setting, added to the existing AFE declaration, is:
+Native AFE output gain is not AEC strength. For example:
 
 ```yaml
 esp_afe:
   afe_linear_gain: 1.0
 ```
 
-In the verified ESP-SR 2.6.0 dual-microphone ESP32-P4 fetch path, this gain acts
-on already quantized PCM before VAD and final output selection. Moving a
-post-processor gain there can therefore change VAD behavior as well as rounding
-and clipping. Equal nominal gain does not establish identical samples or
-recognition. Check the actual backend and vendor version before treating two
-gain locations as interchangeable.
+In the verified ESP-SR2.6.0 dual-microphone path it acts after AEC/BSS but before
+VAD and final output selection. A shared post-gain, an internal AFE gain and a
+call TX gain therefore have different effects. Keep one owner for each job;
+avoid cascading boosts to compensate for an unknown attenuation.
+
+WakeNet-derived AGC requires its model state. Espressif also exposes standalone
+`esp_agc_*` processing without WakeNet, operating on10 ms blocks. Dual-mic
+post-AGC support is optional here; it does not repair upstream clipping or
+change AEC retroactively. Preserve the recognition model's frontend and assess
+speech, residual playback, latency and resource cost before enabling it.
+
+A volume-dependent wake-word limit does not alone prove an AFE software defect.
+Check ADC/reference/mixer saturation and speaker or amplifier distortion.
+Feedback represents its actual tap point and may exclude distortion generated
+later by the amplifier. Record a qualified operating range per board when no
+further correction is demonstrated; never silently clamp the user's Master.
 
 ## 3. Record what each stage actually receives
 
@@ -335,6 +344,30 @@ Maintained Intercom FULL profiles select SR HIGH initially and offer SR LOW/HIGH
 VoIP-only profiles retain FD choices. Validate recognition and echo reduction
 with the same external voice, playback level and enclosure before selecting a
 mode. Separate microphone calibration from the recognizer's own input gain.
+
+### Playback operating range depends on the board
+
+User observations put the practical ceiling near 60% Master on the Waveshare
+S3 Touch LCD 1.85C Box V2. Spotpear Ball V2 was reported to recognize reliably up
+to 85% in one workload, but a later report also describes recognition failing
+above 60%. Do not treat 85% as a general guarantee: the usable range depends on
+playback content, gains, concurrent work and enclosure. These are operating
+observations, not certified limits or a controlled ten-trial result. They are
+not profile defaults and must not automatically clamp a user's volume or be
+copied to another board.
+
+Three far-only Spotpear captures at 60%, 85% and 100% found no digital PCM clipping
+in `raw_mic`, `reference` or `output`. The 100% exposure was brief: Master0 was
+observed about 4.16s after raising it, versus about 10s for the other two cases.
+After aligning the same spoken phrase, the reference stayed effectively
+unchanged while microphone and post-AFE levels increased. ES8311's digital
+feedback precedes DAC attenuation; a reference that does not follow Master is
+not automatically a defect. Do not force reference scaling to track Master.
+AGC and NS were active, so output/raw level ratios are not AEC ERLE. There was
+no near-end human speech in these captures: they do not establish recognition accuracy
+or explain the reported high-volume limit by themselves. Compare each board
+with real near-end speech, its actual reference path and the intended playback
+level before changing its operating range.
 
 <a id="4-compare-on-the-same-board"></a>
 

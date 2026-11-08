@@ -1133,6 +1133,9 @@ bool ESPAudioStack::enable_i2s_channels_() {
     this->deinit_i2s_();
     return false;
   }
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  this->refresh_hardware_gain_readback_();
+#endif
   if (this->tx_handle_ != nullptr) {
     i2s_chan_info_t info{};
     const auto &layout = this->codec_backend_.tx_layout();
@@ -1190,6 +1193,10 @@ void ESPAudioStack::close_audio_io_() {
   this->set_i2s_hardware_state_(I2SHardwareState::STOPPING);
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   this->codec_backend_.close();
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+  for (auto &state : this->hardware_gain_state_)
+    if (state.load() != HardwareGainState::GAIN_UNKNOWN) state.store(HardwareGainState::GAIN_CONFIGURED);
+#endif
 #else
   if (this->rx_handle_) {
     esp_err_t err = i2s_channel_disable(this->rx_handle_);

@@ -3,6 +3,7 @@
 #if defined(USE_ESP32) && defined(USE_ESP_AUDIO_STACK_HARDWARE_CODEC)
 
 #include "codec_dev_backend.h"
+#include <cmath>
 
 #include <audio_codec_ctrl_if.h>
 #include <audio_codec_data_if.h>
@@ -862,7 +863,37 @@ void CodecDevBackend::set_output_mute(bool mute) {
   }
 }
 
+float CodecDevBackend::normalize_input_gain(float gain_db) const {
+  if (!std::isfinite(gain_db) || gain_db < 0 || gain_db > 37.5f) return NAN;
+  if (this->es7210_.enabled) {
+    const float db = gain_db + 0.5f;
+    if (db < 33.0f) return static_cast<int>(db / 3.0f) * 3.0f;
+    if (db < 34.5f) return 30.0f;
+    if (db < 36.0f) return 34.5f;
+    if (db < 37.0f) return 36.0f;
+    return 37.5f;
+  }
+  // ES8311 input gain is ADC_SCALE, not its separate analog PGA. Accept old
+  // preferences up to 37.5: the existing driver applied 36 dB to those values.
+  if (this->input_codec_.kind == CodecKind::ES8311)
+    return static_cast<int>(gain_db / 6.0f) * 6.0f;
+  return gain_db;
+}
+
+void CodecDevBackend::set_es7210_config(const Es7210Config &config) {
+  this->es7210_ = config;
+  this->es7210_.input_gain_db = this->normalize_input_gain(config.input_gain_db);
+  this->es7210_.ref_channel_gain_db = this->normalize_input_gain(config.ref_channel_gain_db);
+}
+
+void CodecDevBackend::set_input_codec_config(const GenericCodecConfig &config) {
+  this->input_codec_ = config;
+  this->input_codec_.input_gain_db = this->normalize_input_gain(config.input_gain_db);
+}
+
 bool CodecDevBackend::set_input_gain(float gain_db, bool opening) {
+  gain_db = this->normalize_input_gain(gain_db);
+  if (!std::isfinite(gain_db)) return false;
   if (!this->has_input_codec()) return false;
   if (this->rx_dev_ != nullptr && (this->open_ || opening)) {
     int result;
@@ -881,6 +912,8 @@ bool CodecDevBackend::set_input_gain(float gain_db, bool opening) {
 }
 
 bool CodecDevBackend::set_input_channel_gain(uint8_t channel, float gain_db, bool opening) {
+  gain_db = this->normalize_input_gain(gain_db);
+  if (!std::isfinite(gain_db)) return false;
   if (!this->es7210_.enabled || !this->es7210_.has_ref_channel_gain || channel != this->es7210_.ref_channel)
     return false;
   if (this->rx_dev_ != nullptr && (this->open_ || opening)) {
@@ -890,6 +923,52 @@ bool CodecDevBackend::set_input_channel_gain(uint8_t channel, float gain_db, boo
   this->es7210_.ref_channel_gain_db = gain_db;
   return true;
 }
+
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_GAIN_CONTROL
+CodecDevBackend::GainReadback CodecDevBackend::read_hardware_gains(bool diagnostics) {
+  GainReadback result{NAN, NAN};
+  if (!this->open_ || this->rx_dev_ == nullptr) return result;
+  if (this->es7210_.enabled) {
+    static constexpr float DB[] = {0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 34.5f, 36, 37.5f};
+    bool first = true, microphones_ok = true;
+    for (uint8_t channel = 0; channel < 4; channel++) {
+      if (!(this->es7210_.mic_selected & (1U << channel))) continue;
+      int reg = 0;
+      const bool read_ok = esp_codec_dev_read_reg(this->rx_dev_, 0x43 + channel, &reg) == ESP_CODEC_DEV_OK;
+      const uint8_t code = reg & 0x0F;
+      const float db = read_ok && code < 15 ? DB[code] : NAN;
+#ifdef USE_ESP_AUDIO_STACK_GAIN_DIAGNOSTICS
+      if (diagnostics) ESP_LOGI("audio_stack.gain", "ES7210 ch%u read_ok=%u reg=0x%02x gain=%.1f dB", channel, read_ok, reg, db);
+#endif
+      if (this->es7210_.has_ref_channel_gain && channel == this->es7210_.ref_channel) {
+        result.reference = db;
+      } else {
+        if (!std::isfinite(db) || (!first && result.microphone != db)) microphones_ok = false;
+        if (first) result.microphone = db;
+        first = false;
+      }
+    }
+    if (!microphones_ok) result.microphone = NAN;
+  } else if (this->input_codec_.kind == CodecKind::ES8311) {
+    int reg = 0;
+    const bool ok = esp_codec_dev_read_reg(this->rx_dev_, 0x16, &reg) == ESP_CODEC_DEV_OK;
+    if (ok) result.microphone = (reg & 7) * 6.0f;
+#ifdef USE_ESP_AUDIO_STACK_GAIN_DIAGNOSTICS
+    if (diagnostics) ESP_LOGI("audio_stack.gain", "ES8311 ADC_SCALE read_ok=%u reg=0x%02x gain=%.1f dB", ok, reg, result.microphone);
+#endif
+  }
+  // Reopen may restore a read-back value only when the vendor setter can
+  // reproduce it exactly. A partial failure must not invent a common gain.
+  if (std::isfinite(result.microphone) && this->normalize_input_gain(result.microphone) == result.microphone) {
+    if (this->es7210_.enabled) this->es7210_.input_gain_db = result.microphone;
+    else this->input_codec_.input_gain_db = result.microphone;
+  }
+  if (std::isfinite(result.reference) && this->normalize_input_gain(result.reference) == result.reference)
+    this->es7210_.ref_channel_gain_db = result.reference;
+  (void) diagnostics;
+  return result;
+}
+#endif
 
 void CodecDevBackend::destroy_codecs_() {
   if (this->rx_codec_if_ != nullptr) {

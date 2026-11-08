@@ -576,10 +576,42 @@ that plays TTS once has not yet demonstrated stable full-duplex operation.
 | Clicks or gaps | Capture/processing/playback timing, queue pressure and largest free internal block |
 | Wake word unreliable during playback | Reference correctness and AEC mode, then measured recognition on the enclosure |
 
-Hardware microphone gain acts before digital processing. `input_gain` scales
+Codec microphone gain acts before ESP audio processing. `input_gain` scales
 mic input before the processor; the software `mic_gain` control scales its
 output. **0 dB is unity gain**, not mute. Speaker volume changes playback and
 must not be used as a substitute for fixing microphone gain.
+
+Optional `number` controls `input_pga` and `reference_pga` use the existing codec
+owner. Use the names **Microphone Gain (pre-processing)** and **AEC Reference
+Gain**, in dB. On ES7210 these control independent analog microphone/reference
+channels; microphone changes exclude the configured reference channel. On
+ES8311, `input_pga` controls the codec's digital ADC scale before AFE, not its
+separate analog PGA. Its supported control range is 0..36 dB in 6 dB steps.
+ES8311's digital feedback has no independent reference gain control.
+
+Values follow the resolved driver, not arbitrary slider precision. In
+esp_codec_dev 2.0.0-beta5, ES7210 requests 20 and 20.5 dB apply 18 and 21 dB;
+ES8311 rounds down to a multiple of 6 dB. Omitting `initial_value` preserves a
+saved setting or uses the codec configuration. Old saved requests are normalized
+to the same level the driver previously applied. The owner publishes the result
+asynchronously. An unreadable or mixed multichannel result is unknown and does
+not replace the saved setting. A closed codec accepts configuration only, not a
+confirmed hardware write. Preference saving is separate from physical readback
+and remains subject to ESPHome's normal deferred flash persistence.
+
+For an existing ES8311 input codec:
+
+```yaml
+number:
+  - platform: esp_audio_stack
+    input_pga:
+      name: Microphone Gain (pre-processing)
+```
+
+`hardware_gain_diagnostics: true` on this number platform optionally compiles
+`request_hardware_gain_diagnostics()` on the parent stack. Calling it queues one
+register read through the audio owner; it does not open an idle codec, poll,
+change gain or reset AFE. The normal controls require no diagnostic logging.
 
 ### Set gains in the order the signal passes through them
 
