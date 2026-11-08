@@ -32,6 +32,7 @@ def binary(tmp_path_factory):
     for source, destination in [
         ("esp_audio_capture.h", "capture.h"),
         ("esp_audio_capture.cpp", "capture.cpp"),
+        ("boundary_probe.h", "boundary_probe.h"),
     ]:
         code = (COMPONENT / source).read_text()
         code = "\n".join(
@@ -39,6 +40,8 @@ def binary(tmp_path_factory):
             for line in code.splitlines()
             if not line.startswith('#include "esphome/')
             and not line.startswith("#include <esp_timer")
+            and not line.startswith("#include <esp_heap_caps")
+            and not line.startswith("#include <freertos/idf_additions")
             and not line.startswith('#include "esp_audio_capture')
         )
         (directory / destination).write_text(code)
@@ -88,6 +91,11 @@ def binary(tmp_path_factory):
         "mute-payload",
         "shutdown-header",
         "stalled-header",
+        "deadline-queued-header",
+        "deadline-queued-inflight-header",
+        "deadline-queued-expired-inflight-header",
+        "deadline-slow-tail-header",
+        "late-connect",
     ],
 )
 def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
@@ -123,7 +131,8 @@ def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
                     terminal_errors.append(str(error))
                     # Stop deliberately discards the unsent tail, so abrupt
                     # stop/overflow recordings may end on a partial record.
-                    if scenario in ("happy", "deadline-header", "deadline-payload"):
+                    if scenario in ("happy", "deadline-header", "deadline-payload",
+                                    "deadline-queued-header", "deadline-queued-inflight-header"):
                         errors.append(error)
                 manifests.append(writer.manifest)
         except Exception as error:
@@ -150,6 +159,24 @@ def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
         assert manifests[0]["complete"]
         assert len(manifests[0]["records"]) == 1
         assert not terminal_errors
+    if scenario in ("deadline-queued-header", "deadline-queued-inflight-header"):
+        expected = 3 if "inflight" in scenario else 2
+        assert manifests[0]["complete"]
+        assert len(manifests[0]["records"]) == expected
+        assert not terminal_errors
+    if scenario == "deadline-slow-tail-header":
+        assert not manifests[0]["complete"]
+        assert len(manifests[0]["records"]) == 1
+        assert terminal_errors == ["oversized or truncated capture header"]
+        assert "tail_wait_budget_us=300000" in result.stdout
+    if scenario == "deadline-queued-expired-inflight-header":
+        assert not manifests[0]["complete"]
+        assert not manifests[0]["records"]
+        assert terminal_errors == ["oversized or truncated capture header"]
+        assert "expired_writer_preserved_until_retired" in result.stdout
+    if scenario == "late-connect":
+        assert not manifests[0]["records"]
+        assert "connection_wait_budget_us=1350000" in result.stdout
     if scenario in ("stop-header", "mute-payload", "shutdown-header", "stalled-header"):
         assert not manifests[0]["complete"]
         expected = "truncated PCM frame" if scenario == "mute-payload" else "oversized or truncated capture header"

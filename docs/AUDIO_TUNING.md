@@ -86,15 +86,27 @@ and DC filtering retain their existing order.
 
 ## 2. Adjust analog PGA without rebuilding
 
-The optional `mic_gain` number on `platform: esp_audio_stack` sets post-processor
-gain in dB. Analog PGA changes the input
-codec before digital processing. A clipped ADC signal cannot be repaired by
-reducing a digital gain later.
+Keep the gain controls separate when comparing recordings:
 
-Mic Gain applies a constant factor, including the beginning of a quiet phrase.
-It is independent of the AFE's optional automatic gain control. Positive gain
-saturates at the PCM limits; keep enough headroom for nearby speech as well
-as distant voices.
+| Control | Unit | Where it acts |
+| --- | --- | --- |
+| `number.input_pga` on `platform: esp_audio_stack` | dB | Input codec microphone channels, before digital processing |
+| `number.reference_pga` on `platform: esp_audio_stack` | dB | The configured physical reference channel only |
+| `esp_audio_stack.input_gain` | Linear factor | Microphone PCM before the processor |
+| `number.mic_gain` on `platform: esp_audio_stack` | dB | Public processor output, before microphone consumers |
+| `esp_afe.afe_linear_gain` | Linear factor | Inside the vendor AFE fetch path |
+
+The microphone PGA is already reflected in `raw_mic`. A clipped ADC signal
+cannot be repaired by reducing gain later. The reference PGA calibrates the
+playback reference supplied to AEC; it does not change microphone ADC gain.
+Choose each from the board's wiring and measured levels, including nearby
+speech and simultaneous playback. Values from another board or enclosure are
+not universal defaults.
+
+**0 dB means a linear factor of 1**, not zero or mute. The optional digital
+`mic_gain` applies a constant factor, including the beginning of a quiet phrase,
+and is independent of automatic gain control. Positive gain can saturate PCM;
+lowering a later stage cannot recover samples already clipped.
 
 These optional numbers add analog controls:
 
@@ -102,9 +114,9 @@ These optional numbers add analog controls:
 number:
   - platform: esp_audio_stack
     input_pga:
-      name: Microphone PGA
+      name: "Microphone Gain (pre-processing)"
     reference_pga:
-      name: Reference PGA
+      name: "AEC Reference Gain"
 ```
 
 `input_pga` requires a configured hardware input codec. `reference_pga` requires
@@ -132,6 +144,21 @@ again; no universal PGA, DAC boost or filter setting is imposed on all boards.
 
 Omit these numbers to exclude their runtime control code. Ordinary fixed codec
 gains keep working as before.
+
+Native AFE gain is also a signal-level control, not AEC strength. Its unity
+setting, added to the existing AFE declaration, is:
+
+```yaml
+esp_afe:
+  afe_linear_gain: 1.0
+```
+
+In the verified ESP-SR 2.6.0 dual-microphone ESP32-P4 fetch path, this gain acts
+on already quantized PCM before VAD and final output selection. Moving a
+post-processor gain there can therefore change VAD behavior as well as rounding
+and clipping. Equal nominal gain does not establish identical samples or
+recognition. Check the actual backend and vendor version before treating two
+gain locations as interchangeable.
 
 ## 3. Record what each stage actually receives
 
@@ -209,15 +236,95 @@ PCM record is capped at 16 KiB. The socket worker is temporary and returns its
 queue and task resources at completion. When disabled, no buffer, worker or
 socket exists. Omitting the component removes all capture hooks at compilation.
 
-At the natural duration limit, the producer stops admitting data and the worker
-finishes its current record before closing. Header and PCM share a one-second
-transport budget. Mute, a new audio generation, a format change, parent failure,
+At the natural duration limit, the producer stops admitting data. The worker
+waits for admitted writers and drains their queued records, with transport
+bounded to one second beyond that limit. Header and PCM also share the existing
+per-record budget. Mute, a new audio generation, a format change, parent failure,
 explicit stop or transport failure can abort a record immediately. Capture owns
-and releases only its own microphone-consumer reference. Stopping intentionally discards
-unsent diagnostic data, so the trailing interval is not guaranteed to be
-present. Receiver `complete` means that the received framing ended cleanly,
-not proof that the requested duration or every sample was recorded. Inspect
-sample positions and drops before using a capture as a benchmark.
+and releases only its own microphone-consumer reference. An abort or exhausted
+drain budget can discard unsent diagnostic data, so the trailing interval is
+not guaranteed to be present. Receiver `complete` means that the received
+framing ended cleanly, not proof that the requested duration or every sample
+was recorded. Inspect sample positions and drops before using a capture as a
+benchmark.
+
+### Optional native AFE output capture
+
+The normal configuration omits `esp_audio_capture`, keeps `telemetry: false`
+and leaves `enable_test_input: false`. The AFE diagnostic method remains
+callable and reports that its detailed snapshot was omitted. Enabling telemetry
+or PCM capture includes that snapshot; detailed per-frame counters additionally
+require the existing debug logging gate.
+
+For a paired diagnostic recording, extend the existing Audio Stack source with
+`esp_audio_capture` and use the IDs of the already configured stack, microphone
+and AFE. For example:
+
+```yaml
+esp_audio_capture:
+  id: diagnostic_capture
+  esp_audio_stack_id: audio_bus
+  microphone_id: mic_afe
+  afe_id: afe_processor
+  address: 192.0.2.10  # Replace with the receiver's IPv4 address.
+  duration: 24s
+  buffer_size: 262144
+  task_stack_in_psram: true
+  boundary_probes: false
+  points:
+    - raw_mic
+    - reference
+    - processor_input
+    - processor_output
+    - output
+    - afe_selected
+    - afe_separated
+```
+
+`afe_separated` records the first two interleaved vendor output planes in one
+stereo WAV; `afe_selected` records the vendor's selected mono PCM. These are
+DSP outputs, not physical microphone identities. They are available for vendor
+results containing three output planes. Other layouts are not reinterpreted
+as three planes. The observer borrows the vendor pointers only during the
+native fetch callback and copies into the existing capture queue after normal
+selected-output admission. It does not alter selection, gain or samples.
+
+`boundary_probes: true` additionally records native AFE feed and samples
+consumed by the existing MWW frontend. It requires an existing MWW component,
+uses linker wrappers only in that diagnostic build, and preserves the native
+calls and return values. It adds no model or inference observer. Session,
+overflow and payload checksums are evidence to validate, not acoustic proof.
+Keep it false for ordinary capture and normal firmware.
+
+The optional `esp_audio_stack.enable_test_input` defaults to false. It exposes
+a synchronous, borrowed-buffer injection callback for a separately configured
+test source; it does not create a source, server or player. Leave it false
+for physical microphone recordings. These gates exclude their pointers,
+callbacks and boundary registries when disabled. Omitting capture excludes
+its worker, socket and queue. An exhausted transport deadline never permits
+freeing the queue while admitted writers still use it.
+
+### Amplifier readiness before playback
+
+An `esp_audio_stack` speaker can set `amplifier_settle_time` to a duration or
+a lambda returning milliseconds. Omitted or constant `0ms` excludes the gate.
+There is no global 250ms default. Board packages choose a value from their
+power policy; for a board whose idle-powerdown timer means the amplifier is
+still on, the existing pattern is:
+
+```yaml
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    amplifier_settle_time: !lambda |-
+      return id(audio_stack_speaker_idle_powerdown).is_running() ? 0 : 250;
+```
+
+The existing speaker owner evaluates the policy before requesting hardware,
+starts the interval after hardware readiness, and applies backpressure until
+RUNNING. Caller-owned PCM remains pending. Cancellation and a warm restart
+cannot erase an unfinished cold interval. This covers startup, not a board's
+separate mute/unmute transition while a stream is already running.
 
 ## 4. Choose an assistant processing profile
 

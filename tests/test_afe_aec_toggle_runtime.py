@@ -17,13 +17,13 @@ def test_aec_toggle_preserves_live_instance_and_rejects_control_failure(tmp_path
 #define ESP_LOGW(...)
 #define ESP_LOGI(...)
 constexpr int CONFIG_MUTEX_TIMEOUT=1, ESP_AFE_FEATURE_AEC=2;
-bool can_lock=true; int ret=0,calls=0;
+bool can_lock=true; int ret=0,calls=0,forced_ack=-1000;
 namespace esp_audio_stack {
 struct ScopedLock { ScopedLock(void*,int){} operator bool() const{return can_lock;} };
 }
 int esp_gmf_afe_manager_enable_features(void* manager,int feature,bool enabled){
  assert(manager && feature==ESP_AFE_FEATURE_AEC); ++calls;
- return ret<0 ? ret : static_cast<int>(enabled);
+ return forced_ack!=-1000 ? forced_ack : (ret<0 ? ret : static_cast<int>(enabled));
 }
 struct EspAfe {
  int mic_num_=1, rebuilds=0; bool ready=true,others_enabled=true;
@@ -45,8 +45,12 @@ int main(){
    assert(afe.afe_manager_==manager && afe.rebuilds==0 && !afe.afe_stopped_);
   }
   int before=calls; assert(afe.set_aec_enabled_runtime_(true));assert(calls==before);
+  forced_ack=1;assert(!afe.set_aec_enabled_runtime_(false));assert(afe.aec_enabled_);
+  forced_ack=-1000;
   ret=-1;assert(!afe.set_aec_enabled_runtime_(false));assert(afe.aec_enabled_);
   ret=0;assert(afe.set_aec_enabled_runtime_(false));assert(!afe.aec_enabled_);
+  forced_ack=0;assert(!afe.set_aec_enabled_runtime_(true));assert(!afe.aec_enabled_);
+  forced_ack=-1000;
   can_lock=false;assert(!afe.set_aec_enabled_runtime_(true));assert(!afe.aec_enabled_);
   can_lock=true;assert(afe.set_aec_enabled_runtime_(true));assert(afe.rebuilds==0);
   afe.others_enabled=false;assert(afe.set_aec_enabled_runtime_(false));

@@ -84,6 +84,7 @@ CONF_DMA_FRAME_NUM = "dma_frame_num"
 CONF_TX_CHANNEL = "tx_channel"
 CONF_SPEAKER_CHANNELS = "speaker_channels"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
+CONF_ENABLE_TEST_INPUT = "enable_test_input"
 CONF_AEC_REF_RING_IN_PSRAM = "aec_ref_ring_in_psram"
 CONF_AUDIO_TASK_STACK_IN_PSRAM = "audio_task_stack_in_psram"
 CONF_AEC_REFERENCE = "aec_reference"
@@ -535,6 +536,7 @@ CONFIG_SCHEMA = cv.All(
             # Use PSRAM for non-DMA audio buffers (saves ~15KB internal RAM).
             # Requires PSRAM. DMA buffers (I2S RX/TX) always use internal RAM.
             cv.Optional(CONF_BUFFERS_IN_PSRAM, default=False): cv.boolean,
+            cv.Optional(CONF_ENABLE_TEST_INPUT, default=False): cv.boolean,
             # Place the audio task's own stack in PSRAM. Saves ~8KB internal RAM
             # but increases per-frame latency because every function return has
             # to traverse PSRAM. Only enable on boards that need the internal
@@ -752,6 +754,8 @@ async def to_code(config):
 
     # Define USE_ESP_AUDIO_STACK so other components know it's available
     cg.add_define("USE_ESP_AUDIO_STACK")
+    if config[CONF_ENABLE_TEST_INPUT]:
+        cg.add_define("USE_ESP_AUDIO_STACK_TEST_INPUT")
     if CONF_RX_BUS in config:
         cg.add_define("USE_ESP_AUDIO_STACK_DUAL_BUS")
     if use_tdm_bus:

@@ -97,6 +97,10 @@ class AudioProcessor {
   /// Current telemetry snapshot.
   virtual ProcessorTelemetry telemetry() const = 0;
 
+  /// Requested diagnostic dump. Implementations must not wait for an active
+  /// configuration owner or perform hardware transactions from this hook.
+  virtual void dump_diagnostics() {}
+
   /// Reconfigure the processor (e.g., switch SR/VC mode). Requires audio stop.
   /// @return true if reconfiguration succeeded
   virtual bool reconfigure(int type, int mode) = 0;

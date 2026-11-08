@@ -29,7 +29,7 @@
 #define ESP_LOGD(...) ((void)0)
 #define ESP_RETURN_ON_FALSE(c,e,...) do {if(!(c)) return(e);} while(0)
 #define pdMS_TO_TICKS(x) (x)
-constexpr int ESP_GMF_ERR_OK=0,ESP_GMF_ERR_INVALID_ARG=-1,ESP_GMF_ERR_TIMEOUT=-2;
+constexpr int ESP_GMF_ERR_OK=0,ESP_GMF_ERR_INVALID_ARG=-1,ESP_GMF_ERR_TIMEOUT=-2,ESP_GMF_ERR_FAIL=-3;
 constexpr int ESP_GMF_IO_OK=0,ESP_GMF_IO_FAIL=-1,ESP_FAIL=-1,VAD_SPEECH=1,pdTRUE=1,pdPASS=1;
 constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS=true;
 constexpr unsigned CONFIG_MUTEX_TIMEOUT=10,DRAIN_WAIT_TIMEOUT=20,portMAX_DELAY=UINT32_MAX;
@@ -138,6 +138,8 @@ struct esp_gmf_afe_manager_t {
  bool vad_enabled=true;
 };
 using esp_gmf_afe_manager_handle_t=esp_gmf_afe_manager_t*;
+struct esp_gmf_afe_manager_features_t{bool vad;};
+int esp_gmf_afe_manager_get_features(esp_gmf_afe_manager_handle_t m,esp_gmf_afe_manager_features_t*f){f->vad=m->vad_enabled;return 0;}
 int esp_gmf_afe_manager_enable_features(esp_gmf_afe_manager_handle_t m,unsigned feature,bool enabled){
  assert(m!=nullptr&&feature==ESP_AFE_FEATURE_VAD);m->vad_enabled=enabled;return 0;
 }

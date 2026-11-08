@@ -1312,6 +1312,18 @@ void ESPAudioStack::update_tdm_slot_levels_(const AudioTaskCtx &ctx) {
 
 #ifdef USE_AUDIO_PROCESSOR
 void ESPAudioStack::run_processor_(AudioTaskCtx &ctx) {
+#ifdef USE_ESP_AUDIO_STACK_TEST_INPUT
+  // All reference paths are prepared before entering this common boundary.
+  if (this->test_input_callback_ != nullptr) {
+    int16_t *mic = ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : ctx.mic_buffer;
+    this->test_input_callback_(this->test_input_context_, mic, ctx.spk_ref_buffer,
+                               ctx.input_frame_size, ctx.processor_mic_channels);
+  }
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->capture_audio_(CapturePoint::PROCESSOR_INPUT, ctx.processor_input, ctx.input_frame_size,
+                       this->get_output_sample_rate(), 16, ctx.processor_mic_channels, ctx.processor_mic_channels);
+#endif
+#endif
 #ifdef USE_ESP_AUDIO_STACK_CAPTURE
   this->capture_audio_(CapturePoint::REFERENCE, ctx.spk_ref_buffer, ctx.input_frame_size,
                        this->get_output_sample_rate(), 16, 1, 1);
@@ -1336,6 +1348,11 @@ void ESPAudioStack::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
     return;
 
 #ifdef USE_ESP_AUDIO_STACK_CAPTURE
+#if defined(USE_ESP_AUDIO_STACK_TEST_INPUT) && defined(USE_AUDIO_PROCESSOR)
+  // Valid processor paths capture PI after the hook in run_processor_. Keep
+  // passthrough and unavailable-processor observations at the original point.
+  if (!ctx.processor_enabled || !ctx.processor_ready || ctx.spk_ref_buffer == nullptr || ctx.aec_output == nullptr)
+#endif
   this->capture_audio_(CapturePoint::PROCESSOR_INPUT, ctx.processor_input, ctx.input_frame_size,
                        this->get_output_sample_rate(), 16, ctx.processor_mic_channels, ctx.processor_mic_channels);
 #endif

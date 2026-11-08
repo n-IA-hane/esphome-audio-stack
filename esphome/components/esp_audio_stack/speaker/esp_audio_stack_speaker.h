@@ -6,6 +6,9 @@
 #include "esphome/core/helpers.h"
 #include "esphome/components/speaker/speaker.h"
 #include "../esp_audio_stack.h"
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+#include "esphome/core/automation.h"
+#endif
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -37,6 +40,9 @@ class ESPAudioStackSpeaker final : public speaker::Speaker, public Component, pu
   void set_pause_state(bool pause_state) override;
   bool get_pause_state() const override { return this->pause_state_; }
   void set_timeout(uint32_t timeout) { this->timeout_ = timeout; }
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+  template<typename V> void set_amplifier_settle_time(V settle_time) { this->amplifier_settle_time_ = settle_time; }
+#endif
 
  protected:
   static void speaker_output_callback(void *ctx, uint32_t frames, int64_t timestamp);
@@ -56,6 +62,12 @@ class ESPAudioStackSpeaker final : public speaker::Speaker, public Component, pu
   std::atomic<bool> implicit_recovery_used_{false};
   bool parent_requested_{false};
   bool i2s_error_latched_{false};
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+  TemplatableStorage<uint32_t> amplifier_settle_time_{};
+  std::atomic<uint32_t> amplifier_settle_ms_{0};
+  std::atomic<uint32_t> amplifier_settle_started_ms_{0};
+  std::atomic<bool> amplifier_settle_started_{false};
+#endif
 };
 
 }  // namespace esphome::esp_audio_stack

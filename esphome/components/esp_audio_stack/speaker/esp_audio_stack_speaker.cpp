@@ -4,9 +4,17 @@
 
 #include <cinttypes>
 #include <cmath>
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+#include <algorithm>
+#endif
 
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
+
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 11, 0)
+#define ESP_AUDIO_STACK_MULTI_DAC_API
+#endif
 
 namespace esphome::esp_audio_stack {
 
@@ -119,6 +127,21 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t
     // session while its stop/reset is still being dispatched.
     // Honor the producer's backpressure budget, as the native I2S speaker does.
     // A zero budget remains nonblocking; retry scheduling belongs to that caller.
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+    const uint32_t settle_ms = this->amplifier_settle_ms_.load(std::memory_order_relaxed);
+    if (this->state_ == speaker::STATE_STARTING && settle_ms != 0) {
+      uint32_t remaining_ms = settle_ms;
+      if (this->amplifier_settle_started_.load(std::memory_order_acquire)) {
+        const uint32_t elapsed = millis() - this->amplifier_settle_started_ms_.load(std::memory_order_relaxed);
+        remaining_ms = elapsed < settle_ms ? settle_ms - elapsed : 0;
+      }
+      // The main loop commits RUNNING. An unbounded caller must retry when
+      // settling ends, and one scheduler tick lets that owner commit readiness.
+      const TickType_t settle_ticks = std::max<TickType_t>(1, pdMS_TO_TICKS(remaining_ms));
+      vTaskDelay(std::min(ticks_to_wait, settle_ticks));
+      return 0;
+    }
+#endif
     vTaskDelay(ticks_to_wait);
     return 0;
   }
@@ -140,18 +163,15 @@ void ESPAudioStackSpeaker::set_volume(float volume) {
   } else if (volume > 1.0f) {
     volume = 1.0f;
   }
-  this->volume_ = volume;
+  speaker::Speaker::set_volume(volume);
 
 #ifdef USE_AUDIO_DAC
+#ifdef ESP_AUDIO_STACK_MULTI_DAC_API
+  if (this->has_audio_dac_()) {
+#else
   if (this->audio_dac_ != nullptr) {
+#endif
     ESP_LOGD(TAG, "Speaker set_volume: %.3f -> audio_dac", volume);
-    if (!this->mute_state_ && volume > 0.0f) {
-      this->audio_dac_->set_mute_off();
-    }
-    this->audio_dac_->set_volume(volume);
-    if (this->mute_state_) {
-      this->audio_dac_->set_mute_on();
-    }
   } else
 #endif
   {
@@ -165,16 +185,15 @@ void ESPAudioStackSpeaker::set_volume(float volume) {
 }
 
 void ESPAudioStackSpeaker::set_mute_state(bool mute_state) {
-  this->mute_state_ = mute_state;
+  speaker::Speaker::set_mute_state(mute_state);
 
 #ifdef USE_AUDIO_DAC
+#ifdef ESP_AUDIO_STACK_MULTI_DAC_API
+  if (this->has_audio_dac_()) {
+#else
   if (this->audio_dac_ != nullptr) {
+#endif
     ESP_LOGD(TAG, "Speaker mute: %s -> audio_dac", mute_state ? "on" : "off");
-    if (mute_state) {
-      this->audio_dac_->set_mute_on();
-    } else {
-      this->audio_dac_->set_mute_off();
-    }
   } else
 #endif
   {
@@ -241,6 +260,16 @@ void ESPAudioStackSpeaker::loop() {
         break;
       }
       if (!this->parent_requested_) {
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+        // Board power policy must be sampled before start_speaker's GPIO
+        // callback cancels the idle-powerdown script. A warm restart must
+        // still honor an unfinished cold-start interval from this facade.
+        const uint32_t settle_ms = this->amplifier_settle_time_.value_or(0);
+        if (settle_ms != 0 || !this->amplifier_settle_started_.load(std::memory_order_relaxed)) {
+          this->amplifier_settle_started_.store(false, std::memory_order_release);
+          this->amplifier_settle_ms_.store(settle_ms, std::memory_order_relaxed);
+        }
+#endif
         this->parent_->start_speaker();
         this->parent_requested_ = true;
       }
@@ -256,6 +285,21 @@ void ESPAudioStackSpeaker::loop() {
         this->state_ = speaker::STATE_STOPPED;
         break;
       }
+#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
+      if (const uint32_t settle_ms = this->amplifier_settle_ms_.load(std::memory_order_relaxed); settle_ms != 0) {
+        // An asynchronous parent opens I2S before invoking the GPIO callback.
+        // Start the interval only after that completion, never at its request.
+        if (!this->amplifier_settle_started_.load(std::memory_order_relaxed)) {
+          this->amplifier_settle_started_ms_.store(millis(), std::memory_order_relaxed);
+          this->amplifier_settle_started_.store(true, std::memory_order_release);
+        }
+        // Unsigned elapsed time handles millis wrap and long stopped periods.
+        if (static_cast<uint32_t>(millis() - this->amplifier_settle_started_ms_.load(std::memory_order_relaxed)) < settle_ms)
+          break;
+        this->amplifier_settle_ms_.store(0, std::memory_order_relaxed);
+        this->amplifier_settle_started_.store(false, std::memory_order_release);
+      }
+#endif
       // The idle budget starts when hardware is ready, not while opening it.
       this->last_write_ms_ = millis();
       this->state_ = speaker::STATE_RUNNING;

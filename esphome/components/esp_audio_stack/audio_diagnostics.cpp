@@ -156,6 +156,11 @@ void ESPAudioStack::emit_diagnostic_section_() {
                this->task_core_, (unsigned) this->task_priority_, (unsigned) this->task_stack_size_,
                (unsigned) dump.stack_min_free, YESNO(this->buffers_in_psram_), YESNO(this->audio_task_stack_in_psram_));
       break;
+    case 8:
+#ifdef USE_AUDIO_PROCESSOR
+      if (this->processor_ != nullptr) this->processor_->dump_diagnostics();
+#endif
+      break;
     default:
       ESP_LOGI(TAG, "END v=1 uptime_ms=%u detailed_telemetry=not_available", (unsigned) dump.requested_ms);
       this->diagnostic_dump_.reset();

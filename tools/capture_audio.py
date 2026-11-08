@@ -7,8 +7,18 @@ from pathlib import Path
 import socket
 import wave
 
-POINTS = ("raw_mic", "reference", "processor_input", "processor_output", "output")
+POINTS = (
+    "raw_mic", "reference", "processor_input", "processor_output", "output",
+    "afe_separated", "afe_selected", "mww_frontend", "afe_feed",
+)
 MAX_BYTES = 16384
+
+
+def fnv1a32(pcm):
+    value = 2166136261
+    for byte in pcm:
+        value = ((value ^ byte) * 16777619) & 0xffffffff
+    return value
 
 
 class CaptureWriter:
@@ -39,14 +49,39 @@ class CaptureWriter:
         if (
             header["v"] != 1
             or header["point"] not in range(len(POINTS))
-            or header["channels"] not in (1, 2)
+            or header["channels"] not in (1, 2, 3, 4)
             or header["bits"] not in (16, 32)
             or not 8000 <= header["rate"] <= 192000
-            or not 0 < header["bytes"] <= MAX_BYTES
+            or not 0 <= header["bytes"] <= MAX_BYTES
             or header["bytes"] != len(pcm)
             or len(pcm) != header["frames"] * header["channels"] * (header["bits"] // 8)
         ):
             raise ValueError("invalid capture format or payload length")
+        if header["point"] in (5, 6) and (
+            header["rate"] != 16000 or header["bits"] != 16
+            or header["channels"] != (2 if header["point"] == 5 else 1)
+        ):
+            raise ValueError("invalid AFE output PCM contract")
+        boundary = header["point"] in (7, 8)
+        if boundary:
+            required = ("session", "instance", "offered_frames", "features", "duration_us",
+                        "checksum", "checksum_before", "checksum_after", "flags")
+            if header.get("boundary") is not True or any(type(header.get(k)) is not int or header[k] < 0 for k in required):
+                raise ValueError("invalid boundary metadata")
+            if header["rate"] != 16000 or header["bits"] != 16 or (header["channels"] != 1 if header["point"] == 7 else header["channels"] not in (1, 2, 3, 4)):
+                raise ValueError("invalid boundary PCM contract")
+            if header["point"] == 7 and (header["frames"] > header["offered_frames"] or header["features"] not in (0, 1)):
+                raise ValueError("invalid frontend consumed/features contract")
+            if header["point"] == 8 and (header["frames"] != header["offered_frames"] or type(header.get("result")) is not int):
+                raise ValueError("invalid feed frame/result contract")
+            if fnv1a32(pcm) != header["checksum"]:
+                raise ValueError("boundary payload checksum mismatch")
+            # Preserve flags and before/after checksums even when they report a
+            # real input mutation. Offline analysis must classify that evidence.
+        elif not header["bytes"] or header["channels"] > 2:
+            raise ValueError("invalid standard tap payload")
+        if not header["bytes"] and header["point"] != 7:
+            raise ValueError("zero payload only valid for frontend consumed-zero")
         if self.generation is None:
             self.generation = header["generation"]
             self.manifest["generation"] = self.generation
@@ -104,16 +139,16 @@ def receive(connection, writer):
     # Socket file buffers are bounded; each header and PCM frame has its own cap.
     with connection.makefile("rb") as source:
         while True:
-            line = source.readline(513)
+            line = source.readline(1025)
             if not line:
                 return
-            if len(line) > 512 or not line.endswith(b"\n"):
+            if len(line) > 1024 or not line.endswith(b"\n"):
                 raise ValueError("oversized or truncated capture header")
             header = json.loads(line)
             if (
                 not isinstance(header, dict)
                 or type(header.get("bytes")) is not int
-                or not 0 < header["bytes"] <= MAX_BYTES
+                or not 0 <= header["bytes"] <= MAX_BYTES
             ):
                 raise ValueError("invalid capture frame length")
             pcm = source.read(header["bytes"])

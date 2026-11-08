@@ -6,7 +6,12 @@
 #include <cstring>
 
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
 #include "../audio_core_log_utils.h"
+
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 11, 0)
+#define ESP_AUDIO_STACK_MICROPHONE_CAPTURE_API
+#endif
 
 namespace esphome::esp_audio_stack {
 
@@ -94,7 +99,11 @@ void ESPAudioStackMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
   std::memcpy(this->audio_buffer_.data(), data, len);
   // The official Microphone wrapper owns mute delivery. Never temporarily
   // change its public state: a callback or main-loop unmute must remain valid.
+#ifdef ESP_AUDIO_STACK_MICROPHONE_CAPTURE_API
+  this->publish_audio_(this->audio_buffer_, this->audio_stream_info_);
+#else
   this->data_callbacks_.call(this->audio_buffer_);
+#endif
 }
 
 void ESPAudioStackMicrophone::loop() {

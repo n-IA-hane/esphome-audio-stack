@@ -43,7 +43,7 @@ def session_binary(tmp_path_factory):
         "esp_gmf_err_t esp_gmf_afe_manager_set_read_cb",
         "esp_gmf_err_t esp_gmf_afe_manager_set_result_cb", "esp_gmf_err_t esp_gmf_afe_manager_destroy",
     ))
-    methods = []
+    methods = [method(adapter, "static esp_gmf_err_t apply_vad_intent(")]
     names = ["set_processing_active", "start_pipeline_", "pause_pipeline_", "stop_pipeline_",
              "manager_result_cb_", "gmf_output_release_", "update_fetch_ring_free_pct_",
              "start_reconfigure_task_", "reconfigure_task_trampoline", "reconfigure_task_loop_",

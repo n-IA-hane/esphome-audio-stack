@@ -6,7 +6,13 @@
 
 namespace esphome::esp_audio_stack {
 
-enum class CapturePoint : uint8_t { RAW_MIC, REFERENCE, PROCESSOR_INPUT, PROCESSOR_OUTPUT, OUTPUT, COUNT };
+enum class CapturePoint : uint8_t {
+  RAW_MIC, REFERENCE, PROCESSOR_INPUT, PROCESSOR_OUTPUT, OUTPUT,
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  AFE_SEPARATED, AFE_SELECTED,
+#endif
+  COUNT
+};
 
 // A borrowed view, valid only for the duration of the callback. Raw samples
 // retain their bus width; all processed surfaces are signed 16-bit PCM.

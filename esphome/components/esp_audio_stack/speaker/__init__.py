@@ -9,12 +9,14 @@ from esphome.const import (
     CONF_NEVER,
     CONF_TIMEOUT,
 )
+from esphome.core import Lambda
 
 from .. import CONF_ESP_AUDIO_STACK_ID, ESPAudioStack, esp_audio_stack_ns
 from ..audio_format import final_validate_facade, set_facade_limits
 
 DEPENDENCIES = ["esp_audio_stack"]
 CODEOWNERS = ["@n-IA-hane"]
+CONF_AMPLIFIER_SETTLE_TIME = "amplifier_settle_time"
 
 ESPAudioStackSpeaker = esp_audio_stack_ns.class_(
     "ESPAudioStackSpeaker",
@@ -40,6 +42,9 @@ CONFIG_SCHEMA = cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.one_of(CONF_NEVER, lower=True),
             ),
+            cv.Optional(CONF_AMPLIFIER_SETTLE_TIME): cv.templatable(
+                cv.positive_time_period_milliseconds
+            ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _set_stream_limits,
@@ -61,5 +66,12 @@ async def to_code(config):
     cg.add(parent.set_speaker_buffer_duration(config[CONF_BUFFER_DURATION]))
     if config[CONF_TIMEOUT] != CONF_NEVER:
         cg.add(var.set_timeout(config[CONF_TIMEOUT]))
+
+    if CONF_AMPLIFIER_SETTLE_TIME in config:
+        settle = config[CONF_AMPLIFIER_SETTLE_TIME]
+        if isinstance(settle, Lambda) or settle.total_milliseconds != 0:
+            cg.add_define("USE_ESP_AUDIO_STACK_AMP_SETTLE")
+            template = await cg.templatable(settle, [], cg.uint32)
+            cg.add(var.set_amplifier_settle_time(template))
 
     await speaker.register_speaker(var, config)

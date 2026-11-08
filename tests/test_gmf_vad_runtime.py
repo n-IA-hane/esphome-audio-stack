@@ -10,20 +10,25 @@ def test_vad_control_preserves_state_on_failure(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     start = source.index("bool EspAfe::set_vad_enabled_runtime_")
     method = source[start : source.index("\n}\n", start) + 2]
+    helper_start = source.index("static esp_gmf_err_t apply_vad_intent(")
+    helper = source[helper_start:source.index("\n}\n", helper_start) + 2]
     harness = r"""
 #include <atomic>
 #include <cassert>
 #define USE_ESP_AFE_GMF_PATH
 #define ESP_LOGI(...)
 #define ESP_LOGW(...)
-constexpr int CONFIG_MUTEX_TIMEOUT=10,ESP_AFE_FEATURE_VAD=1;
-bool lock_available=true,hardware_vad=true;int manager_result=0,manager_calls=0;
+constexpr int CONFIG_MUTEX_TIMEOUT=10,ESP_AFE_FEATURE_VAD=1,ESP_GMF_ERR_OK=0,ESP_GMF_ERR_FAIL=-2;
+using esp_gmf_err_t=int;using esp_gmf_afe_manager_handle_t=void*;
+struct esp_gmf_afe_manager_features_t{bool vad;};
+bool lock_available=true,hardware_vad=true,toggle_applied=true;int manager_result=0,manager_calls=0,query_result=0;
+int esp_gmf_afe_manager_get_features(void*,esp_gmf_afe_manager_features_t*f){f->vad=hardware_vad;return query_result;}
 void xTaskNotifyGive(void*){}
 namespace esp_audio_stack{
 struct ScopedLock{bool acquired;ScopedLock(void*,int):acquired(lock_available){} explicit operator bool()const{return acquired;}};
 }
 int esp_gmf_afe_manager_enable_features(void*,int,bool enabled){
- ++manager_calls;if(manager_result>=0)hardware_vad=enabled;return manager_result;
+ ++manager_calls;if(manager_result>=0&&toggle_applied)hardware_vad=enabled;return manager_result;
 }
 struct EspAfe{
  std::atomic<bool> vad_enabled_{true},voice_present_{true},afe_stopped_{false};
@@ -37,6 +42,9 @@ struct EspAfe{
     checks = r"""
 int main(){
  EspAfe afe;
+ assert(apply_vad_intent(&afe,true)==0 && manager_calls==0);
+ query_result=-1;assert(apply_vad_intent(&afe,false)<0 && manager_calls==0);query_result=0;
+ toggle_applied=false;assert(!afe.set_vad_enabled_runtime_(false));assert(afe.vad_enabled_ && hardware_vad);toggle_applied=true;
  assert(afe.set_vad_enabled_runtime_(false));assert(!hardware_vad && !afe.vad_enabled_ && !afe.voice_present_);
  lock_available=false;assert(!afe.set_vad_enabled_runtime_(true));assert(!hardware_vad && !afe.vad_enabled_);
  lock_available=true;manager_result=-1;assert(!afe.set_vad_enabled_runtime_(true));assert(!hardware_vad && !afe.vad_enabled_);
@@ -45,7 +53,7 @@ int main(){
 }
 """
     cpp = tmp_path / "vad.cpp"
-    cpp.write_text(harness + method + checks)
+    cpp.write_text(harness + helper + method + checks)
     exe = tmp_path / "vad"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

@@ -1,6 +1,9 @@
 #include "esp_afe.h"
 #include "../esp_audio_stack/audio_core_audio_utils.h"
 #include "../esp_audio_stack/audio_core_scoped_lock.h"
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+#include "../esp_audio_stack/esp_audio_stack.h"
+#endif
 
 #ifdef USE_ESP32
 #ifndef CLANG_TIDY
@@ -27,6 +30,25 @@ static const TickType_t CONFIG_MUTEX_TIMEOUT = pdMS_TO_TICKS(250);
 // samples.
 static const TickType_t DRAIN_WAIT_TIMEOUT = pdMS_TO_TICKS(50);
 static constexpr uint32_t REINIT_STAGE_WARN_US = 50000;
+
+#ifdef USE_ESP_AFE_GMF_PATH
+// Called only by the existing config owner. GMF resets VAD on every feature
+// call, so an unchanged intent must not be reapplied as a reset operation.
+static esp_gmf_err_t apply_vad_intent(esp_gmf_afe_manager_handle_t manager, bool enabled) {
+  esp_gmf_afe_manager_features_t features{};
+  auto ret = esp_gmf_afe_manager_get_features(manager, &features);
+  if (ret != ESP_GMF_ERR_OK) return ret < 0 ? ret : ESP_GMF_ERR_FAIL;
+  if (features.vad == enabled) return ESP_GMF_ERR_OK;
+
+  ret = esp_gmf_afe_manager_enable_features(manager, ESP_AFE_FEATURE_VAD, enabled);
+  if (ret < 0) return ret;
+  // GMF returns reset_vad's result, which can hide a failed feature toggle.
+  // Its feature cache records the enable/disable acknowledgement separately.
+  ret = esp_gmf_afe_manager_get_features(manager, &features);
+  if (ret != ESP_GMF_ERR_OK) return ret < 0 ? ret : ESP_GMF_ERR_FAIL;
+  return features.vad == enabled ? ESP_GMF_ERR_OK : ESP_GMF_ERR_FAIL;
+}
+#endif
 
 // GMF 1.1 exposes this placement explicitly. The published compatibility fork
 // predating that field already uses the same fixed P4/internal, S3/PSRAM policy.
@@ -491,6 +513,14 @@ void EspAfe::destroy_instance_(AfeInstance *instance) {
 }
 
 bool EspAfe::install_instance_(AfeInstance *instance) {
+#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
+  ++this->diagnostic_instance_id_;
+#endif
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  this->last_fetch_trigger_channel_id_.store(-1, std::memory_order_relaxed);
+  this->last_fetch_raw_data_channels_.store(-1, std::memory_order_relaxed);
+  this->last_fetch_data_size_.store(-1, std::memory_order_relaxed);
+#endif
 #ifdef USE_ESP_AFE_GMF_PATH
   this->afe_manager_ = instance->manager;
 #endif
@@ -550,10 +580,19 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 #endif
 
 #ifdef USE_ESP_AFE_GMF_PATH
-  if (esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC,
-                                          this->aec_enabled_.load(std::memory_order_relaxed)) < 0 ||
-      esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD,
-                                          this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
+  const bool aec_requested = this->aec_enabled_.load(std::memory_order_relaxed);
+  const int aec_ret = esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, aec_requested);
+#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
+  this->diagnostic_aec_instance_id_ = this->diagnostic_instance_id_;
+  this->diagnostic_aec_requested_ = aec_requested;
+  this->diagnostic_aec_ret_ = aec_ret;
+#endif
+  // ESP-SR returns the applied state: 0 is OFF and 1 is ON, not ESP_OK.
+  if (aec_ret != static_cast<int>(aec_requested)) {
+    ESP_LOGE(TAG, "AFE AEC state not acknowledged: requested=%d ret=%d", static_cast<int>(aec_requested), aec_ret);
+    return cleanup_failed_install();
+  }
+  if (apply_vad_intent(this->afe_manager_, this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
     ESP_LOGE(TAG, "Failed to apply AFE feature state");
     return cleanup_failed_install();
   }
@@ -871,8 +910,13 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     int ret = 0;
     const char *backend = "unknown";
 #ifdef USE_ESP_AFE_GMF_PATH
-        if (this->afe_manager_ != nullptr) {
+    if (this->afe_manager_ != nullptr) {
       ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, enabled));
+#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
+      this->diagnostic_aec_instance_id_ = this->diagnostic_instance_id_;
+      this->diagnostic_aec_requested_ = enabled;
+      this->diagnostic_aec_ret_ = ret;
+#endif
       backend = "GMF AFE manager";
     } else
 #endif
@@ -880,8 +924,8 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
       ESP_LOGW(TAG, "AFE %s AEC requested without a compiled backend", enabled ? "enable" : "disable");
       return false;
     }
-    if (ret < 0) {
-      ESP_LOGW(TAG, "AFE %s AEC failed (ret=%d)", enabled ? "enable" : "disable", ret);
+    if (ret != static_cast<int>(enabled)) {
+      ESP_LOGW(TAG, "AFE %s AEC not acknowledged (ret=%d)", enabled ? "enable" : "disable", ret);
       return false;
     }
 
@@ -948,7 +992,7 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
     const char *backend = "unknown";
 #ifdef USE_ESP_AFE_GMF_PATH
     if (this->afe_manager_ != nullptr) {
-      ret = static_cast<int>(esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD, enabled));
+      ret = static_cast<int>(apply_vad_intent(this->afe_manager_, enabled));
       backend = "GMF AFE manager";
     } else
 #endif
@@ -1155,6 +1199,124 @@ ProcessorTelemetry EspAfe::telemetry() const {
   t.fetch_us_last = this->fetch_us_last_.load(std::memory_order_relaxed);
   t.fetch_us_max = this->fetch_us_max_.load(std::memory_order_relaxed);
   return t;
+}
+
+void EspAfe::dump_diagnostics() {
+#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
+  // Copy under the configuration owner's mutex, never block the main loop on
+  // a rebuild, and never retain a DSP/config pointer for later dereference.
+  struct Snapshot {
+    const void *manager{nullptr}, *config{nullptr};
+    uint32_t instance{0}, control_instance{0}, request{0}, epoch{0};
+    int control_ret{0}, features_ret{-1};
+    bool requested{false}, control_requested{false}, gmf_aec{false};
+    bool ready{false}, active{false}, drain{false}, stopped{false}, busy{false}, reconfigure_ok{false};
+    bool cfg_valid{false}, aec_init{false}, se{false}, ns{false}, vad{false}, agc{false}, wakenet{false};
+    int type{-1}, mode{-1}, aec_mode{-1}, filter{0}, nlp{-1};
+    int channels{0}, microphones{0}, references{0}, mic0{-1}, mic1{-1}, ref{-1};
+    int feed{0}, process{0}, fetch{0};
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+    int fetch_trigger_channel{-1}, fetch_raw_channels{-1}, fetch_data_size{-1};
+#endif
+    float linear_gain{0.0f};
+    ProcessorTelemetry counters{};
+  } s;
+  static_assert(sizeof(Snapshot) <= 256, "Keep requested AFE diagnostics bounded");
+  if (this->config_mutex_ == nullptr) {
+    ESP_LOGI(TAG, "AFE diagnostic: unavailable=not_setup");
+    return;
+  }
+  {
+    esp_audio_stack::ScopedLock lock(this->config_mutex_, 0);
+    if (!lock) {
+      ESP_LOGI(TAG, "AFE diagnostic: unavailable=owner_busy");
+      return;
+    }
+    s.instance = this->diagnostic_instance_id_;
+    s.control_instance = this->diagnostic_aec_instance_id_;
+    s.control_requested = this->diagnostic_aec_requested_;
+    s.control_ret = this->diagnostic_aec_ret_;
+    s.config = this->afe_config_;
+#ifdef USE_ESP_AFE_GMF_PATH
+    s.manager = this->afe_manager_;
+    if (this->afe_manager_ != nullptr) {
+      esp_gmf_afe_manager_features_t features{};
+      s.features_ret = esp_gmf_afe_manager_get_features(this->afe_manager_, &features);
+      s.gmf_aec = features.aec;
+    }
+#endif
+    s.requested = this->aec_enabled_.load(std::memory_order_relaxed);
+    s.request = this->processing_request_.load(std::memory_order_acquire);
+    s.epoch = this->manager_epoch_.load(std::memory_order_acquire);
+    s.ready = this->is_initialized();
+    s.active = this->processing_active_.load(std::memory_order_acquire);
+    s.drain = this->drain_request_.load(std::memory_order_acquire);
+    s.stopped = this->afe_stopped_.load(std::memory_order_acquire);
+    s.busy = this->reconfigure_busy_.load(std::memory_order_acquire);
+    s.reconfigure_ok = this->last_reconfigure_ok_.load(std::memory_order_acquire);
+    s.feed = this->feed_chunksize_;
+    s.process = this->process_chunksize_;
+    s.fetch = this->fetch_chunksize_;
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+    s.fetch_trigger_channel = this->last_fetch_trigger_channel_id_.load(std::memory_order_relaxed);
+    s.fetch_raw_channels = this->last_fetch_raw_data_channels_.load(std::memory_order_relaxed);
+    s.fetch_data_size = this->last_fetch_data_size_.load(std::memory_order_relaxed);
+#endif
+    if (this->afe_config_ != nullptr) {
+      const auto &cfg = *this->afe_config_;
+      s.cfg_valid = true;
+      s.type = cfg.afe_type;
+      s.mode = cfg.afe_mode;
+      s.aec_init = cfg.aec_init;
+      s.aec_mode = cfg.aec_mode;
+      s.filter = cfg.aec_filter_length;
+      s.nlp = cfg.aec_nlp_level;
+      s.se = cfg.se_init;
+      s.ns = cfg.ns_init;
+      s.vad = cfg.vad_init;
+      s.agc = cfg.agc_init;
+      s.wakenet = cfg.wakenet_init;
+      s.linear_gain = cfg.afe_linear_gain;
+      const auto &pcm = cfg.pcm_config;
+      s.channels = pcm.total_ch_num;
+      s.microphones = pcm.mic_num;
+      s.references = pcm.ref_num;
+      if (pcm.mic_ids != nullptr && pcm.mic_num > 0) s.mic0 = pcm.mic_ids[0];
+      if (pcm.mic_ids != nullptr && pcm.mic_num > 1) s.mic1 = pcm.mic_ids[1];
+      if (pcm.ref_ids != nullptr && pcm.ref_num > 0) s.ref = pcm.ref_ids[0];
+    }
+    s.counters = this->telemetry();
+  }
+  // GMF get_features is its cached control acknowledgement, not an independent
+  // getter into the opaque algorithm. Keep that distinction in the log label.
+  ESP_LOGI(TAG, "AFE diagnostic: instance=%u manager=%p config=%p ready=%s active=%s drain=%s stopped=%s request=%u epoch=%u reconfigure_busy=%s reconfigure_ok=%s",
+           (unsigned) s.instance, s.manager, s.config, YESNO(s.ready), YESNO(s.active), YESNO(s.drain), YESNO(s.stopped),
+           (unsigned) s.request, (unsigned) s.epoch, YESNO(s.busy), YESNO(s.reconfigure_ok));
+  ESP_LOGI(TAG, "AEC control: requested=%s last_instance=%u last_requested=%s last_ret=%d control_known=%s same_instance=%s gmf_query_ret=%d gmf_cached_aec=%s",
+           YESNO(s.requested), (unsigned) s.control_instance, YESNO(s.control_requested), s.control_ret,
+           YESNO(s.control_instance != 0),
+           YESNO(s.control_instance != 0 && s.manager != nullptr && s.control_instance == s.instance),
+           s.features_ret, YESNO(s.gmf_aec));
+  ESP_LOGI(TAG, "AFE checked_config: available=%s type=%d mode=%d aec_init=%s aec_mode=%d filter=%d nlp=%d se=%s ns=%s vad=%s agc=%s wakenet=%s linear_gain=%.3f",
+           YESNO(s.cfg_valid), s.type, s.mode, YESNO(s.aec_init), s.aec_mode, s.filter, s.nlp,
+           YESNO(s.se), YESNO(s.ns), YESNO(s.vad), YESNO(s.agc), YESNO(s.wakenet), s.linear_gain);
+  ESP_LOGI(TAG, "AFE frames: channels=%d microphones=%d references=%d mic_ids=%d,%d ref_id=%d feed=%d process=%d fetch=%d counters_available=%s",
+           s.channels, s.microphones, s.references, s.mic0, s.mic1, s.ref, s.feed, s.process, s.fetch,
+           YESNO(ESP_AFE_DIAGNOSTIC_COUNTERS));
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  ESP_LOGI(TAG, "AFE last valid fetch (independent values): trigger_channel_id=%d raw_data_channels=%d data_size_bytes=%d; channels describe DSP outputs, not physical ADC",
+           s.fetch_trigger_channel, s.fetch_raw_channels, s.fetch_data_size);
+#endif
+  if constexpr (ESP_AFE_DIAGNOSTIC_COUNTERS) {
+    const auto &t = s.counters;
+    ESP_LOGI(TAG, "AFE counters: frames=%u output_miss=%u feed_ok=%u feed_rejected=%u fetch_ok=%u fetch_timeout=%u input_drop=%u output_drop=%u feed_queued=%u fetch_queued=%u",
+             (unsigned) t.frame_count, (unsigned) t.glitch_count, (unsigned) t.feed_ok, (unsigned) t.feed_rejected,
+             (unsigned) t.fetch_ok, (unsigned) t.fetch_timeout, (unsigned) t.input_ring_drop,
+             (unsigned) t.output_ring_drop, (unsigned) t.feed_queue_frames, (unsigned) t.fetch_queue_frames);
+  }
+#else
+  ESP_LOGI(TAG, "AFE diagnostics omitted: enable audio_stack telemetry or PCM capture");
+#endif
 }
 
 bool EspAfe::reconfigure(int type, int mode) {
@@ -1585,6 +1747,11 @@ void EspAfe::manager_result_cb_(afe_fetch_result_t *result, void *ctx) {
       self->drain_request_.load(std::memory_order_acquire)) {
     return;
   }
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  self->last_fetch_trigger_channel_id_.store(result->trigger_channel_id, std::memory_order_relaxed);
+  self->last_fetch_raw_data_channels_.store(result->raw_data_channels, std::memory_order_relaxed);
+  self->last_fetch_data_size_.store(result->data_size, std::memory_order_relaxed);
+#endif
   self->voice_present_.store(self->vad_enabled_.load(std::memory_order_relaxed) && result->vad_state == VAD_SPEECH,
                              std::memory_order_relaxed);
   esp_gmf_payload_t payload{};
@@ -1592,6 +1759,17 @@ void EspAfe::manager_result_cb_(afe_fetch_result_t *result, void *ctx) {
   payload.valid_size = result->data_size;
   payload.buf_length = result->data_size;
   self->gmf_output_release_(&payload, 0);
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  // Preserve selected PCM admission first. Vendor outputs remain borrowed
+  // only until this callback returns; the observer copies into its own queue.
+  // Stereo capture accepts at most 16384 PCM bytes, so this bound also keeps
+  // all interleaved offset arithmetic within the proven three-channel span.
+  if (self->raw_capture_parent_ != nullptr && result->raw_data != nullptr && result->raw_data_channels == 3 &&
+      result->trigger_channel_id >= 0 && result->trigger_channel_id < 3 && result->data_size <= 8192) {
+    self->raw_capture_parent_->capture_afe_outputs(result->raw_data, result->data,
+                                                 result->data_size / sizeof(int16_t));
+  }
+#endif
 }
 
 esp_gmf_err_io_t EspAfe::gmf_input_acquire_(esp_gmf_payload_t *load, uint32_t wanted_size, int wait_ticks) {
@@ -1922,17 +2100,16 @@ bool EspAfe::service_processing_request_() {
   // A VAD intent may arrive while this acquisition is being installed. Its
   // pending notification guarantees another pass if it changes after this
   // load; only the existing config owner touches the ready manager here.
-  if (esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_VAD,
-                                        this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
+  if (apply_vad_intent(this->afe_manager_, this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
     ESP_LOGW(TAG, "AFE acquisition could not apply VAD intent");
     return false;
   }
 #endif
-  this->processing_active_.store(true, std::memory_order_release);
   if (!this->start_pipeline_()) {
     this->processing_active_.store(false, std::memory_order_release);
     return false;
   }
+  this->processing_active_.store(true, std::memory_order_release);
   ESP_LOGI(TAG, "AFE acquisition ready (epoch=%u)", (unsigned) (latest >> 1));
   return true;
 }

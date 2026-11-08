@@ -400,6 +400,20 @@ class ESPAudioStack final : public Component {
   // Installed at setup, never replaced while the audio owner can dispatch.
   void set_capture_observer(AudioCaptureObserver *observer) { this->capture_observer_ = observer; }
   uint32_t capture_generation() const { return this->start_generation_.load(std::memory_order_acquire); }
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  // Borrowed vendor fetch outputs, copied by the existing capture observer.
+  void capture_afe_outputs(const int16_t *separated, const int16_t *selected, size_t frames);
+#endif
+#endif
+#ifdef USE_ESP_AUDIO_STACK_TEST_INPUT
+  using TestInputCallback = void (*)(void *, int16_t *, int16_t *, size_t, uint8_t);
+  // Install at setup, before audio dispatch. The callback/context stay alive
+  // and unchanged while running; the callback owns any armed/inactive state.
+  // Buffers are borrowed only for this call, at the processor input rate.
+  void set_test_input_callback(TestInputCallback callback, void *context) {
+    this->test_input_callback_ = callback;
+    this->test_input_context_ = context;
+  }
 #endif
 
   // Speaker interface: data arrives at bus rate (from mixer/resampler)
@@ -686,8 +700,15 @@ class ESPAudioStack final : public Component {
 #ifdef USE_ESP_AUDIO_STACK_CAPTURE
   void capture_audio_(CapturePoint point, const void *data, size_t frames, uint32_t rate,
                       uint8_t bits, uint8_t channels, uint8_t stride, uint8_t first = 0, uint8_t second = 1);
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  void capture_audio_(const CaptureFrame &view);
+#endif
   void capture_raw_audio_(const AudioTaskCtx &ctx);
   AudioCaptureObserver *capture_observer_{nullptr};
+#endif
+#ifdef USE_ESP_AUDIO_STACK_TEST_INPUT
+  TestInputCallback test_input_callback_{nullptr};
+  void *test_input_context_{nullptr};
 #endif
 #ifdef USE_ESP_AUDIO_STACK_SLOT_LEVELS
   void update_tdm_slot_levels_(const AudioTaskCtx &ctx);

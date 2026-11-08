@@ -15,6 +15,12 @@
 #include "../esp_audio_stack/audio_core_audio_utils.h"
 #include "afe_diagnostic_counter.h"
 
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+namespace esphome::esp_audio_stack {
+class ESPAudioStack;
+}
+#endif
+
 #ifdef USE_ESP32
 
 #ifdef CLANG_TIDY
@@ -99,6 +105,9 @@ using esp_audio_stack::ProcessorTelemetry;
 /// This avoids blocking the consumer's audio task on any global mutex.
 class EspAfe final : public Component, public AudioProcessor {
  public:
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  void set_raw_capture_parent(esp_audio_stack::ESPAudioStack *parent) { this->raw_capture_parent_ = parent; }
+#endif
   void setup() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::PROCESSOR; }
@@ -114,6 +123,7 @@ class EspAfe final : public Component, public AudioProcessor {
   FeatureControl feature_control(AudioFeature feature) const override;
   bool set_feature(AudioFeature feature, bool enabled) override;
   ProcessorTelemetry telemetry() const override;
+  void dump_diagnostics() override;
   bool reconfigure(int type, int mode) override;
   // Publish consumer intent without waiting for GMF. The existing reconfigure
   // owner retires a completed acquisition before admitting its replacement.
@@ -281,6 +291,20 @@ class EspAfe final : public Component, public AudioProcessor {
   esp_gmf_afe_manager_handle_t afe_manager_{nullptr};
 #endif
   afe_config_t *afe_config_{nullptr};
+#ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
+  esp_audio_stack::ESPAudioStack *raw_capture_parent_{nullptr};
+#endif
+#if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
+  // Low-frequency evidence exists only when diagnostics were explicitly selected.
+  uint32_t diagnostic_instance_id_{0}, diagnostic_aec_instance_id_{0};
+  int diagnostic_aec_ret_{0};
+  bool diagnostic_aec_requested_{false};
+#endif
+#ifdef USE_ESP_AUDIO_STACK_CAPTURE
+  std::atomic<int32_t> last_fetch_trigger_channel_id_{-1};
+  std::atomic<int32_t> last_fetch_raw_data_channels_{-1};
+  std::atomic<int32_t> last_fetch_data_size_{-1};
+#endif
   bool afe_pipeline_running_{false};
   bool afe_pipeline_paused_{false};
 

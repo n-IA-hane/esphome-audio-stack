@@ -18,12 +18,17 @@ bool send_gate_entered=false,send_gate_release=false;
 unsigned send_calls=0;
 std::atomic<bool> send_blocked=false;
 std::atomic<int64_t> record_wait_budget_us=0;
+std::atomic<int64_t> connection_wait_budget_us=0;
 
 // The network adapter can return a legal short write at either record part.
 // Production deadline, main-loop stop and worker methods remain unchanged.
 ssize_t capture_send(int fd,const void*data,size_t bytes,int flags){
  const auto call=++send_calls;
  if(send_scenario=="stalled-header"&&call>1){send_blocked=true;errno=EAGAIN;return -1;}
+ if(send_scenario=="deadline-slow-tail-header"&&call>=4){
+  if(call==4)return ::send(fd,data,std::min<size_t>(17,bytes),flags);
+  send_blocked=true;errno=EAGAIN;return -1;
+ }
  const bool header=send_scenario.find("header")!=std::string::npos&&call==1;
  const bool payload=send_scenario.find("payload")!=std::string::npos&&call==2;
  if(header||payload){
@@ -37,6 +42,10 @@ ssize_t capture_send(int fd,const void*data,size_t bytes,int flags){
  return ::send(fd,data,bytes,flags);
 }
 int capture_select(int nfds,fd_set*read,fd_set*write,fd_set*error,timeval*timeout){
+ if(send_scenario=="late-connect"){
+  assert(timeout);connection_wait_budget_us=int64_t(timeout->tv_sec)*1000000+timeout->tv_usec;
+  return ::select(0,nullptr,nullptr,nullptr,timeout);
+ }
  if(send_blocked){
   assert(timeout);record_wait_budget_us=int64_t(timeout->tv_sec)*1000000+timeout->tv_usec;
   // A blocked peer never becomes writable. Wait only the exact finite budget.
@@ -58,7 +67,7 @@ void spin(ESPAudioCapture &c,std::function<bool()> until){
 int main(int argc,char**argv){
  assert(argc==3);signal(SIGPIPE,SIG_IGN);const std::string scenario=argv[2];send_scenario=scenario;
  const bool terminal=scenario.find("header")!=std::string::npos||scenario.find("payload")!=std::string::npos;
- if(terminal)capture_clock_override_us=1000000;
+ if(terminal||scenario=="late-connect")capture_clock_override_us=1000000;
  ESPAudioStack parent;ESPAudioStackMicrophone microphone;ESPAudioCapture capture;
  if(scenario=="saturated")microphone.listeners=16;
  const auto original_listeners=microphone.listeners;
@@ -66,9 +75,13 @@ int main(int argc,char**argv){
  capture.set_parent(&parent);capture.set_microphone(&microphone);capture.set_address("127.0.0.1");
  capture.set_port(std::atoi(argv[1]));capture.set_points(31);capture.set_duration(350);capture.setup();
  assert(!queues&&!task_count);assert(capture.start());assert(!capture.start());
- if(scenario=="unreachable"||scenario=="registry-full") {
+ if(scenario=="unreachable"||scenario=="registry-full"||scenario=="late-connect") {
   spin(capture,[&]{return capture.worker_handle_==nullptr;});
-  assert(!queues&&!task_count&&microphone.listeners==1&&microphone.starts==0&&parent.consumers==1);return 0;
+  assert(!queues&&!task_count&&microphone.listeners==1&&microphone.starts==0&&parent.consumers==1);
+  if(scenario=="late-connect"){
+   assert(connection_wait_budget_us==1350000);puts("connection_wait_budget_us=1350000");
+  }
+  return 0;
  }
  spin(capture,[&]{return capture.active_||capture.worker_handle_==nullptr;});assert(capture.active_);
  assert(microphone.listeners==original_listeners&&parent.consumers==2);
@@ -79,15 +92,44 @@ int main(int argc,char**argv){
   capture.on_capture_frame(final_frame);
   if(scenario!="stalled-header"){
    {std::unique_lock lock(send_gate_mutex);assert(send_gate_cv.wait_for(lock,std::chrono::seconds(5),[]{return send_gate_entered;}));}
-   if(scenario.find("deadline")==0){capture_clock_override_us=capture.deadline_us_+1;capture.loop();}
+   std::thread producer;
+   auto *queue=capture.queue_.get();
+   if(scenario.find("queued")!=std::string::npos||scenario=="deadline-slow-tail-header")
+    capture.on_capture_frame(final_frame);
+   if(scenario=="deadline-queued-inflight-header"||scenario=="deadline-queued-expired-inflight-header"){
+    queue->pause_next=true;
+    producer=std::thread([&]{capture.on_capture_frame(final_frame);});
+    {std::unique_lock lock(queue->gate_mutex);queue->gate_cv.wait(lock,[&]{return queue->entered;});}
+    assert(capture.writers_==1);
+   }
+   if(scenario.find("deadline")==0){
+    capture_clock_override_us=capture.deadline_us_+(scenario=="deadline-slow-tail-header"?700000:
+                              scenario=="deadline-queued-expired-inflight-header"?1000001:1);
+    capture.loop();
+   }
    else if(scenario=="mute-payload"){microphone.muted=true;capture.loop();}
    else if(scenario=="shutdown-header")capture.on_shutdown();
    else capture.stop();
+   const unsigned waits_before=notify_wait_calls;
    {std::lock_guard lock(send_gate_mutex);send_gate_release=true;send_gate_cv.notify_all();}
+   if(producer.joinable()){
+    spin(capture,[&]{return notify_wait_calls>waits_before;});
+    assert(capture.writers_==1&&!capture.worker_done_);
+    if(scenario=="deadline-queued-expired-inflight-header"){
+     std::lock_guard lock(*capture.socket_mutex_);
+     assert(capture.socket_fd_==-1&&queues==1&&task_count==1);
+     puts("expired_writer_preserved_until_retired");
+    }
+    {std::lock_guard lock(queue->gate_mutex);queue->released=true;queue->gate_cv.notify_all();}
+    producer.join();
+   }
   }
   spin(capture,[&]{return capture.worker_handle_==nullptr;});
   assert(!capture.active_&&!queues&&!task_count&&parent.consumers==1);
   if(scenario=="stalled-header"){assert(record_wait_budget_us==1000000);puts("record_wait_budget_us=1000000");}
+  if(scenario=="deadline-slow-tail-header"){
+   assert(record_wait_budget_us==300000);puts("tail_wait_budget_us=300000");
+  }
   puts("terminal record and cleanup checked");return 0;
  }
  int32_t raw[]={100<<16,900<<16,-200*65536,800<<16,300<<16,700<<16};
