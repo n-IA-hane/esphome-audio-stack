@@ -39,10 +39,12 @@ struct Codec { float master=-1; void set_output_volume(float value){master=value
 struct Processor {
  const int16_t *reference=nullptr;
  void process(const int16_t*,const int16_t *ref,int16_t*,uint8_t){reference=ref;}
+ void process_planar(const int16_t*const*,const int16_t*ref,int16_t*,uint8_t){reference=ref;}
 };
 struct AudioTaskCtx {
  const int16_t *processor_input=nullptr;
- int16_t *spk_ref_buffer=nullptr,*aec_output=nullptr,*output_buffer=nullptr;
+ int16_t *spk_ref_buffer=nullptr,*aec_output=nullptr,*output_buffer=nullptr,*mic_buffer=nullptr,*processor_mic_buffer=nullptr;
+ bool processor_planar_input=false;
  uint8_t processor_mic_channels=1;
  size_t input_frame_bytes=8,output_frame_size=4,output_frame_bytes=8;
  size_t current_output_frame_size=0,current_output_frame_bytes=0;

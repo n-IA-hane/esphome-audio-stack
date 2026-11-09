@@ -254,7 +254,7 @@ def test_std_stereo_dual_mic_does_not_require_tdm() -> None:
     assert "dc_primary_" in stereo
     assert "dc_secondary_" in stereo
     assert "L-R canceller" in stereo
-    assert "ctx.processor_input = ctx.processor_mic_buffer" in stereo
+    assert "ctx.processor_input = planar ? ctx.mic_buffer : ctx.processor_mic_buffer" in stereo
     assert "process_multi_32" in stereo
     assert "num_mic_ch" not in stereo or ", 2)" in stereo
     assert "const uint8_t mic_offset = ctx.rx_layout.mic_slots[0];" in stereo

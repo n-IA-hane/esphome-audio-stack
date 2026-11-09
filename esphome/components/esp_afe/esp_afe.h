@@ -119,6 +119,8 @@ class EspAfe final : public Component, public AudioProcessor {
   // preserved when the manager graph or algorithm mode changes.
   size_t maximum_output_samples() const override { return esp_audio_stack::DEFAULT_AUDIO_FRAME_SAMPLES; }
   bool process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) override;
+  bool process_planar(const int16_t *const *in_mics, const int16_t *in_ref, int16_t *out,
+                      uint8_t mic_channels_in) override;
   uint32_t frame_spec_revision() const override { return this->frame_spec_revision_.load(std::memory_order_acquire); }
   FeatureControl feature_control(AudioFeature feature) const override;
   bool set_feature(AudioFeature feature, bool enabled) override;
@@ -265,6 +267,8 @@ class EspAfe final : public Component, public AudioProcessor {
   bool set_vad_enabled_runtime_(bool enabled);
   bool set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char *name);
   bool prepare_runtime_();
+  bool process_(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in,
+                const int16_t *in_secondary);
   bool prepare_fetch_output_ring_();
 #ifdef USE_ESP_AFE_GMF_PATH
   bool prepare_feed_input_ring_();
@@ -316,6 +320,9 @@ class EspAfe final : public Component, public AudioProcessor {
   int process_chunksize_{0};  // external process() input chunk size
   int total_channels_{2};
   int staged_input_samples_{0};
+#ifdef USE_ESP_AFE_GMF_PATH
+  int16_t *staged_feed_slot_{nullptr};  // acquired ring item, never borrowed vendor memory
+#endif
   uint8_t output_prebuffer_frames_{0};
   bool output_prebuffer_ready_{true};
 #ifdef USE_ESP_AFE_POST_AGC

@@ -59,7 +59,9 @@ DSP feed work runs outside the hardware audio task. The input staging adapts
 ESP-SR feed blocks to the frame cadence established at setup, and the existing
 output byte stream preserves partial results. Hardware processing uses at most
 256 samples per iteration (16 ms at the AFE's 16 kHz rate); larger native AFE
-blocks are assembled in the existing staging buffer. `output_prebuffer_frames`
+blocks are assembled directly in one reserved GMF input-ring item, committed
+only when complete. Stopping discards any partial item before the next
+acquisition. `output_prebuffer_frames`
 continues to count native AFE frames, so this smaller processing step does not
 silently reduce the configured reserve. This keeps live I2S/DMA sizing
 stable when changing AEC, NS or AGC. Rebuilding an AFE feature briefly pauses
@@ -220,7 +222,7 @@ esp_afe:
 | `fetch_task_core` | int | `1` | GMF manager fetch-task core. |
 | `fetch_task_priority` | int | `5` | GMF manager fetch-task priority. |
 | `fetch_task_stack_size` | int | `3072` | GMF manager fetch-task stack size in bytes. |
-| `feed_buf_in_psram` | bool | `false` | Place the input staging scratch buffer in PSRAM. GMF profiles whose process frame equals the feed frame write directly into the feed ring and do not allocate this buffer. |
+| `feed_buf_in_psram` | bool | `false` | Retained for fallback scratch placement. GMF profiles assemble every feed block in the input ring and allocate no separate feed scratch buffer. Use `feed_ring_in_psram` for that storage. |
 | `feed_ring_in_psram` | bool | `false` | Place the complete-frame feed bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
 | `fetch_ring_in_psram` | bool | `false` | Place the complete-frame output bridge ring in PSRAM. Internal is faster; PSRAM may recover internal headroom. |
 
@@ -504,7 +506,7 @@ Input staging --> GMF AFE feed/fetch tasks --> processed output stream
 ```
 
 Both single- and dual-microphone configurations use this path. Input staging
-assembles the blocks requested by ESP-SR; the output stream retains partial
+assembles the blocks requested by ESP-SR in the owned input ring; the output stream retains partial
 reads. The hardware audio task does not need to change its I2S frame size when
 the AFE graph changes. Feed and fetch task settings apply to both configurations.
 Buffers remain bounded, and inactive input can be interrupted when the manager

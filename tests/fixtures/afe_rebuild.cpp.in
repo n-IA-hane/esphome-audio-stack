@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include "AUDIO_UTILS_HEADER"
 #define USE_ESP_AFE_GMF_PATH
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
@@ -29,15 +30,18 @@ void *heap_caps_malloc(size_t size,unsigned){
 }
 void heap_caps_free(void*p){if(p){--live_allocations;std::free(p);}}
 struct Ring {
- alignas(16) uint8_t data[64];size_t bytes=0,pending=0;void reset(){bytes=0;}
+ alignas(16) uint8_t data[128];size_t bytes=0,pending=0;void reset(){bytes=0;}
  size_t available()const{return bytes;}
+ size_t nosplit_items_waiting()const{return bytes?1:0;}
+ size_t read(uint8_t*p,size_t n,unsigned){n=std::min(n,bytes);std::memcpy(p,data,n);std::memmove(data,data+n,bytes-n);bytes-=n;return n;}
  size_t write_without_replacement(const void*p,size_t n,unsigned,bool){assert(bytes+n<=sizeof(data));std::memcpy(data+bytes,p,n);bytes+=n;return n;}
 };
 using StaticRingbuffer_t=Ring;
 Ring*xRingbufferCreateStatic(size_t,unsigned,uint8_t*,StaticRingbuffer_t*ring){return ring;}
 int xRingbufferSendAcquire(Ring*r,void**p,size_t n,unsigned){assert(n<=sizeof(r->data));*p=r->data;r->pending=n;return pdTRUE;}
 int xRingbufferSendComplete(Ring*r,void*p){assert(p==r->data);r->bytes=r->pending;return pdTRUE;}
-int xRingbufferSend(Ring*r,const void*p,size_t n,unsigned){return r->write_without_replacement(p,n,0,false)>0;}
+unsigned copy_sends=0;
+int xRingbufferSend(Ring*r,const void*p,size_t n,unsigned){++copy_sends;return r->write_without_replacement(p,n,0,false)>0;}
 void*xRingbufferReceive(Ring*r,size_t*n,unsigned){*n=r->bytes;return r->bytes?r->data:nullptr;}
 void vRingbufferReturnItem(Ring*r,void*){r->bytes=0;}
 template<class T>void diag_add(std::atomic<T>&v,uint32_t n=1){v.store(v.load()+n);}
@@ -45,6 +49,7 @@ template<class T>uint32_t diag_increment_and_get(std::atomic<T>&v){auto n=v.load
 template<class T>void update_peak_atomic(std::atomic<T>&v,uint32_t n){v.store(std::max<uint32_t>(v.load(),n));}
 template<class T>void decrement_if_nonzero(std::atomic<T>&v){if(v.load())v.store(v.load()-1);}
 namespace esp_audio_stack {
+using esphome::esp_audio_stack::compute_rms_dbfs_i16;
 struct ScopedLock {ScopedLock(void*,unsigned){}explicit operator bool()const{return true;}};
 std::unique_ptr<Ring>create_internal(size_t,const char*){return failure=="fetch"?nullptr:std::make_unique<Ring>();}
 std::unique_ptr<Ring>create_prefer_psram(size_t n,const char*s){return create_internal(n,s);}
@@ -71,26 +76,32 @@ int esp_gmf_afe_manager_enable_features(Manager*m,int feature,bool enable){
 }
 struct afe_pcm_config_t{int total_ch_num,mic_num;uint8_t*mic_ids;int ref_num;uint8_t*ref_ids;};
 uint8_t mic_ids[]={0};
+uint8_t dual_ids[]={0,1},ref_ids[]={2};
 struct afe_config_t{afe_pcm_config_t pcm_config{1,1,mic_ids,0,nullptr};};
 struct esp_gmf_payload_t{void*buf;size_t buf_length,valid_size;};
 // STAGING_HELPER
+void silence_frame(int16_t*out,int n){if(out&&n>0)std::memset(out,0,n*sizeof(int16_t));}
 struct EspAfe {
  struct AfeInstance {
   Manager*manager=nullptr;afe_config_t*config=nullptr;int16_t*feed_buf=nullptr;
   int feed_chunksize=0,fetch_chunksize=0,process_chunksize=0,total_channels=0;
  };
- Manager*afe_manager_=nullptr;afe_config_t*afe_config_=nullptr;int16_t*feed_buf_=nullptr;
+ Manager*afe_manager_=nullptr;afe_config_t*afe_config_=nullptr;int16_t*feed_buf_=nullptr,*staged_feed_slot_=nullptr;
  int feed_chunksize_=0,fetch_chunksize_=0,process_chunksize_=0,total_channels_=0,staged_input_samples_=0;
  bool afe_pipeline_running_=false,afe_pipeline_paused_=false,feed_ring_in_psram_=false,fetch_ring_in_psram_=false;
  uint8_t*feed_input_ring_storage_=nullptr;StaticRingbuffer_t*feed_input_ring_struct_=nullptr;
  Ring*feed_input_ring_=nullptr;std::unique_ptr<Ring>fetch_output_ring_;
  void*config_mutex_=this;void*reconfigure_task_handle_=this;
  std::atomic<bool> instance_ready_{false},afe_stopped_{false},processing_active_{false},drain_request_{false};
+ std::atomic<bool>process_busy_{false};
  std::atomic<bool> aec_enabled_{false},ns_enabled_{false},agc_enabled_{false},vad_enabled_{false},se_enabled_{false};
  std::atomic<bool> voice_present_{false},activity_pending_{false};
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0},frame_spec_revision_{0};
  std::atomic<int>last_spec_process_size_{0},last_spec_fetch_size_{0},last_spec_mic_ch_{0};
  int afe_type_=0,afe_mode_=0,warmup_remaining_=0;unsigned&starts=registered_starts;
+ int last_process_mic_channels_=0,native_feed_size_=4,afe_channels_=1,physical_mics_=1;
+ bool input_volume_sensor_enabled_=false,output_rms_sensor_enabled_=false,output_prebuffer_ready_=false;
+ unsigned rms_sensor_divider_=0,output_prebuffer_frames_=0;
  // COUNTERS
  bool is_se_enabled()const{return se_enabled_;}
  // ALL_FEATURES
@@ -99,10 +110,11 @@ struct EspAfe {
  bool quiesce_process_(unsigned){drain_request_=true;return true;}
  void reset_output_prebuffer_(){}
  void log_memory_snapshot_(const char*){}
- int afe_mic_channels_()const{return 1;}
+ int afe_mic_channels_()const{return physical_mics_;}
  bool build_instance_(AfeInstance*p){
-  p->manager=new Manager;p->config=new afe_config_t;p->feed_chunksize=4;p->fetch_chunksize=4;
-  p->process_chunksize=4;p->total_channels=1;return true;
+  p->manager=new Manager;p->config=new afe_config_t;p->feed_chunksize=native_feed_size_;p->fetch_chunksize=4;
+  p->process_chunksize=4;p->total_channels=afe_channels_;
+  if(afe_channels_==3)p->config->pcm_config={3,2,dual_ids,1,ref_ids};return true;
  }
  void destroy_instance_(AfeInstance*p){delete p->manager;delete p->config;*p={};}
  bool start_pipeline_();bool pause_pipeline_();void stop_pipeline_();void drain_feed_input_ring_();
@@ -119,7 +131,8 @@ struct EspAfe {
  }
  void feed_frame(const int16_t*in_mic){
   const int qs=process_chunksize_,fs=feed_chunksize_,transport_mic_channels=1;
-  const int16_t*in_ref=nullptr;const bool gmf_path=feed_input_ring_!=nullptr;int offset=staged_input_samples_;
+  const int16_t*in_ref=nullptr,*in_secondary=nullptr;const int primary_stride=1;
+  const bool gmf_path=feed_input_ring_!=nullptr;int offset=staged_input_samples_;
   // STAGING
  }
  void pump_frame(){
@@ -133,4 +146,8 @@ struct EspAfe {
  bool prepare_feed_input_ring_();bool prepare_fetch_output_ring_();bool prepare_runtime_();void release_runtime_buffers_();
  bool set_vad_enabled_runtime_(bool);bool set_aec_enabled_runtime_(bool);
  bool set_reinit_flag_(std::atomic<bool>&,bool,const char*);bool service_processing_request_();
+ void clear_process_busy_(){process_busy_=false;}
+ bool process(const int16_t*,const int16_t*,int16_t*,uint8_t);
+ bool process_planar(const int16_t*const*,const int16_t*,int16_t*,uint8_t);
+ bool process_(const int16_t*,const int16_t*,int16_t*,uint8_t,const int16_t*);
 };

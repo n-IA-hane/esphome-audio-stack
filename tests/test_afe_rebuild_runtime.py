@@ -34,14 +34,18 @@ def rebuild_source():
         "bool EspAfe::commit_gmf_feed_slot_(",
         "esp_gmf_err_io_t EspAfe::gmf_input_acquire_(",
         "esp_gmf_err_io_t EspAfe::gmf_output_release_(",
+        "bool EspAfe::process(",
+        "bool EspAfe::process_planar(",
+        "bool EspAfe::process_(",
     ))
     counters = sorted(set(re.findall(r"this->(\w+_)\.store\(", methods)) - {
-        "processing_active_", "instance_ready_", "afe_stopped_", "drain_request_", "vad_enabled_", "aec_enabled_",
+        "processing_active_", "instance_ready_", "afe_stopped_", "drain_request_", "vad_enabled_", "aec_enabled_", "process_busy_",
         "voice_present_", "activity_pending_", "manager_epoch_", "last_spec_process_size_",
         "last_spec_fetch_size_", "last_spec_mic_ch_", "frame_spec_revision_",
     })
     fixture = (ROOT / "tests/fixtures/afe_rebuild.cpp.in").read_text()
-    counters += ["feed_rejected_", "feed_ok_"]
+    fixture = fixture.replace("AUDIO_UTILS_HEADER", str(ROOT / "esphome/components/esp_audio_stack/audio_core_audio_utils.h"))
+    counters += ["feed_rejected_", "feed_ok_", "process_frame_count_", "process_output_miss_"]
     helper_start = cpp.index("static inline void stage_afe_input_frame(")
     staging_helper = cpp[helper_start:cpp.index("\nstatic int effective_feed_task_stack_size", helper_start)]
     start = cpp.index("  const int tc = this->total_channels_;", cpp.index("bool EspAfe::process("))
@@ -142,6 +146,42 @@ int main(int argc,char**argv){
 }
 '''
     compile_run(tmp_path, source, feature)
+
+
+@pytest.mark.parametrize("planar", [False, True])
+@pytest.mark.parametrize("cancel_partial", [False, True])
+def test_real_process_assembles_partial_frames_once_and_discards_retired_reservation(tmp_path, planar, cancel_partial):
+    source = rebuild_source() + r'''
+int main(int argc,char**argv){
+ EspAfe afe;afe.native_feed_size_=8;afe.afe_channels_=3;afe.physical_mics_=2;
+ afe.aec_enabled_=true;afe.processing_request_=1;assert(afe.recreate_instance_(false));
+ assert(afe.feed_buf_==nullptr&&afe.feed_chunksize_==8&&afe.process_chunksize_==4);
+ int16_t first[8],second[8],reference[8],interleaved[16],out[4];
+ for(int i=0;i<8;i++){first[i]=100+i;second[i]=900-i;reference[i]=50+i;interleaved[2*i]=first[i];interleaved[2*i+1]=second[i];}
+ const bool planar=argv[1][0]=='1';const int16_t*planes[]={first,second};
+ auto process=[&](int offset){
+  planes[0]=first+offset;planes[1]=second+offset;
+  bool processed=planar?afe.process_planar(planes,reference+offset,out,2):afe.process(interleaved+2*offset,reference+offset,out,2);
+  assert(!processed);for(auto v:out)assert(v==0);
+ };
+ process(0);assert(afe.staged_feed_slot_&&afe.staged_input_samples_==4&&afe.feed_input_ring_->bytes==0);
+ if(argv[2][0]=='1'){
+  afe.processing_active_=false;afe.stop_pipeline_();
+  assert(!afe.staged_feed_slot_&&afe.staged_input_samples_==0&&afe.feed_input_ring_->bytes==0);
+  afe.processing_active_=true;assert(afe.start_pipeline_());
+  for(auto&v:first)v+=300;for(auto&v:second)v-=100;
+  for(int i=0;i<8;i++){interleaved[2*i]=first[i];interleaved[2*i+1]=second[i];}
+  process(0);
+ }
+ process(4);assert(!afe.staged_feed_slot_&&afe.staged_input_samples_==0);
+ int16_t native[24];esp_gmf_payload_t payload{native,sizeof(native),0};
+ assert(afe.gmf_input_acquire_(&payload,sizeof(native),0)==ESP_GMF_IO_OK);
+ for(int i=0;i<8;i++){assert(native[3*i]==first[i]&&native[3*i+1]==second[i]&&native[3*i+2]==reference[i]);}
+ assert(copy_sends==0&&"partial assembly must write directly into the owned GMF reservation");
+ afe.cleanup();assert(live_allocations==0);
+}
+'''
+    compile_run(tmp_path, source, "1" if planar else "0", "1" if cancel_partial else "0")
 
 
 def compile_run(tmp_path, source, *args):

@@ -87,9 +87,17 @@ struct Converter {
  bool process_multi_32(const int32_t *i,size_t n,size_t s,const uint8_t *o,int16_t *a,int16_t *m,int16_t *r,uint8_t c) {
    return convert(i,n,s,o,a,m,r,c);
  }
+ template<class T>bool planar(const T*i,size_t n,size_t s,const uint8_t*o,int16_t*m,int16_t*second,int16_t*,uint8_t){
+  if(!ok)return false;
+  for(size_t k=0;k<n;k++){m[k]=sizeof(T)==4?int16_t(i[k*s+o[0]]>>16):int16_t(i[k*s+o[0]]);
+  second[k]=sizeof(T)==4?int16_t(i[k*s+o[1]]>>16):int16_t(i[k*s+o[1]]);}return true;
+ }
+ bool process_planar(const int16_t*i,size_t n,size_t s,const uint8_t*o,int16_t*m,int16_t*b,int16_t*r,uint8_t c){return planar(i,n,s,o,m,b,r,c);}
+ bool process_planar_32(const int32_t*i,size_t n,size_t s,const uint8_t*o,int16_t*m,int16_t*b,int16_t*r,uint8_t c){return planar(i,n,s,o,m,b,r,c);}
 };
 struct AudioTaskCtx {
  unsigned processor_mic_channels=1,rx_rate_converter_channels=1,i2s_bps=2;
+ bool processor_planar_input=false;
  AudioRxLayout rx_layout=AudioRxLayout::standard(true,false,false,false,0,-1);
  size_t input_frame_size=3;
  int16_t *rx_buffer=nullptr,*mic_buffer=nullptr,*processor_mic_buffer=nullptr,*processor_input=nullptr;

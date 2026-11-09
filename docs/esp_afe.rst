@@ -19,6 +19,12 @@ worker. The parent audio task retains its hardware cadence. Input staging and
 the existing output byte stream adapt changes in ESP-SR block sizes without
 resizing the live I2S/DMA frame.
 
+GMF staging reserves one input-ring item across transport frames and commits
+it only when the native AFE block is complete. No separate feed scratch buffer
+is allocated. Normal Audio Stack input can keep microphone channels separate
+until this assembly; diagnostic capture and writable test input retain their
+interleaved contract.
+
 Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM. The parent Audio
 Stack owns the bus and sample-rate conversion.
 
@@ -79,7 +85,9 @@ Configuration variables:
   matching ``fetch_task_*`` options (*Optional*, int): GMF manager feed/fetch
   task settings.
 - **feed_buf_in_psram**, **feed_ring_in_psram**, **fetch_ring_in_psram**
-  (*Optional*, boolean): Wrapper scratch/bridge placement controls.
+  (*Optional*, boolean): Wrapper scratch/bridge placement controls. GMF staging
+  uses ``feed_ring_in_psram``; ``feed_buf_in_psram`` is retained for fallback
+  compatibility and does not allocate a separate GMF scratch buffer.
 - **output_prebuffer_frames** (*Optional*, int): Keep ``0`` to preserve the
   zero-reserve bridge. Values ``1`` or ``2`` add fixed processed-audio latency
   on the asynchronous dual-mic GMF path so bounded scheduler jitter does not

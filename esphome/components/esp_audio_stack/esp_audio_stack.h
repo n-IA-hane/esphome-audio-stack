@@ -145,7 +145,8 @@ class MultiChannelAudioEffectsRateConverter {
   // A downmix caller also requesting raw dual-mic output must leave mic_mono
   // null here so the independent first-channel scratch is retained.
   bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit,
-               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1);
+               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1,
+               int16_t *mic_secondary = nullptr);
 
   // Convert N channels from strided int16 TDM input, producing:
   //   - mic_interleaved: [mic1, mic2, mic1, mic2, ...] (num_mic_ch interleaved, for AFE)
@@ -158,6 +159,10 @@ class MultiChannelAudioEffectsRateConverter {
   // Same but for 32-bit I2S input with inline >>16 downshift.
   bool process_multi_32(const int32_t *in, size_t out_count, size_t in_stride, const uint8_t *channel_offsets,
                         int16_t *mic_interleaved, int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch);
+  bool process_planar(const int16_t *in, size_t out_count, size_t in_stride, const uint8_t *channel_offsets,
+                      int16_t *mic_primary, int16_t *mic_secondary, int16_t *ref_out, uint8_t num_mic_ch);
+  bool process_planar_32(const int32_t *in, size_t out_count, size_t in_stride, const uint8_t *channel_offsets,
+                         int16_t *mic_primary, int16_t *mic_secondary, int16_t *ref_out, uint8_t num_mic_ch);
 
  private:
   std::unique_ptr<MultiChannelAudioEffectsRateConverterImpl> impl_;
@@ -599,6 +604,7 @@ class ESPAudioStack final : public Component {
     uint8_t tdm_tx_slot{0};
     uint8_t speaker_channels{1};
     uint8_t processor_mic_channels{1};
+    bool processor_planar_input{false};
     uint32_t processor_spec_revision{0};
     bool processor_spec_loaded{false};
     RxPathKind rx_path_kind{RxPathKind::PASSTHROUGH};

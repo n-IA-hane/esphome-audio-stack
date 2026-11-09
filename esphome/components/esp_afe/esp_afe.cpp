@@ -225,15 +225,16 @@ bool EspAfe::process_post_afe_agc_frame_(const int16_t *input, int16_t *output, 
 // The AFE configuration owns the channel roles; transport microphones are
 // interleaved independently of the AFE layout. Unknown channels carry silence.
 static inline void stage_afe_input_frame(int16_t *dst, const int16_t *in_mic, const int16_t *in_ref, int samples,
-                                         int transport_mic_channels, const afe_pcm_config_t &layout) {
+                                         int transport_mic_channels, const afe_pcm_config_t &layout,
+                                         const int16_t *in_secondary = nullptr) {
   if (dst == nullptr || in_mic == nullptr || samples <= 0 || transport_mic_channels <= 0) return;
   for (int channel = 0; channel < layout.total_ch_num; ++channel) {
     const int16_t *source = nullptr;
     int stride = 1;
     for (int mic = 0; mic < layout.mic_num; ++mic) {
       if (layout.mic_ids[mic] == channel && mic < transport_mic_channels) {
-        source = in_mic + mic;
-        stride = transport_mic_channels;
+        source = in_secondary != nullptr ? (mic == 0 ? in_mic : in_secondary) : in_mic + mic;
+        stride = in_secondary != nullptr ? 1 : transport_mic_channels;
         break;
       }
     }
@@ -450,7 +451,13 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
   // Use official API for feed channel count instead of config struct (more
   // robust if esp-sr changes internal channel mapping in future versions).
   int total_channels = static_cast<int>(total_channels_u8);
+  // GMF owns the staging reservation even when transport and DSP sizes differ.
+  // The fallback buffer is retained only for a non-GMF backend.
+#ifdef USE_ESP_AFE_GMF_PATH
+  constexpr bool needs_feed_staging = false;
+#else
   const bool needs_feed_staging = process_chunksize != feed_chunksize;
+#endif
   int16_t *feed_buf = nullptr;
   if (needs_feed_staging) {
     const size_t feed_bytes = static_cast<size_t>(feed_chunksize) * total_channels * sizeof(int16_t);
@@ -1143,6 +1150,7 @@ FrameSpec EspAfe::frame_spec() const {
   spec.sample_rate = 16000;
   spec.mic_channels = this->last_spec_mic_ch_.load(std::memory_order_acquire);
   spec.ref_channels = 1;
+  spec.supports_planar_input = true;
   // The live instance fields are detached on the reconfigure task. Publish a
   // stable snapshot instead so frame_spec() remains race-free during rebuilds.
   spec.input_samples = this->last_spec_process_size_.load(std::memory_order_acquire);
@@ -1354,7 +1362,20 @@ bool EspAfe::reconfigure(int type, int mode) {
 }
 
 bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) {
+  return this->process_(in_mic, in_ref, out, mic_channels_in, nullptr);
+}
+
+bool EspAfe::process_planar(const int16_t *const *in_mics, const int16_t *in_ref, int16_t *out,
+                           uint8_t mic_channels_in) {
+  const bool valid = in_mics != nullptr && (mic_channels_in <= 1 || in_mics[1] != nullptr);
+  return this->process_(valid ? in_mics[0] : nullptr, in_ref, out, mic_channels_in,
+                        valid && mic_channels_in > 1 ? in_mics[1] : nullptr);
+}
+
+bool EspAfe::process_(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in,
+                      const int16_t *in_secondary) {
   const int transport_mic_channels = std::max<int>(1, mic_channels_in);
+  const int primary_stride = in_secondary != nullptr ? 1 : transport_mic_channels;
   if (out == nullptr) {
     return false;
   }
@@ -1446,7 +1467,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // dBFS sensor reports nonsense).
   if (sample_rms && this->input_volume_sensor_enabled_) {
     this->input_volume_dbfs_.store(esp_audio_stack::compute_rms_dbfs_i16(in_mic, static_cast<size_t>(qs),
-                                                                         static_cast<size_t>(transport_mic_channels)),
+                                                                         static_cast<size_t>(primary_stride)),
                                    std::memory_order_relaxed);
   }
 
@@ -1455,29 +1476,33 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   int source_offset = 0;
   while (source_offset < qs) {
     const int stage_samples = std::min(qs - source_offset, fs - offset);
-    const int16_t *mic_chunk = in_mic + source_offset * transport_mic_channels;
+    const int16_t *mic_chunk = in_mic + source_offset * primary_stride;
     const int16_t *ref_chunk = in_ref == nullptr ? nullptr : in_ref + source_offset;
+    const int16_t *secondary_chunk = in_secondary == nullptr ? nullptr : in_secondary + source_offset;
 #ifdef USE_ESP_AFE_GMF_PATH
-    const bool gmf_direct_frame = gmf_path && offset == 0 && stage_samples == fs;
-    void *gmf_slot = nullptr;
+    void *gmf_slot = this->staged_feed_slot_;
 #endif
     bool staged = true;
 #ifdef USE_ESP_AFE_GMF_PATH
-    if (gmf_direct_frame) {
-      gmf_slot = this->acquire_gmf_feed_slot_(feed_bytes, 0);
+    if (gmf_path) {
+      if (gmf_slot == nullptr) {
+        gmf_slot = this->acquire_gmf_feed_slot_(feed_bytes, 0);
+        this->staged_feed_slot_ = static_cast<int16_t *>(gmf_slot);
+      }
       if (gmf_slot == nullptr) {
         diag_add(this->input_ring_drop_);
         staged = false;
       } else {
-        stage_afe_input_frame(static_cast<int16_t *>(gmf_slot), mic_chunk, ref_chunk, stage_samples,
-                              transport_mic_channels, this->afe_config_->pcm_config);
-        offset = fs;
+        stage_afe_input_frame(static_cast<int16_t *>(gmf_slot) + offset * tc, mic_chunk, ref_chunk, stage_samples,
+                              transport_mic_channels, this->afe_config_->pcm_config, secondary_chunk);
+        offset += stage_samples;
       }
     } else
 #endif
         if (this->feed_buf_ != nullptr) {
       int16_t *dst = this->feed_buf_ + offset * tc;
-      stage_afe_input_frame(dst, mic_chunk, ref_chunk, stage_samples, transport_mic_channels, this->afe_config_->pcm_config);
+      stage_afe_input_frame(dst, mic_chunk, ref_chunk, stage_samples, transport_mic_channels,
+                            this->afe_config_->pcm_config, secondary_chunk);
       offset += stage_samples;
     } else {
       diag_add(this->input_ring_drop_);
@@ -1498,6 +1523,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
           if (!this->commit_gmf_feed_slot_(gmf_slot)) {
             diag_add(this->input_ring_drop_);
           } else {
+            this->staged_feed_slot_ = nullptr;
             uint32_t queued = diag_increment_and_get(this->feed_queue_frames_);
             update_peak_atomic(this->feed_queue_peak_, queued);
           }
@@ -2129,6 +2155,14 @@ void EspAfe::drain_feed_input_ring_() {
     this->feed_queue_frames_.store(0, std::memory_order_relaxed);
     return;
   }
+  // Called after callback detachment or before callback installation. Complete
+  // the owned reservation so Receive can discard it, never expose a partial
+  // frame to the next acquisition, and never leave the NOSPLIT writer pinned.
+  if (this->staged_feed_slot_ != nullptr) {
+    this->commit_gmf_feed_slot_(this->staged_feed_slot_);
+    this->staged_feed_slot_ = nullptr;
+  }
+  this->staged_input_samples_ = 0;
   uint32_t dropped = 0;
   while (true) {
     size_t item_size = 0;
@@ -2209,6 +2243,8 @@ void EspAfe::release_runtime_buffers_() {
   this->fetch_output_ring_.reset();
   this->reset_output_prebuffer_();
 #ifdef USE_ESP_AFE_GMF_PATH
+  this->staged_feed_slot_ = nullptr;
+  this->staged_input_samples_ = 0;
   this->feed_input_ring_ = nullptr;
   if (this->feed_input_ring_storage_ != nullptr) {
     heap_caps_free(this->feed_input_ring_storage_);

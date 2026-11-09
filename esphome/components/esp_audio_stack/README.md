@@ -173,9 +173,11 @@ esp_audio_stack:
 
 Do not set `use_stereo_aec_reference` for a second MEMS; that flag is ES8311
 DAC feedback. `esp_aec` stays mono-reference. Dual-mic BSS uses `esp_afe`,
-which consumes the same interleaved `processor_mic_buffer` layout as TDM
-`tdm_mic_slots`. The public `microphone:` surface stays 16-bit mono
-(post-AFE).
+which accepts the same independent microphone roles from STD and TDM buses.
+Normal AFE processing keeps the microphones in separate planes until its GMF
+feed layout is assembled. Processors without that optional capability, audio
+capture builds and writable test-input builds retain interleaved input. The
+public `microphone:` surface stays 16-bit mono (post-AFE).
 
 This is intentionally different from `use_stereo_aec_reference`: stereo slot
 mode is only for mic slot selection; the AEC reference still comes from the
@@ -534,7 +536,7 @@ Mic/ref rate conversion, 32-bit to 16-bit conversion, channel deinterleave and T
 | `esp_ae_rate_cvt` | Bus-rate mic/reference frames to processor rate. Multi-channel RX uses one handle so mic/ref latency stays coupled. |
 | `esp_ae_bit_cvt` | 32-bit I2S samples to 16-bit processor PCM on RX, and 16-bit speaker PCM to 32-bit bus slots on TX. |
 | `esp_ae_deintlv_process` | Stereo/TDM RX slot split before selecting mic/reference channels. |
-| `esp_ae_intlv_process` | Dual-mic processor input, TDM TX slot layout and mono-speaker duplication onto a stereo STD TX bus. True `speaker_channels: 2` STD output is already interleaved by ESPHome and is written directly. |
+| `esp_ae_intlv_process` | Interleaved-only dual-mic processor input, TDM TX slot layout and mono-speaker duplication onto a stereo STD TX bus. Planar-capable AFE input keeps separate channels. True `speaker_channels: 2` STD output is already interleaved by ESPHome and is written directly. |
 | `esp_ae_ch_cvt` | Stereo speaker downmix to mono when a software AEC reference is needed. |
 
 The selected primitives are logged at boot in `dump_config()`:

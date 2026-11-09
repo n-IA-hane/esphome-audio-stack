@@ -149,7 +149,8 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   const size_t rx_bytes = have_rx ? ctx.rx_frame_bytes : 0;
   const size_t mic_bytes = have_rx && ctx.mic_separate ? ctx.input_frame_bytes : 0;
   const size_t processor_mic_bytes =
-      (processor_buffers_needed && worst_mic_ch > 1) ? ctx.input_frame_bytes * worst_mic_ch : 0;
+      (processor_buffers_needed && worst_mic_ch > 1)
+          ? ctx.input_frame_bytes * (ctx.processor_planar_input ? 1 : worst_mic_ch) : 0;
   const size_t spk_bytes = ctx.speaker_frame_bytes;
   const size_t tx_ref_mono_bytes = (processor_buffers_needed && !ctx.use_tdm_bus && ctx.speaker_channels > 1 &&
                                     !ctx.use_stereo_aec_ref && !ctx.use_tdm_ref)
@@ -180,7 +181,9 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 #ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
                                                2);
 #else
-                                               ctx.processor_mic_channels);
+                                               ctx.processor_mic_channels,
+                                               ctx.processor_planar_input && ctx.processor_mic_channels > 1
+                                                   ? this->prealloc_processor_mic_buffer_ : nullptr);
 #endif
       rx_prepared = true;
     }
@@ -553,6 +556,11 @@ bool ESPAudioStack::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proce
       ctx.input_frame_size = spec.input_samples;
       ctx.output_frame_size = spec.output_samples;
       ctx.processor_mic_channels = std::max<uint8_t>(1, spec.mic_channels);
+      // Capture views and the writable test hook retain their established
+      // interleaved contract. Normal processing can opt into separate planes.
+#if !defined(USE_ESP_AUDIO_STACK_CAPTURE) && !defined(USE_ESP_AUDIO_STACK_TEST_INPUT)
+      ctx.processor_planar_input = spec.supports_planar_input;
+#endif
       ctx.processor_spec_loaded = true;
       uint32_t out_rate = this->get_output_sample_rate();
       if (log_context) {
@@ -1095,7 +1103,16 @@ bool ESPAudioStack::process_rx_tdm_(AudioTaskCtx &ctx) {
     return false;
   }
   int16_t *ref_out = ctx.use_tdm_ref ? ctx.spk_ref_buffer : nullptr;
-  const bool ok = ctx.i2s_bps == 4
+  const bool planar = ctx.processor_planar_input && ctx.processor_mic_channels > 1;
+  const bool ok = planar
+                      ? (ctx.i2s_bps == 4
+                             ? this->rx_rate_converter_.process_planar_32(
+                                   reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, ts,
+                                   ch_offsets, ctx.mic_buffer, ctx.processor_mic_buffer, ref_out, num_mic_ch)
+                             : this->rx_rate_converter_.process_planar(
+                                   ctx.rx_buffer, ctx.input_frame_size, ts, ch_offsets, ctx.mic_buffer,
+                                   ctx.processor_mic_buffer, ref_out, num_mic_ch))
+                      : ctx.i2s_bps == 4
                       ? this->rx_rate_converter_.process_multi_32(
                             reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, ts, ch_offsets,
                             ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
@@ -1108,7 +1125,7 @@ bool ESPAudioStack::process_rx_tdm_(AudioTaskCtx &ctx) {
     return false;
   }
   if (ctx.processor_mic_channels > 1) {
-    ctx.processor_input = ctx.processor_mic_buffer;
+    ctx.processor_input = planar ? ctx.mic_buffer : ctx.processor_mic_buffer;
   }
   return true;
 }
@@ -1162,7 +1179,16 @@ bool ESPAudioStack::process_rx_stereo_slot_(AudioTaskCtx &ctx) {
       this->fail_audio_session_("stereo dual-mic RX channel map");
       return false;
     }
-    const bool ok = ctx.i2s_bps == 4
+    const bool planar = ctx.processor_planar_input && ctx.processor_mic_channels > 1;
+    const bool ok = planar
+                        ? (ctx.i2s_bps == 4
+                               ? this->rx_rate_converter_.process_planar_32(
+                                     reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, 2,
+                                     ch_offsets, ctx.mic_buffer, ctx.processor_mic_buffer, nullptr, 2)
+                               : this->rx_rate_converter_.process_planar(
+                                     ctx.rx_buffer, ctx.input_frame_size, 2, ch_offsets, ctx.mic_buffer,
+                                     ctx.processor_mic_buffer, nullptr, 2))
+                        : ctx.i2s_bps == 4
                         ? this->rx_rate_converter_.process_multi_32(
                               reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.input_frame_size, 2, ch_offsets,
                               ctx.processor_mic_channels > 1 ? ctx.processor_mic_buffer : nullptr,
@@ -1175,7 +1201,8 @@ bool ESPAudioStack::process_rx_stereo_slot_(AudioTaskCtx &ctx) {
                                                  : "stereo dual-mic RX audio-effects conversion");
       return false;
     }
-    if (ctx.processor_mic_channels > 1) ctx.processor_input = ctx.processor_mic_buffer;
+    if (ctx.processor_mic_channels > 1)
+      ctx.processor_input = planar ? ctx.mic_buffer : ctx.processor_mic_buffer;
     return true;
   }
 
@@ -1257,16 +1284,16 @@ void ESPAudioStack::apply_input_conditioning_(AudioTaskCtx &ctx) {
       if (dual_mic) {
         // mic2 already in processor_mic_buffer interleaved by multi-channel
         // rate conversion.
-        int16_t s2 = ctx.processor_mic_buffer[i * 2 + 1];
+        const size_t secondary_index = ctx.processor_planar_input ? i : i * 2 + 1;
+        int16_t s2 = ctx.processor_mic_buffer[secondary_index];
         if (do_dc) {
           s2 = this->dc_secondary_.process(s2);
         }
         if (do_input_gain_boost) {
           s2 = scale_sample(s2, boost);
         }
-        // Update both mic1 and mic2 in the interleaved buffer
-        ctx.processor_mic_buffer[i * 2] = s1;
-        ctx.processor_mic_buffer[i * 2 + 1] = s2;
+        if (!ctx.processor_planar_input) ctx.processor_mic_buffer[i * 2] = s1;
+        ctx.processor_mic_buffer[secondary_index] = s2;
       }
     }
   }
@@ -1280,12 +1307,13 @@ void ESPAudioStack::apply_input_conditioning_(AudioTaskCtx &ctx) {
     }
     if (dual_mic) {
       auto *processor_bytes = reinterpret_cast<uint8_t *>(ctx.processor_mic_buffer);
-      const size_t processor_bytes_len = ctx.input_frame_size * ctx.processor_mic_channels * sizeof(int16_t);
+      const size_t processor_samples = ctx.input_frame_size * (ctx.processor_planar_input ? 1 : ctx.processor_mic_channels);
+      const size_t processor_bytes_len = processor_samples * sizeof(int16_t);
       if (ctx.input_gain_q31 == 0) {
         memset(processor_bytes, 0, processor_bytes_len);
       } else {
         esp_audio_libs::gain::apply(processor_bytes, processor_bytes, ctx.input_gain_q31,
-                                    ctx.input_frame_size * ctx.processor_mic_channels, sizeof(int16_t));
+                                    processor_samples, sizeof(int16_t));
       }
     }
   }
@@ -1355,7 +1383,12 @@ void ESPAudioStack::run_processor_(AudioTaskCtx &ctx) {
   this->capture_audio_(CapturePoint::REFERENCE, ctx.spk_ref_buffer, ctx.input_frame_size,
                        this->get_output_sample_rate(), 16, 1, 1);
 #endif
-  this->processor_->process(ctx.processor_input, ctx.spk_ref_buffer, ctx.aec_output, ctx.processor_mic_channels);
+  if (ctx.processor_planar_input) {
+    const int16_t *microphones[2] = {ctx.mic_buffer, ctx.processor_mic_buffer};
+    this->processor_->process_planar(microphones, ctx.spk_ref_buffer, ctx.aec_output, ctx.processor_mic_channels);
+  } else {
+    this->processor_->process(ctx.processor_input, ctx.spk_ref_buffer, ctx.aec_output, ctx.processor_mic_channels);
+  }
 
   ctx.output_buffer = ctx.aec_output;
   ctx.current_output_frame_size = ctx.output_frame_size;

@@ -65,7 +65,7 @@ boards that need those features.
 - **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
   corresponding `fetch_task_*` settings (*Optional*, int): GMF task
   placement.
-- **feed_buf_in_psram** (*Optional*, boolean): Place the feed scratch buffer in PSRAM. Defaults to `false`.
+- **feed_buf_in_psram** (*Optional*, boolean): Retained for fallback scratch placement. GMF assembles complete and partial blocks directly in its input ring and allocates no separate feed scratch buffer. Use `feed_ring_in_psram` for that storage. Defaults to `false`.
 - **feed_ring_in_psram** (*Optional*, boolean): Place the feed staging ring in PSRAM. Defaults to `false`.
 - **fetch_ring_in_psram** (*Optional*, boolean): Place the fetch output ring in PSRAM. Defaults to `false`.
 

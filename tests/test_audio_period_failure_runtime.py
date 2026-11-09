@@ -49,6 +49,8 @@ struct Converter {
  }
  bool process_multi(const int16_t *p,size_t n,uint8_t s,const uint8_t *o,int16_t*a,int16_t*m,int16_t*r,uint8_t c){return convert(p,n,s,o,a,m,r,c);}
  bool process_multi_32(const int32_t*p,size_t n,uint8_t s,const uint8_t *o,int16_t*a,int16_t*m,int16_t*r,uint8_t c){return convert(p,n,s,o,a,m,r,c);}
+ bool process_planar(const int16_t*,size_t,uint8_t,const uint8_t*,int16_t*,int16_t*,int16_t*,uint8_t){assert(false);return false;}
+ bool process_planar_32(const int32_t*,size_t,uint8_t,const uint8_t*,int16_t*,int16_t*,int16_t*,uint8_t){assert(false);return false;}
  bool process_strided_32(const int32_t*p,int16_t*m,size_t n,uint8_t,uint8_t){uint8_t o=0;return convert(p,n,1,&o,nullptr,m,nullptr,1);}
  bool process(const int16_t*p,int16_t*m,size_t n){uint8_t o=0;return convert(p,n,1,&o,nullptr,m,nullptr,1);}
 };
@@ -59,6 +61,7 @@ struct AudioTaskCtx {
  int std_second_mic_slot=-1,ratio=2;
  AudioRxLayout rx_layout;
  bool need_rx_processing=true,need_rx_drain=false,clock_only_tx=true,need_tx_audio=false;
+ bool processor_planar_input=false;
 };
 struct ESPAudioStack {
  std::atomic<bool> has_i2s_error_{false},audio_stack_running_{true};

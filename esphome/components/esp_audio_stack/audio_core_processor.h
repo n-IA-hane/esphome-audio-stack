@@ -31,6 +31,9 @@ struct FrameSpec {
   uint8_t ref_channels{1};     // number of reference channels (0 or 1)
   size_t input_samples{512};   // per-channel samples expected by process()
   size_t output_samples{512};  // per-channel samples produced by process()
+  // Optional separate microphone planes, a capability fixed for this
+  // processor's lifetime so callers can reserve its maximum storage once.
+  bool supports_planar_input{false};
 };
 
 /// Snapshot of processor telemetry (thread-safe reads via atomics in impl).
@@ -86,6 +89,14 @@ class AudioProcessor {
   /// @return true if processed by DSP, false if not processed (implementation
   ///         may emit silence rather than raw audio)
   virtual bool process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out, uint8_t mic_channels_in) = 0;
+
+  /// Optional input contract, selected only when frame_spec() advertises it.
+  /// Each plane covers input_samples and remains borrowed until this returns.
+  /// The default keeps existing mono processors source-compatible.
+  virtual bool process_planar(const int16_t *const *in_mics, const int16_t *in_ref, int16_t *out,
+                             uint8_t mic_channels_in) {
+    return in_mics != nullptr && mic_channels_in == 1 && this->process(in_mics[0], in_ref, out, 1);
+  }
 
   /// Query how a feature can be controlled.
   virtual FeatureControl feature_control(AudioFeature feature) const = 0;

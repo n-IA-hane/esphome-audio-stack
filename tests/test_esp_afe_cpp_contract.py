@@ -34,15 +34,17 @@ def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
     assert "acquire_gmf_feed_slot_" in header
     assert "commit_gmf_feed_slot_" in header
 
-    gmf_start = cpp.index("const bool needs_feed_staging = process_chunksize != feed_chunksize;")
+    gmf_start = cpp.index("constexpr bool needs_feed_staging = false;")
     gmf_end = cpp.index("instance->feed_buf = feed_buf;", gmf_start)
     gmf_build = cpp[gmf_start:gmf_end]
-    assert "const bool needs_feed_staging = process_chunksize != feed_chunksize;" in gmf_build
+    assert "constexpr bool needs_feed_staging = false;" in gmf_build
     assert "if (needs_feed_staging)" in gmf_build
     assert "Failed to allocate staged feed buffer" in gmf_build
 
     process = cpp[cpp.index("bool EspAfe::process(") :]
-    assert "const bool gmf_direct_frame = gmf_path && offset == 0 && stage_samples == fs;" in process
+    assert "void *gmf_slot = this->staged_feed_slot_;" in process
+    assert "this->staged_feed_slot_ = static_cast<int16_t *>(gmf_slot);" in process
+    assert "staged_feed_slot_{nullptr}" in header
     assert "stage_afe_input_frame(static_cast<int16_t *>(gmf_slot)" in process
 
 

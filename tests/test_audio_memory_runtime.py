@@ -71,7 +71,7 @@ void *heap_caps_aligned_alloc(size_t a,size_t n,unsigned){++allocation_calls;voi
 void heap_caps_free(void*p){if(p){assert(allocations.erase(p));free(p);}}
 size_t live_bytes(){size_t n=0;for(auto [p,s]:allocations)n+=s;return n;}
 struct AudioTaskCtx {
- bool processor_spec_loaded=true,mic_separate=true,use_tdm_bus=true,use_stereo_aec_ref=false,use_tdm_ref=true,rx_slot_mode_stereo=false;
+ bool processor_spec_loaded=true,processor_planar_input=false,mic_separate=true,use_tdm_bus=true,use_stereo_aec_ref=false,use_tdm_ref=true,rx_slot_mode_stereo=false;
  unsigned speaker_channels=1,num_ch=1,ratio=1,i2s_bps=2;
  size_t rx_frame_bytes=1536,input_frame_bytes=512,speaker_frame_bytes=512,bus_frame_bytes=512,output_frame_bytes=512,bus_frame_size=256;
 };
@@ -100,6 +100,15 @@ int main(){
  const auto before=allocation_calls;const auto bytes=live_bytes();
  for(unsigned i=0;i<10;++i)assert(s.allocate_audio_buffers_(c));
  assert(allocation_calls==before&&live_bytes()==bytes);s.release_audio_buffers_();assert(allocations.empty());
+#ifndef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
+ // An opted-in planar processor borrows one secondary plane, not a duplicate
+ // primary plus secondary interleaved buffer. The reserve remains reusable.
+ c.processor_planar_input=true;assert(s.allocate_audio_buffers_(c));
+ assert(s.prealloc_processor_mic_buffer_bytes_==512);
+ const auto planar_before=allocation_calls;
+ for(unsigned i=0;i<10;++i)assert(s.allocate_audio_buffers_(c));
+ assert(allocation_calls==planar_before);s.release_audio_buffers_();assert(allocations.empty());
+#endif
  // Output-only hardware keeps its TX workspace but allocates no absent RX.
  s.rx=false;s.processor_=nullptr;s.tdm_second_mic_slot_=-1;c.processor_spec_loaded=false;
  c.use_tdm_ref=false;c.use_tdm_bus=false;c.rx_frame_bytes=512;

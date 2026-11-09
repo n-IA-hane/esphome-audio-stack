@@ -45,12 +45,13 @@ struct EspAfe {
  afe_config_t config{{2,1,mic_ids,1,ref_ids}};
  afe_config_t *afe_config_=&config;
  V observed,slot;int feed_chunksize_,total_channels_,staged_input_samples_=0,warmup_remaining_=0;
- int16_t* feed_buf_;void* feed_input_ring_;
+ int16_t* feed_buf_;int16_t* staged_feed_slot_=nullptr;void* feed_input_ring_;
  std::atomic<uint32_t> input_ring_drop_{0},feed_ok_{0},feed_rejected_{0},feed_queue_frames_{0},feed_queue_peak_{0};
  void* acquire_gmf_feed_slot_(size_t bytes,int){slot.assign(bytes/2,0);return slot.data();}
  bool commit_gmf_feed_slot_(void*){observed.insert(observed.end(),slot.begin(),slot.end());return true;}
  void process(int qs,const int16_t* in_mic,const int16_t* in_ref,int transport_mic_channels,int afe_mic_channels){
  const int fs=feed_chunksize_;int offset=staged_input_samples_;
+ const int primary_stride=transport_mic_channels;const int16_t*in_secondary=nullptr;
  const bool gmf_path=true;
 """
     checks = r"""
@@ -71,7 +72,7 @@ int main(){
   assert(afe.observed.size()==size_t(committed*2));
   for(int i=0;i<committed;i++){assert(afe.observed[2*i]==i);assert(afe.observed[2*i+1]==-i);}
   assert(afe.staged_input_samples_==total%fs);
-  for(int i=0;i<total%fs;i++){assert(storage[2*i]==committed+i);assert(storage[2*i+1]==-committed-i);}
+  for(int i=0;i<total%fs;i++){assert(afe.slot[2*i]==committed+i);assert(afe.slot[2*i+1]==-committed-i);}
   for(size_t i=feed_values;i<storage.size();i++)assert(storage[i]==0x5a5a);
   assert(afe.input_ring_drop_==0 && afe.feed_rejected_==0);
  }

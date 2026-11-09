@@ -126,7 +126,8 @@ class BitCvtHandle {
 };
 
 [[maybe_unused]] bool distribute_channels(int16_t *const *ch, uint8_t nch, size_t count, int16_t *mic_interleaved,
-                                          int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch) {
+                                          int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch,
+                                          int16_t *mic_secondary = nullptr) {
   if (nch == 0 || ch[0] == nullptr)
     return false;
   if (mic_mono != nullptr) {
@@ -139,6 +140,8 @@ class BitCvtHandle {
   }
 
   if (num_mic_ch >= 2 && nch >= 2) {
+    if (mic_secondary != nullptr && mic_secondary != ch[1])
+      memcpy(mic_secondary, ch[1], count * sizeof(int16_t));
     if (mic_interleaved != nullptr) {
       esp_ae_sample_t mic_in[2] = {ch[0], ch[1]};
       const esp_ae_err_t err = esp_ae_intlv_process(2, 16, static_cast<uint32_t>(count), mic_in, mic_interleaved);
@@ -374,7 +377,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
   void reset() { this->rate_cvt_.reset(); }
 
   bool prepare(size_t in_count, size_t out_count, uint8_t num_channels, uint8_t source_channels, bool source_32bit,
-               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1) {
+               int16_t *mic_mono = nullptr, int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1,
+               int16_t *mic_secondary = nullptr) {
     const uint8_t nch = std::min<uint8_t>(num_channels, MAX_RATE_CVT_CHANNELS);
     if (nch == 0 || nch != this->channels_ || source_channels == 0 || source_channels > MAX_DEINTLV_CH)
       return false;
@@ -384,7 +388,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
       return true;
     if (!this->ensure_deintlv_buffers_(nch, in_count))
       return false;
-    return this->ensure_output_buffers_(nch, out_count, mic_mono, ref_out, num_mic_ch) && this->rate_cvt_.ready();
+    return this->ensure_output_buffers_(nch, out_count, mic_mono, ref_out, num_mic_ch, mic_secondary) &&
+           this->rate_cvt_.ready();
   }
 
   bool process_multi(const int16_t *in, size_t out_count, size_t stride, const uint8_t *offsets,
@@ -398,10 +403,22 @@ class MultiChannelAudioEffectsRateConverterImpl {
     return this->process_multi_t_(in, out_count, stride, offsets, mic_interleaved, mic_mono, ref_out, num_mic_ch, true);
   }
 
+  bool process_planar(const int16_t *in, size_t out_count, size_t stride, const uint8_t *offsets,
+                      int16_t *mic_primary, int16_t *mic_secondary, int16_t *ref_out, uint8_t num_mic_ch) {
+    return this->process_multi_t_(in, out_count, stride, offsets, nullptr, mic_primary, ref_out, num_mic_ch,
+                                  false, mic_secondary);
+  }
+  bool process_planar_32(const int32_t *in, size_t out_count, size_t stride, const uint8_t *offsets,
+                         int16_t *mic_primary, int16_t *mic_secondary, int16_t *ref_out, uint8_t num_mic_ch) {
+    return this->process_multi_t_(in, out_count, stride, offsets, nullptr, mic_primary, ref_out, num_mic_ch,
+                                  true, mic_secondary);
+  }
+
  private:
   template<typename T>
   bool process_multi_t_(const T *in, size_t out_count, size_t stride, const uint8_t *offsets, int16_t *mic_interleaved,
-                        int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch, bool source_32bit) {
+                        int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch, bool source_32bit,
+                        int16_t *mic_secondary = nullptr) {
     const size_t in_count = out_count * this->ratio_;
     if (in == nullptr || offsets == nullptr || stride == 0 || stride > MAX_DEINTLV_CH || this->channels_ == 0)
       return false;
@@ -417,7 +434,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
       } else {
         samples = reinterpret_cast<const int16_t *>(in);
       }
-      this->distribute_strided_(samples, out_count, stride, offsets, mic_interleaved, mic_mono, ref_out, num_mic_ch);
+      this->distribute_strided_(samples, out_count, stride, offsets, mic_interleaved, mic_mono, ref_out, num_mic_ch,
+                                mic_secondary);
       return true;
     }
     if (!this->deinterleave_selected_(in, in_count, stride, offsets, source_32bit))
@@ -434,18 +452,21 @@ class MultiChannelAudioEffectsRateConverterImpl {
     // Keep the first channel separate until those two outputs are delivered.
     if (mic_interleaved != nullptr && num_mic_ch >= 2) mono_destination = nullptr;
 #endif
-    if (!this->ensure_output_buffers_(this->channels_, out_count, mono_destination, ref_out, num_mic_ch))
+    if (!this->ensure_output_buffers_(this->channels_, out_count, mono_destination, ref_out, num_mic_ch,
+                                      mic_secondary))
       return false;
     // Borrowed destinations are local to this call. Only out_ch_ owns memory
     // and the destructor never sees a pointer owned by the Audio Stack parent.
     int16_t *outputs[MAX_RATE_CVT_CHANNELS]{};
     for (uint8_t c = 0; c < this->channels_; c++) {
       outputs[c] = c == 0 && mono_destination != nullptr ? mono_destination
+                   : c == 1 && mic_secondary != nullptr ? mic_secondary
                    : c == num_mic_ch && ref_out != nullptr ? ref_out : this->out_ch_[c];
     }
     if (!this->rate_cvt_.process_deintlv(selected, in_count, outputs, out_count, "multi"))
       return false;
-    return distribute_channels(outputs, this->channels_, out_count, mic_interleaved, mic_mono, ref_out, num_mic_ch);
+    return distribute_channels(outputs, this->channels_, out_count, mic_interleaved, mic_mono, ref_out, num_mic_ch,
+                               mic_secondary);
   }
 
   template<typename T>
@@ -462,7 +483,8 @@ class MultiChannelAudioEffectsRateConverterImpl {
   }
 
   void distribute_strided_(const int16_t *in, size_t count, size_t stride, const uint8_t *offsets,
-                           int16_t *interleaved, int16_t *mono, int16_t *ref, uint8_t mic_channels) const {
+                           int16_t *interleaved, int16_t *mono, int16_t *ref, uint8_t mic_channels,
+                           int16_t *secondary = nullptr) const {
     const bool dual = mic_channels >= 2 && this->channels_ >= 2;
     if (mono != nullptr) {
       for (size_t i = 0; i < count; i++) {
@@ -479,6 +501,9 @@ class MultiChannelAudioEffectsRateConverterImpl {
         interleaved[2 * i] = in[i * stride + offsets[0]];
         interleaved[2 * i + 1] = in[i * stride + offsets[1]];
       }
+    }
+    if (dual && secondary != nullptr) {
+      for (size_t i = 0; i < count; i++) secondary[i] = in[i * stride + offsets[1]];
     }
     if (ref != nullptr && this->channels_ > mic_channels) {
       for (size_t i = 0; i < count; i++) ref[i] = in[i * stride + offsets[mic_channels]];
@@ -517,9 +542,11 @@ class MultiChannelAudioEffectsRateConverterImpl {
   }
 
   bool ensure_output_buffers_(uint8_t channels, size_t out_count, int16_t *mic_mono = nullptr,
-                              int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1) {
+                              int16_t *ref_out = nullptr, uint8_t num_mic_ch = 1,
+                              int16_t *mic_secondary = nullptr) {
     for (uint8_t c = 0; c < channels; c++) {
-      if ((c == 0 && mic_mono != nullptr) || (c == num_mic_ch && ref_out != nullptr)) continue;
+      if ((c == 0 && mic_mono != nullptr) || (c == 1 && mic_secondary != nullptr) ||
+          (c == num_mic_ch && ref_out != nullptr)) continue;
       if (!ensure_buffer(this->out_ch_[c], this->out_cap_[c], out_count, "MCRateCvt"))
         return false;
     }
@@ -576,9 +603,9 @@ void MultiChannelAudioEffectsRateConverter::init(uint32_t ratio, uint8_t num_cha
 void MultiChannelAudioEffectsRateConverter::reset() { this->impl_->reset(); }
 bool MultiChannelAudioEffectsRateConverter::prepare(size_t in_count, size_t out_count, uint8_t num_channels,
                                                     uint8_t source_channels, bool source_32bit, int16_t *mic_mono,
-                                                    int16_t *ref_out, uint8_t num_mic_ch) {
+                                                    int16_t *ref_out, uint8_t num_mic_ch, int16_t *mic_secondary) {
   return this->impl_->prepare(in_count, out_count, num_channels, source_channels, source_32bit,
-                              mic_mono, ref_out, num_mic_ch);
+                              mic_mono, ref_out, num_mic_ch, mic_secondary);
 }
 bool MultiChannelAudioEffectsRateConverter::process_multi(const int16_t *in, size_t out_count, size_t in_stride,
                                                           const uint8_t *channel_offsets, int16_t *mic_interleaved,
@@ -591,6 +618,16 @@ bool MultiChannelAudioEffectsRateConverter::process_multi_32(const int32_t *in, 
                                                              int16_t *mic_mono, int16_t *ref_out, uint8_t num_mic_ch) {
   return this->impl_->process_multi_32(in, out_count, in_stride, channel_offsets, mic_interleaved, mic_mono, ref_out,
                                        num_mic_ch);
+}
+bool MultiChannelAudioEffectsRateConverter::process_planar(const int16_t *in, size_t out_count, size_t in_stride,
+                                                           const uint8_t *offsets, int16_t *primary,
+                                                           int16_t *secondary, int16_t *ref, uint8_t mics) {
+  return this->impl_->process_planar(in, out_count, in_stride, offsets, primary, secondary, ref, mics);
+}
+bool MultiChannelAudioEffectsRateConverter::process_planar_32(const int32_t *in, size_t out_count, size_t in_stride,
+                                                              const uint8_t *offsets, int16_t *primary,
+                                                              int16_t *secondary, int16_t *ref, uint8_t mics) {
+  return this->impl_->process_planar_32(in, out_count, in_stride, offsets, primary, secondary, ref, mics);
 }
 #endif
 
