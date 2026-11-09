@@ -1,0 +1,136 @@
+// Only vendor construction, scheduler and memory/I/O primitives are adapters.
+// The test appends the production rebuild, install and ring preparation methods.
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <string>
+#define USE_ESP_AFE_GMF_PATH
+#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
+#define ESP_LOGD(...) ((void)0)
+#define pdMS_TO_TICKS(x) (x)
+using TickType_t=uint32_t;using esp_gmf_err_io_t=int;
+constexpr int pdTRUE=1,ESP_GMF_IO_OK=0,ESP_GMF_IO_FAIL=-1,ESP_GMF_IO_ABORT=-2,ESP_GMF_IO_TIMEOUT=-3;
+constexpr bool ESP_AFE_TIMING_TELEMETRY=false;
+constexpr unsigned CONFIG_MUTEX_TIMEOUT=250,DRAIN_WAIT_TIMEOUT=50,REINIT_STAGE_WARN_US=50000;
+constexpr unsigned MALLOC_CAP_SPIRAM=1,MALLOC_CAP_INTERNAL=2,MALLOC_CAP_8BIT=4;
+constexpr unsigned RINGBUFFER_ITEM_HEADER_BYTES=8,BRIDGE_RING_FRAMES=3,RINGBUF_TYPE_NOSPLIT=1;
+using esp_gmf_err_t=int;
+constexpr int ESP_GMF_ERR_OK=0,ESP_GMF_ERR_FAIL=-1,ESP_AFE_FEATURE_AEC=1,ESP_AFE_FEATURE_VAD=2;
+std::string failure;int live_allocations=0;unsigned notifications=0;
+void *heap_caps_malloc(size_t size,unsigned){
+ if(failure=="feed")return nullptr;
+ auto *p=std::calloc(1,size);if(p)++live_allocations;return p;
+}
+void heap_caps_free(void*p){if(p){--live_allocations;std::free(p);}}
+struct Ring {
+ alignas(16) uint8_t data[64];size_t bytes=0,pending=0;void reset(){bytes=0;}
+ size_t available()const{return bytes;}
+ size_t write_without_replacement(const void*p,size_t n,unsigned,bool){assert(bytes+n<=sizeof(data));std::memcpy(data+bytes,p,n);bytes+=n;return n;}
+};
+using StaticRingbuffer_t=Ring;
+Ring*xRingbufferCreateStatic(size_t,unsigned,uint8_t*,StaticRingbuffer_t*ring){return ring;}
+int xRingbufferSendAcquire(Ring*r,void**p,size_t n,unsigned){assert(n<=sizeof(r->data));*p=r->data;r->pending=n;return pdTRUE;}
+int xRingbufferSendComplete(Ring*r,void*p){assert(p==r->data);r->bytes=r->pending;return pdTRUE;}
+int xRingbufferSend(Ring*r,const void*p,size_t n,unsigned){return r->write_without_replacement(p,n,0,false)>0;}
+void*xRingbufferReceive(Ring*r,size_t*n,unsigned){*n=r->bytes;return r->bytes?r->data:nullptr;}
+void vRingbufferReturnItem(Ring*r,void*){r->bytes=0;}
+template<class T>void diag_add(std::atomic<T>&v,uint32_t n=1){v.store(v.load()+n);}
+template<class T>uint32_t diag_increment_and_get(std::atomic<T>&v){auto n=v.load()+1;v.store(n);return n;}
+template<class T>void update_peak_atomic(std::atomic<T>&v,uint32_t n){v.store(std::max<uint32_t>(v.load(),n));}
+template<class T>void decrement_if_nonzero(std::atomic<T>&v){if(v.load())v.store(v.load()-1);}
+namespace esp_audio_stack {
+struct ScopedLock {ScopedLock(void*,unsigned){}explicit operator bool()const{return true;}};
+std::unique_ptr<Ring>create_internal(size_t,const char*){return failure=="fetch"?nullptr:std::make_unique<Ring>();}
+std::unique_ptr<Ring>create_prefer_psram(size_t n,const char*s){return create_internal(n,s);}
+std::unique_ptr<Ring>create_nosplit_internal(size_t n,const char*s){return create_internal(n,s);}
+std::unique_ptr<Ring>create_nosplit_prefer_psram(size_t n,const char*s){return create_internal(n,s);}
+}
+void*xSemaphoreCreateMutex(){return reinterpret_cast<void*>(1);}
+int64_t esp_timer_get_time(){static int64_t now=0;return ++now;}
+void xTaskNotifyGive(void*){++notifications;}
+struct Manager {bool aec=false,vad=false;};
+unsigned registered_starts=0;
+template<class CB>int esp_gmf_afe_manager_set_result_cb(Manager*,CB,void*){return 0;}
+template<class CB>int esp_gmf_afe_manager_set_read_cb(Manager*,CB callback,void*){
+ if(callback!=nullptr){if(failure=="start")return -1;++registered_starts;}return 0;
+}
+int esp_gmf_afe_manager_suspend(Manager*,bool){return 0;}
+using esp_gmf_afe_manager_handle_t=Manager*;
+struct esp_gmf_afe_manager_features_t {bool vad=false;};
+int esp_gmf_afe_manager_get_features(Manager*m,esp_gmf_afe_manager_features_t*f){assert(m);f->vad=m->vad;return 0;}
+int esp_gmf_afe_manager_enable_features(Manager*m,int feature,bool enable){
+ assert(m);
+ if(feature==ESP_AFE_FEATURE_AEC){if(failure=="aec")return -1;m->aec=enable;return int(enable);}
+ if(failure=="vad")return -1;m->vad=enable;return 0;
+}
+struct afe_pcm_config_t{int total_ch_num,mic_num;uint8_t*mic_ids;int ref_num;uint8_t*ref_ids;};
+uint8_t mic_ids[]={0};
+struct afe_config_t{afe_pcm_config_t pcm_config{1,1,mic_ids,0,nullptr};};
+struct esp_gmf_payload_t{void*buf;size_t buf_length,valid_size;};
+// STAGING_HELPER
+struct EspAfe {
+ struct AfeInstance {
+  Manager*manager=nullptr;afe_config_t*config=nullptr;int16_t*feed_buf=nullptr;
+  int feed_chunksize=0,fetch_chunksize=0,process_chunksize=0,total_channels=0;
+ };
+ Manager*afe_manager_=nullptr;afe_config_t*afe_config_=nullptr;int16_t*feed_buf_=nullptr;
+ int feed_chunksize_=0,fetch_chunksize_=0,process_chunksize_=0,total_channels_=0,staged_input_samples_=0;
+ bool afe_pipeline_running_=false,afe_pipeline_paused_=false,feed_ring_in_psram_=false,fetch_ring_in_psram_=false;
+ uint8_t*feed_input_ring_storage_=nullptr;StaticRingbuffer_t*feed_input_ring_struct_=nullptr;
+ Ring*feed_input_ring_=nullptr;std::unique_ptr<Ring>fetch_output_ring_;
+ void*config_mutex_=this;void*reconfigure_task_handle_=this;
+ std::atomic<bool> instance_ready_{false},afe_stopped_{false},processing_active_{false},drain_request_{false};
+ std::atomic<bool> aec_enabled_{false},ns_enabled_{false},agc_enabled_{false},vad_enabled_{false},se_enabled_{false};
+ std::atomic<bool> voice_present_{false},activity_pending_{false};
+ std::atomic<uint32_t> processing_request_{0},manager_epoch_{0},frame_spec_revision_{0};
+ std::atomic<int>last_spec_process_size_{0},last_spec_fetch_size_{0},last_spec_mic_ch_{0};
+ int afe_type_=0,afe_mode_=0,warmup_remaining_=0;unsigned&starts=registered_starts;
+ // COUNTERS
+ bool is_se_enabled()const{return se_enabled_;}
+ // ALL_FEATURES
+ bool is_initialized()const{return instance_ready_;}
+ bool accepting_processing_()const{return processing_active_&&(processing_request_.load()&1U);}
+ bool quiesce_process_(unsigned){drain_request_=true;return true;}
+ void reset_output_prebuffer_(){}
+ void log_memory_snapshot_(const char*){}
+ int afe_mic_channels_()const{return 1;}
+ bool build_instance_(AfeInstance*p){
+  p->manager=new Manager;p->config=new afe_config_t;p->feed_chunksize=4;p->fetch_chunksize=4;
+  p->process_chunksize=4;p->total_channels=1;return true;
+ }
+ void destroy_instance_(AfeInstance*p){delete p->manager;delete p->config;*p={};}
+ bool start_pipeline_();bool pause_pipeline_();void stop_pipeline_();void drain_feed_input_ring_();
+ void flush_pipeline_before_stop_(){}
+ void update_fetch_ring_free_pct_(){}
+ static int manager_read_cb_(void*,int,void*,unsigned){return 0;}
+ static void manager_result_cb_(void*,void*){}
+ void*acquire_gmf_feed_slot_(size_t,TickType_t);bool commit_gmf_feed_slot_(void*);
+ esp_gmf_err_io_t gmf_input_acquire_(esp_gmf_payload_t*,uint32_t,int);
+ esp_gmf_err_io_t gmf_output_release_(esp_gmf_payload_t*,int);
+ bool retire_processing_session_(){
+  auto old=detach_instance_();destroy_instance_(&old);release_runtime_buffers_();
+  manager_epoch_=processing_request_.load()>>1;return true;
+ }
+ void feed_frame(const int16_t*in_mic){
+  const int qs=process_chunksize_,fs=feed_chunksize_,transport_mic_channels=1;
+  const int16_t*in_ref=nullptr;const bool gmf_path=feed_input_ring_!=nullptr;int offset=staged_input_samples_;
+  // STAGING
+ }
+ void pump_frame(){
+  assert(instance_ready_&&processing_active_&&afe_pipeline_running_&&feed_input_ring_&&fetch_output_ring_);
+  int16_t pcm[4]{};esp_gmf_payload_t payload{pcm,sizeof(pcm),0};
+  assert(gmf_input_acquire_(&payload,sizeof(pcm),0)==ESP_GMF_IO_OK);
+  assert(gmf_output_release_(&payload,0)==ESP_GMF_IO_OK);
+ }
+ void cleanup(){auto old=detach_instance_();destroy_instance_(&old);release_runtime_buffers_();}
+ bool install_instance_(AfeInstance*);AfeInstance detach_instance_();bool recreate_instance_(bool);
+ bool prepare_feed_input_ring_();bool prepare_fetch_output_ring_();bool prepare_runtime_();void release_runtime_buffers_();
+ bool set_vad_enabled_runtime_(bool);bool set_aec_enabled_runtime_(bool);
+ bool set_reinit_flag_(std::atomic<bool>&,bool,const char*);bool service_processing_request_();
+};

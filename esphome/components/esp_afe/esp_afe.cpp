@@ -622,6 +622,7 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 EspAfe::AfeInstance EspAfe::detach_instance_() {
   // The drain handshake has quiesced process(). Detach manager callbacks before
   // handing ownership to destroy_instance_ or reusing the output buffers.
+  this->processing_active_.store(false, std::memory_order_release);
   this->stop_pipeline_();
   this->instance_ready_.store(false, std::memory_order_release);
 
@@ -873,7 +874,8 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
 }
 
 bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
-  if (this->aec_enabled_.load(std::memory_order_relaxed) == enabled) {
+  const bool old_value = this->aec_enabled_.load(std::memory_order_relaxed);
+  if (old_value == enabled) {
     return true;
   }
   if (this->config_mutex_ == nullptr) {
@@ -888,7 +890,9 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     if (!enabled) {
       return true;  // nothing to rebuild
     }
-    return this->recreate_instance_(false);
+    if (this->recreate_instance_(false)) return true;
+    this->aec_enabled_.store(old_value, std::memory_order_relaxed);
+    return false;
   }
 
   // Hold the config mutex only across the enable/disable call. The
@@ -946,7 +950,8 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
 }
 
 bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
-  if (this->vad_enabled_.load(std::memory_order_relaxed) == enabled) {
+  const bool old_value = this->vad_enabled_.load(std::memory_order_relaxed);
+  if (old_value == enabled) {
     return true;
   }
   if (this->config_mutex_ == nullptr) {
@@ -973,7 +978,9 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
       this->voice_present_.store(false, std::memory_order_relaxed);
       return true;
     }
-    return this->recreate_instance_(false);
+    if (this->recreate_instance_(false)) return true;
+    this->vad_enabled_.store(old_value, std::memory_order_relaxed);
+    return false;
   }
 
   bool needs_rebuild = false;
@@ -1020,7 +1027,8 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
 }
 
 bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char *name) {
-  if (flag.load(std::memory_order_relaxed) == enabled) {
+  const bool old_value = flag.load(std::memory_order_relaxed);
+  if (old_value == enabled) {
     return true;
   }
   // ESP-SR can legitimately change the feed/fetch quantum when NS/AGC are
@@ -1034,7 +1042,9 @@ bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char 
     if (!enabled) {
       return true;  // stays torn down
     }
-    return this->recreate_instance_(false);
+    if (this->recreate_instance_(false)) return true;
+    flag.store(old_value, std::memory_order_relaxed);
+    return false;
   }
   if (this->config_mutex_ == nullptr) {
     // Before setup: commit immediately; the first build will use the value.
@@ -1047,7 +1057,6 @@ bool EspAfe::set_reinit_flag_(std::atomic<bool> &flag, bool enabled, const char 
   // The mutex in recreate_instance_ ensures process() either sees the old
   // instance or the new one, never a mix.
   //
-  bool old_value = flag.load(std::memory_order_relaxed);
   flag.store(enabled, std::memory_order_relaxed);
   ESP_LOGI(TAG, "Applying %s=%s (rebuild, frame_size_change=%s)", name, enabled ? "true" : "false",
            allow_frame_change ? "allowed" : "locked");
@@ -2089,7 +2098,7 @@ bool EspAfe::service_processing_request_() {
     if (!this->retire_processing_session_()) return false;
   }
   if ((this->processing_request_.load(std::memory_order_acquire) & 1U) == 0 ||
-      this->afe_stopped_.load(std::memory_order_acquire)) return true;
+      (this->afe_stopped_.load(std::memory_order_acquire) && this->all_features_disabled_())) return true;
   if (!this->is_initialized() && !this->recreate_instance_(false)) return false;
 
   esp_audio_stack::ScopedLock lock(this->config_mutex_, CONFIG_MUTEX_TIMEOUT);
@@ -2177,9 +2186,8 @@ bool EspAfe::prepare_fetch_output_ring_() {
 }
 
 bool EspAfe::prepare_runtime_() {
-  if (this->afe_stopped_.load(std::memory_order_acquire)) {
-    return true;
-  }
+  // Resources follow the newly installed manager. afe_stopped_ still describes
+  // the previous published instance until the complete rebuild commits.
   this->log_memory_snapshot_("before_afe_prepare_runtime");
 #ifdef USE_ESP_AFE_GMF_PATH
   if (!this->prepare_feed_input_ring_()) {
