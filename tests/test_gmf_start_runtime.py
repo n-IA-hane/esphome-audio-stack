@@ -68,25 +68,47 @@ int main(){
 
 
 def test_rebuilt_manager_reopens_only_current_requested_acquisition(tmp_path):
-    """Exercise the install admission block with the current consumer intent.
+    """Apply features before admitting the current acquisition to callbacks.
 
-    Resource allocation and algorithm construction precede this block and are
-    not modeled. It must also resume a still-live consumer after all-off.
+    Resource allocation and algorithm construction precede these blocks and
+    are not modeled. Failed feature acknowledgement must prevent start.
     """
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
-    start = source.index("  const uint32_t request =", source.index("bool EspAfe::install_instance_("))
+    helper_start = source.index("static esp_gmf_err_t apply_vad_intent(")
+    helper = source[helper_start : source.index("\n}\n", helper_start) + 2]
+    start = source.index("  const bool aec_requested =", source.index("bool EspAfe::install_instance_("))
     end = source.index("\n  return true;", start)
     admission = source[start:end]
     harness = r"""
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <initializer_list>
 #define ESP_LOGE(...)
+using esp_gmf_err_t=int;
+constexpr int ESP_GMF_ERR_OK=0,ESP_GMF_ERR_FAIL=-2,ESP_AFE_FEATURE_AEC=1,ESP_AFE_FEATURE_VAD=2;
+struct Manager{bool aec=false,vad=false,ignore_vad=false;int fail_feature=0,query_result=0;};
+using esp_gmf_afe_manager_handle_t=Manager*;
+struct esp_gmf_afe_manager_features_t{bool vad;};
+int esp_gmf_afe_manager_get_features(Manager*m,esp_gmf_afe_manager_features_t*f){
+ f->vad=m->vad;return m->query_result;
+}
+int esp_gmf_afe_manager_enable_features(Manager*m,int feature,bool enabled){
+ if(m->fail_feature==feature)return -1;
+ if(feature==ESP_AFE_FEATURE_AEC){m->aec=enabled;return static_cast<int>(enabled);}
+ assert(feature==ESP_AFE_FEATURE_VAD);if(!m->ignore_vad)m->vad=enabled;
+ return 0; // GMF returns reset_vad's result, independently of toggle acknowledgement.
+}
+// PRODUCTION_VAD_HELPER
 struct EspAfe {
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0};
- std::atomic<bool> processing_active_{false};
+ std::atomic<bool> processing_active_{false},aec_enabled_{true},vad_enabled_{true};
+ Manager manager;Manager*afe_manager_=&manager;
  bool allow_start=true;unsigned starts=0,cleanups=0;
- bool start_pipeline_(){++starts;return allow_start;}
+ bool start_pipeline_(){
+  assert(manager.aec==aec_enabled_.load()&&manager.vad==vad_enabled_.load());
+  ++starts;return allow_start;
+ }
  bool install(){
   auto cleanup_failed_install=[this]{++cleanups;return false;};
 """
@@ -109,10 +131,22 @@ int main(){
  assert(!afe.install()&&afe.starts==2&&!afe.processing_active_&&afe.cleanups==1);
  afe.allow_start=true;
  assert(afe.install()&&afe.starts==3&&afe.processing_active_);
+ for(bool aec:{false,true})for(bool vad:{false,true}){
+  afe.aec_enabled_=aec;afe.vad_enabled_=vad;
+  assert(afe.install()&&afe.processing_active_);
+  assert(afe.manager.aec==aec&&afe.manager.vad==vad);
+ }
+ for(int failure:{1,2,3,4}){
+  EspAfe failed;failed.processing_request_=1;
+  if(failure<=2)failed.manager.fail_feature=failure;
+  if(failure==3)failed.manager.ignore_vad=true;
+  if(failure==4)failed.manager.query_result=-1;
+  assert(!failed.install()&&failed.starts==0&&failed.cleanups==1);
+ }
 }
 """
     cpp = tmp_path / "install_admission.cpp"
-    cpp.write_text(harness + admission + checks)
+    cpp.write_text(harness.replace("// PRODUCTION_VAD_HELPER", helper) + admission + checks)
     binary = tmp_path / "install_admission"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

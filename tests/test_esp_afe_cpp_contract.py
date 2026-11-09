@@ -110,8 +110,11 @@ def test_manager_features_are_ready_before_callbacks_can_run() -> None:
 
     assert "cfg->vad_init = true;" in cpp
     assert "gmf_vad_state_pending_" not in header + cpp
+    helper_start = cpp.index("static esp_gmf_err_t apply_vad_intent(")
+    helper = cpp[helper_start : cpp.index("\n}\n", helper_start)]
+    assert "esp_gmf_afe_manager_enable_features(manager, ESP_AFE_FEATURE_VAD, enabled)" in helper
     install = cpp[cpp.index("bool EspAfe::install_instance_(") : cpp.index("EspAfe::AfeInstance EspAfe::detach_instance_")]
-    assert install.index("ESP_AFE_FEATURE_VAD") < install.index("this->start_pipeline_()")
+    assert install.index("apply_vad_intent(this->afe_manager_, this->vad_enabled_.load(") < install.index("this->start_pipeline_()")
     assert install.index("ESP_AFE_FEATURE_AEC") < install.index("this->start_pipeline_()")
     assert "cfg->wakenet_init = false;" in cpp
     assert "cfg->wakenet_model_name = nullptr;" in cpp

@@ -130,6 +130,9 @@ def test_aw88298_reset_adapter_lifetime(tmp_path):
         "bool CodecDevBackend::read_layout_",
         "bool CodecDevBackend::tx_dma_layout_matches",
         "bool CodecDevBackend::open(",
+        "float CodecDevBackend::normalize_input_gain(",
+        "void CodecDevBackend::set_es7210_config(",
+        "void CodecDevBackend::set_input_codec_config(",
         "bool CodecDevBackend::set_input_gain(",
         "bool CodecDevBackend::set_input_channel_gain(",
         "void CodecDevBackend::close()",
@@ -146,11 +149,13 @@ def test_aw88298_reset_adapter_lifetime(tmp_path):
     cpp = tmp_path / "codec.cpp"
     cpp.write_text(fixture)
     binary = tmp_path / "codec"
-    subprocess.run([
+    result = subprocess.run([
         "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter",
         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(cpp), "-o", str(binary),
-    ], check=True, capture_output=True, text=True)
-    subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_aw88298_disabled_keeps_backend_configuration_budget(tmp_path):
