@@ -1656,16 +1656,19 @@ void ESPAudioStack::stop() {
 
   // Consumers stay registered across stop()/start() so the mic path is
   // reconnected automatically after an internal restart (frame_spec change).
-  if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
-    this->speaker_idle_callback_.call();
-    this->update_runtime_state_();
-  }
+  const bool speaker_was_running = this->speaker_running_.exchange(false, std::memory_order_relaxed);
+  this->audio_stack_running_.store(false, std::memory_order_release);
 #ifdef USE_AUDIO_PROCESSOR
   if (this->processor_ != nullptr) {
     this->processor_->set_processing_active(false);
   }
 #endif
-  this->audio_stack_running_.store(false, std::memory_order_relaxed);
+  // All stop state is committed before synchronous automation can start the
+  // next session. No later stop store may overwrite that new request.
+  if (speaker_was_running) {
+    this->speaker_idle_callback_.call();
+    this->update_runtime_state_();
+  }
   this->idle_callback_.call();
 
   // The audio task closes I2S after the current frame or pending open completes.
@@ -1673,7 +1676,6 @@ void ESPAudioStack::stop() {
 }
 
 bool ESPAudioStack::register_mic_consumer(void *token) {
-  bool needs_start = false;
   size_t count_after = 0;
   bool first_consumer = false;
   bool full = false;
@@ -1693,7 +1695,6 @@ bool ESPAudioStack::register_mic_consumer(void *token) {
       this->mic_consumers_[this->mic_consumer_count_++] = token;
       count_after = this->mic_consumer_count_;
       this->has_mic_consumers_.store(true, std::memory_order_relaxed);
-      needs_start = !this->audio_stack_running_.load(std::memory_order_relaxed);
     }
   }
   if (full) {
@@ -1707,14 +1708,18 @@ bool ESPAudioStack::register_mic_consumer(void *token) {
     // consumer is also starting the stack, start() will wake the audio task
     // first and then enable the processor so AFE has input frames available.
 #ifdef USE_AUDIO_PROCESSOR
-    if (!needs_start && this->processor_ != nullptr) {
+    if (this->has_mic_consumers_.load(std::memory_order_acquire) &&
+        this->audio_stack_running_.load(std::memory_order_acquire) && this->processor_ != nullptr) {
       this->processor_->set_processing_active(true);
     }
 #endif
   } else {
     ESP_LOGD(TAG, "Mic consumer registered (token=%p, consumers=%zu)", token, count_after);
   }
-  if (needs_start) {
+  // A mic-start automation can synchronously unregister this consumer. Its
+  // resulting demand supersedes the registry snapshot preceding the callback.
+  if (this->has_mic_consumers_.load(std::memory_order_acquire) &&
+      !this->audio_stack_running_.load(std::memory_order_acquire)) {
     this->start();
   }
   if (first_consumer) {
