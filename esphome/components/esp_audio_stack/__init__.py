@@ -332,13 +332,15 @@ def _validate_tdm_config(config):
         if len(set(mic_slots)) != len(mic_slots):
             raise cv.Invalid("tdm_mic_slots must not contain duplicates")
 
-        for mic_slot in mic_slots:
-            if mic_slot == ref_slot:
-                raise cv.Invalid(
-                    f"tdm_mic_slots contains ref slot {ref_slot}; microphone and reference slots must differ"
-                )
+        if use_tdm and ref_slot in mic_slots:
+            raise cv.Invalid(
+                f"tdm_mic_slots contains ref slot {ref_slot}; microphone and reference slots must differ"
+            )
 
-        max_slot = max([ref_slot, tx_slot, *mic_slots])
+        active_slots = [tx_slot, *mic_slots]
+        if use_tdm:
+            active_slots.append(ref_slot)
+        max_slot = max(active_slots)
         if total_slots <= max_slot:
             raise cv.Invalid(
                 f"tdm_total_slots ({total_slots}) must be > {max_slot} "
