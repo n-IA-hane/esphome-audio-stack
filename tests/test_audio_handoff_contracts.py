@@ -37,7 +37,7 @@ def test_directional_io_failure_is_not_cleared_by_other_direction(tmp_path, fail
     pipeline=(COMPONENT/'audio_pipeline.cpp').read_text()
     code=completion_source().split('int main(int argc,char**argv)')[0]
     code=code.replace('struct AudioTaskCtx{uint8_t speaker_channels=1;',
-                      'struct AudioTaskCtx{int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16;int consecutive_rx_errors=0,invalid_rx_state_errors=0;uint8_t speaker_channels=1;')
+                      'struct AudioTaskCtx{int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16,rx_pending_bytes=0,bus_frame_size=8;int consecutive_rx_errors=0,invalid_rx_state_errors=0;uint8_t speaker_channels=1;')
     code=code.replace(' bool write_tx_frame_(AudioTaskCtx&',
                       ' bool read_rx_frame_(AudioTaskCtx&,const char*);void *rx_handle_=this;\n bool write_tx_frame_(AudioTaskCtx&')
     adapter="int rx_error=0;int i2s_channel_read(void*,void*,size_t n,size_t *read,unsigned){*read=rx_error?0:n;return rx_error;}\n"
@@ -54,14 +54,14 @@ def test_directional_io_failure_is_not_cleared_by_other_direction(tmp_path, fail
     elif invalid_state:
         code+=r"""
 int main(){Rig r;i2s_event_data_t bad{nullptr,r.pcm[0].data(),1};r.stack.tx_on_sent_callback(&r.driver,&bad,&r.stack);
- r.stack.drain_tx_completion_events_();assert(r.stack.read_rx_frame_(r.ctx,"healthy"));
+ r.stack.drain_tx_completion_events_();assert(!r.stack.read_rx_frame_(r.ctx,"healthy"));
  assert(r.stack.has_i2s_error_&&!r.stack.audio_stack_running_&&"healthy RX must not mask TX geometry failure");}
 """
     else:
         code+=r"""
 int main(){Rig r;for(unsigned i=0;i<Rig::N;i++)r.write(false);
  uint8_t pcm[Rig::BYTES]{};assert(!r.stack.write_tx_dma_blocks_(r.ctx,pcm,Rig::BYTES,0));
- assert(r.stack.read_rx_frame_(r.ctx,"healthy"));
+ assert(!r.stack.read_rx_frame_(r.ctx,"healthy"));
  assert(r.stack.has_i2s_error_&&!r.stack.audio_stack_running_&&"missing TX clock must end bounded admission");}
 """
     run_cpp(tmp_path,code)

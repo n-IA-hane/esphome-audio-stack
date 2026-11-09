@@ -814,6 +814,11 @@ void ESPAudioStack::audio_session_() {
       this->drain_rx_minimal_(ctx);
     }
 
+    // Fatal RX errors retire this period before AFE or playback can consume
+    // its invalid PCM. An ordinary partial read keeps the TX clock moving.
+    if (!this->audio_stack_running_.load(std::memory_order_relaxed))
+      break;
+
     if (ctx.need_rx_processing) {
       this->process_aec_and_callbacks_(ctx);
     }
@@ -951,10 +956,30 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
   const bool io_closed = !this->codec_backend_.is_open();
 #else
   size_t bytes_read = 0;
+  const uint32_t timeout_ms = std::max<uint32_t>(
+      1, (static_cast<uint64_t>(ctx.bus_frame_size) * 1000 + this->sample_rate_ - 1) / this->sample_rate_);
+  const size_t remaining = ctx.rx_frame_bytes - ctx.rx_pending_bytes;
   const esp_err_t read_err =
-      i2s_channel_read(this->rx_handle_, ctx.rx_buffer, ctx.rx_frame_bytes, &bytes_read, portMAX_DELAY);
-  const bool read_ok = read_err == ESP_OK && bytes_read == ctx.rx_frame_bytes;
+      i2s_channel_read(this->rx_handle_, reinterpret_cast<uint8_t *>(ctx.rx_buffer) + ctx.rx_pending_bytes,
+                       remaining, &bytes_read, timeout_ms);
+  ctx.rx_pending_bytes += bytes_read;
+  const bool read_ok = read_err == ESP_OK && ctx.rx_pending_bytes == ctx.rx_frame_bytes;
   const bool io_closed = read_err == ESP_ERR_INVALID_STATE;
+  if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
+    ctx.rx_pending_bytes = 0;
+    return false;
+  }
+  if (read_ok) {
+    ctx.rx_pending_bytes = 0;
+  } else if ((read_err == ESP_ERR_TIMEOUT || read_err == ESP_OK) && bytes_read > 0) {
+    // IDF already consumed these bytes. Discarding them would split/reorder
+    // PCM at the next read. Progress is not a broken clock or an I/O error.
+    ctx.consecutive_rx_errors = 0;
+    ctx.invalid_rx_state_errors = 0;
+    return false;
+  } else if (read_err != ESP_ERR_TIMEOUT) {
+    ctx.rx_pending_bytes = 0;
+  }
 #endif
   if (!read_ok && io_closed) {
     if (this->audio_stack_running_.load(std::memory_order_relaxed)) {
@@ -1017,6 +1042,8 @@ void ESPAudioStack::process_rx_path_(AudioTaskCtx &ctx) {
   ctx.output_buffer = ctx.mic_buffer;  // Default: no AEC processing
   ctx.processor_input = ctx.mic_buffer;
   if (!this->convert_rx_frame_(ctx)) {
+    ctx.output_buffer = nullptr;
+    ctx.processor_input = nullptr;
     return;
   }
   this->apply_input_conditioning_(ctx);

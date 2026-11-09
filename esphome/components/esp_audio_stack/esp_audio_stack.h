@@ -632,6 +632,9 @@ class ESPAudioStack final : public Component {
     int16_t *aec_output{nullptr};
 
     // ── Loop mutable state ──
+    // Raw I2S timeouts can return a partial frame. Retain its bytes only for
+    // this session; conversion and callbacks require a complete frame.
+    size_t rx_pending_bytes{0};
     int consecutive_rx_errors{0};
     int consecutive_tx_errors{0};
     // INVALID_STATE counter: codec/GMF IO can surface invalid state
