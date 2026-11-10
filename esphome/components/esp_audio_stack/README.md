@@ -531,6 +531,28 @@ a codec-dev supported option, not as a hidden generic stack behavior.
 
 Mic/ref rate conversion, 32-bit to 16-bit conversion, channel deinterleave and TX interleave/bit expansion are handled by Espressif `esp_audio_effects` primitives. This branch intentionally does not keep a selectable in-tree conversion backend.
 
+The dependency is pinned to `esp_audio_effects` 1.4.4. Espressif's
+[1.4.4 changelog](https://github.com/espressif/esp-adf-libs/blob/cdd882e606e6341c3cfc55f3255ad0f45d0b1ef9/esp_audio_effects/CHANGELOG.md)
+identifies a resampler wrap overflow with variable frame sizes. P4 profiles
+with `engineering_sample: true` retain `1.3.0~1`, because the 1.4 series
+requires revision 3.0 instructions. This update does not raise the supported
+minimum chip revision.
+
+The version change was checked with the real vendor libraries on an ESP32-S3,
+using the same application and a separate silent diagnostic workload:
+
+- 16/32-bit source PCM and 1/2/3 independent channels.
+- 16 kHz passthrough, 32-to-16 kHz and 48-to-16 kHz conversion.
+- Fixed 256-sample blocks compared with blocks of 32, 64, 160, 256, 512 and
+  1024 output samples, totaling 2048 samples per channel in each run.
+- Reset/reuse of the same converter between runs, interleaved versus separate
+  channel processing, exact output counts and guard samples at each boundary.
+
+Version 1.4.3 produced a fixed-versus-variable mismatch at output sample 512
+for 32-to-16 kHz 16-bit mono input. Version 1.4.4 passed all 18 combinations. This
+qualifies the streaming conversion contract; the diagnostic probe is not
+included in normal firmware.
+
 | Primitive | Used for |
 |-----------|----------|
 | `esp_ae_rate_cvt` | Bus-rate mic/reference frames to processor rate. Multi-channel RX uses one handle so mic/ref latency stays coupled. |

@@ -122,7 +122,7 @@ RATE_CVT_PERF_TYPES = ("speed", "memory")
 
 # Keep realtime audio builds reproducible. These component-manager versions
 # are validated with the maintained ESP32-S3 and ESP32-P4 builds.
-ESP_AUDIO_EFFECTS_REF = "1.4.3"
+ESP_AUDIO_EFFECTS_REF = "1.4.4"
 ESP_CODEC_DEV_REF = "2.0.0-beta5"
 
 I2S_OPTIONAL_MCLK = cv.Any(
