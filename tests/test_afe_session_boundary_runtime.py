@@ -11,6 +11,7 @@ import resource
 import subprocess
 
 import pytest
+from afe_admission_support import aec_header
 
 
 ROOT = Path(os.environ.get("AUDIO_STACK_REPO", Path(__file__).resolve().parents[1]))
@@ -56,10 +57,11 @@ def session_binary(tmp_path_factory):
         methods.append(method(adapter, found.group(0)))
     methods.append(method(adapter, "EspAfe::~EspAfe()"))
     methods.append(method(adapter, "bool EspAfe::request_reinit_by_name(const char *name)"))
-    helpers = "\n".join(method(header, f"  bool {name}(") for name in ("accepting_processing_", "wants_background_input")
+    helpers = "\n".join(method(header, f"  bool {name}(") for name in ("processing_owner_current_", "accepting_processing_", "wants_background_input")
                         if f"  bool {name}(" in header)
     parent = (ROOT / "esphome/components/esp_audio_stack/esp_audio_stack.cpp").read_text()
     fixture = (ROOT / "tests/fixtures/afe_session_runtime.cpp").read_text()
+    fixture = fixture.replace("// AEC_INTENT_HEADER", aec_header())
     fixture = fixture.replace("// MANAGER_METHODS", manager_methods).replace("// ADAPTER_HELPERS", helpers)
     fixture = fixture.replace("// ADAPTER_METHODS", "\n".join(methods))
     fixture = fixture.replace("// PARENT_METHODS", method(parent, "void ESPAudioStack::sync_processor_background_consumer_()"))
@@ -143,14 +145,17 @@ def test_vad_getter_and_telemetry_reject_closed_or_replaced_epoch(tmp_path):
     telemetry = method(adapter, "ProcessorTelemetry EspAfe::telemetry() const")
     assignment = next(line for line in telemetry.splitlines() if "t.voice_present =" in line)
     cpp = tmp_path / "vad_epoch.cpp"
-    cpp.write_text("""
+    cpp.write_text(aec_header() + """
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 struct EspAfe {
+ AecIntent aec_enabled_{true};
+ EspAfe(){aec_enabled_.acknowledge(aec_enabled_.snapshot());}
  std::atomic<uint32_t> processing_request_{1},manager_epoch_{0};
  std::atomic<bool> processing_active_{true},voice_present_{true};
-""" + method(header, "  bool accepting_processing_() const")
+""" + method(header, "  bool processing_owner_current_() const")
+        + method(header, "  bool accepting_processing_() const")
         + method(header, "  bool is_voice_present() const") + """
  bool telemetry_voice()const {struct {bool voice_present;} t;
 """ + assignment + """

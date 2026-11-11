@@ -34,7 +34,7 @@ struct EspAfe{
  std::atomic<bool> vad_enabled_{true},voice_present_{true},afe_stopped_{false};
  std::atomic<bool> activity_pending_{false};void* reconfigure_task_handle_=this;
  void* config_mutex_=this;void* afe_manager_=this;
- bool accepting_processing_()const{return true;}
+ bool processing_owner_current_()const{return true;}
  bool is_initialized()const{return true;} bool all_features_disabled_()const{return false;}
  bool recreate_instance_(bool){return true;} bool set_vad_enabled_runtime_(bool);
 };

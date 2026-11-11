@@ -3,13 +3,13 @@
 from pathlib import Path
 import subprocess
 
+from afe_admission_support import aec_header, ready_admission_fixture
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def admission_helper():
-    header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
-    start = header.index("  bool accepting_processing_() const {")
-    return header[start:header.index("\n  }", start) + 4]
+    return ready_admission_fixture()
 
 
 def test_gmf_partial_payloads_preserve_every_sample(tmp_path):
@@ -73,7 +73,7 @@ int main() {
 }
 """
     cpp = tmp_path / "callback.cpp"
-    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + callback + checks)
+    cpp.write_text(aec_header() + harness.replace("// ADMISSION_HELPER", admission_helper()) + callback + checks)
     exe = tmp_path / "callback"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

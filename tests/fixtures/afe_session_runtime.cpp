@@ -1,4 +1,5 @@
 // Host adapters model RTOS ownership, not the ESP-SR algorithm or its timing.
+// AEC_INTENT_HEADER
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -182,7 +183,7 @@ struct EspAfe:Processor {
  using ReconfigureRequest=Request;static constexpr unsigned RECONFIGURE_TASK_STACK_BYTES=12288;
  std::atomic<bool> processing_active_{false},drain_request_{false},process_busy_{false},instance_ready_{false};
  std::atomic<bool> afe_stopped_{false},vad_enabled_{true},voice_present_{false};
- std::atomic<bool> aec_enabled_{true};
+ AecIntent aec_enabled_{true};
  bool continuous_vad_=true;
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0};
  std::atomic<bool> activity_pending_{false};

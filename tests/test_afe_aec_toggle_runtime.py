@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+from afe_admission_support import aec_header
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,12 +28,14 @@ int esp_gmf_afe_manager_enable_features(void* manager,int feature,bool enabled){
 }
 struct EspAfe {
  int mic_num_=1, rebuilds=0; bool ready=true,others_enabled=true;
- std::atomic<bool> aec_enabled_{true},afe_stopped_{false};
+ AecIntent aec_enabled_{true};std::atomic<bool> afe_stopped_{false};
+ std::atomic<uint32_t> processing_request_{1};
  void* config_mutex_=this; void* afe_manager_=this;
  bool is_initialized()const{return ready;}
  void* reconfigure_task_handle_=this;
  std::atomic<bool> activity_pending_{false};
- bool accepting_processing_()const{return ready;}
+ bool processing_owner_current_()const{return ready;}
+ EspAfe(){aec_enabled_.acknowledge(aec_enabled_.snapshot());}
  bool all_features_disabled_()const{return !others_enabled && !aec_enabled_.load();}
  bool recreate_instance_(bool){++rebuilds;afe_stopped_=all_features_disabled_();return true;}
  bool set_aec_enabled_runtime_(bool);
@@ -71,7 +74,7 @@ int main(){
 }
 """
     path = tmp_path / "toggle.cpp"
-    path.write_text("#include <initializer_list>\n" + harness + cpp[start:end] + checks)
+    path.write_text(aec_header() + "#include <initializer_list>\n" + harness + cpp[start:end] + checks)
     binary = tmp_path / "toggle"
     subprocess.run(
         [

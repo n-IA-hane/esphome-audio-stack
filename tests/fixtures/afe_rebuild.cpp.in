@@ -9,6 +9,8 @@
 #include <memory>
 #include <string>
 #include "AUDIO_UTILS_HEADER"
+#include "AEC_INTENT_HEADER"
+using AecIntent=esphome::esp_afe::AecIntent;
 #define USE_ESP_AFE_GMF_PATH
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
@@ -94,7 +96,8 @@ struct EspAfe {
  void*config_mutex_=this;void*reconfigure_task_handle_=this;
  std::atomic<bool> instance_ready_{false},afe_stopped_{false},processing_active_{false},drain_request_{false};
  std::atomic<bool>process_busy_{false};
- std::atomic<bool> aec_enabled_{false},ns_enabled_{false},agc_enabled_{false},vad_enabled_{false},se_enabled_{false};
+ AecIntent aec_enabled_{false};
+ std::atomic<bool> ns_enabled_{false},agc_enabled_{false},vad_enabled_{false},se_enabled_{false};
  std::atomic<bool> voice_present_{false},activity_pending_{false};
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0},frame_spec_revision_{0};
  std::atomic<int>last_spec_process_size_{0},last_spec_fetch_size_{0},last_spec_mic_ch_{0};
@@ -106,7 +109,7 @@ struct EspAfe {
  bool is_se_enabled()const{return se_enabled_;}
  // ALL_FEATURES
  bool is_initialized()const{return instance_ready_;}
- bool accepting_processing_()const{return processing_active_&&(processing_request_.load()&1U);}
+ // ADMISSION_HELPERS
  bool quiesce_process_(unsigned){drain_request_=true;return true;}
  void reset_output_prebuffer_(){}
  void log_memory_snapshot_(const char*){}

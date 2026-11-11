@@ -3,13 +3,13 @@
 from pathlib import Path
 import subprocess
 
+from afe_admission_support import aec_header, ready_admission_fixture
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def admission_helper():
-    header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
-    start = header.index("  bool accepting_processing_() const {")
-    return header[start:header.index("\n  }", start) + 4]
+    return ready_admission_fixture()
 
 
 def test_manager_result_delivers_pcm_without_an_input_job(tmp_path):
@@ -63,7 +63,7 @@ int main(){
 }
 """
     cpp = tmp_path / "manager_callbacks.cpp"
-    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
+    cpp.write_text(aec_header() + harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
     exe = tmp_path / "manager_callbacks"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
@@ -142,7 +142,7 @@ int main(){
 }
 '''
     cpp = tmp_path / "callback_lifetime.cpp"
-    cpp.write_text(harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
+    cpp.write_text(aec_header() + harness.replace("// ADMISSION_HELPER", admission_helper()) + methods + checks)
     exe = tmp_path / "callback_lifetime"
     subprocess.run(["g++", "-std=c++17", "-O2", "-pthread", str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=5)

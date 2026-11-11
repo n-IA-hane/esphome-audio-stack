@@ -14,6 +14,7 @@
 #include "../esp_audio_stack/audio_core_processor.h"
 #include "../esp_audio_stack/audio_core_audio_utils.h"
 #include "afe_diagnostic_counter.h"
+#include "aec_intent.h"
 
 #ifdef USE_ESP_AUDIO_STACK_AFE_OUTPUT_CAPTURE
 namespace esphome::esp_audio_stack {
@@ -247,10 +248,13 @@ class EspAfe final : public Component, public AudioProcessor {
   bool quiesce_process_(TickType_t ticks_to_wait);
   bool retire_processing_session_();
   bool service_processing_request_();
-  bool accepting_processing_() const {
+  bool processing_owner_current_() const {
     const uint32_t request = this->processing_request_.load(std::memory_order_acquire);
     return (request & 1U) != 0 && this->processing_active_.load(std::memory_order_acquire) &&
            this->manager_epoch_.load(std::memory_order_acquire) == (request >> 1);
+  }
+  bool accepting_processing_() const {
+    return this->processing_owner_current_() && this->aec_enabled_.is_applied();
   }
   void clear_process_busy_();
   void reset_output_prebuffer_() { this->output_prebuffer_ready_ = this->output_prebuffer_frames_ == 0; }
@@ -378,7 +382,7 @@ class EspAfe final : public Component, public AudioProcessor {
   // Feature flags exposed to UI toggles. std::atomic so a torn snapshot
   // across the 5 flags in all_features_disabled_() can't trigger a
   // spurious teardown if a future caller reads them off the main loop.
-  std::atomic<bool> aec_enabled_{true};
+  AecIntent aec_enabled_{true};
   int aec_filter_length_{4};
   int aec_nlp_level_{1};  // AEC_NLP_LEVEL_AGGR
   std::atomic<bool> se_enabled_{false};

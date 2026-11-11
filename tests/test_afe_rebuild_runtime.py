@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from test_volume_reference_runtime import method
+from afe_admission_support import admission_methods
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,6 +47,8 @@ def rebuild_source():
     })
     fixture = (ROOT / "tests/fixtures/afe_rebuild.cpp.in").read_text()
     fixture = fixture.replace("AUDIO_UTILS_HEADER", str(ROOT / "esphome/components/esp_audio_stack/audio_core_audio_utils.h"))
+    fixture = fixture.replace("AEC_INTENT_HEADER", str(ROOT / "esphome/components/esp_afe/aec_intent.h"))
+    fixture = fixture.replace("// ADMISSION_HELPERS", admission_methods())
     counters += ["feed_rejected_", "feed_ok_", "process_frame_count_", "process_output_miss_"]
     helper_start = cpp.index("static inline void stage_afe_input_frame(")
     staging_helper = cpp[helper_start:cpp.index("\nstatic int effective_feed_task_stack_size", helper_start)]

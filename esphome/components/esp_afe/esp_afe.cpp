@@ -596,7 +596,8 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
 #endif
 
 #ifdef USE_ESP_AFE_GMF_PATH
-  const bool aec_requested = this->aec_enabled_.load(std::memory_order_relaxed);
+  const uint32_t aec_request = this->aec_enabled_.snapshot();
+  const bool aec_requested = AecIntent::enabled(aec_request);
   const int aec_ret = esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, aec_requested);
 #if defined(USE_ESP_AUDIO_STACK_TELEMETRY) || defined(USE_ESP_AUDIO_STACK_CAPTURE)
   this->diagnostic_aec_instance_id_ = this->diagnostic_instance_id_;
@@ -608,6 +609,7 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
     ESP_LOGE(TAG, "AFE AEC state not acknowledged: requested=%d ret=%d", static_cast<int>(aec_requested), aec_ret);
     return cleanup_failed_install();
   }
+  this->aec_enabled_.acknowledge(aec_request);
   if (apply_vad_intent(this->afe_manager_, this->vad_enabled_.load(std::memory_order_relaxed)) < 0) {
     ESP_LOGE(TAG, "Failed to apply AFE feature state");
     return cleanup_failed_install();
@@ -639,6 +641,7 @@ EspAfe::AfeInstance EspAfe::detach_instance_() {
   // The drain handshake has quiesced process(). Detach manager callbacks before
   // handing ownership to destroy_instance_ or reusing the output buffers.
   this->processing_active_.store(false, std::memory_order_release);
+  this->aec_enabled_.invalidate();
   this->stop_pipeline_();
   this->instance_ready_.store(false, std::memory_order_release);
 
@@ -892,6 +895,11 @@ bool EspAfe::recreate_instance_(bool require_same_frame_sizes) {
 bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
   const bool old_value = this->aec_enabled_.load(std::memory_order_relaxed);
   if (old_value == enabled) {
+    if (!this->aec_enabled_.is_applied() && this->reconfigure_task_handle_ != nullptr &&
+        (this->processing_request_.load(std::memory_order_acquire) & 1U) != 0) {
+      this->activity_pending_.store(true, std::memory_order_release);
+      xTaskNotifyGive(this->reconfigure_task_handle_);
+    }
     return true;
   }
   if (this->config_mutex_ == nullptr) {
@@ -899,11 +907,11 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     return false;
   }
 
-  if (this->reconfigure_task_handle_ != nullptr && !this->accepting_processing_()) {
+  if (this->reconfigure_task_handle_ != nullptr && !this->processing_owner_current_()) {
     // A retired/pending acquisition has no active AEC to control. The existing
     // owner applies this intent before reopening capture; AEC alone is not a
     // microphone consumer and must not rebuild an idle manager here.
-    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
+    this->aec_enabled_.request(enabled);
     this->activity_pending_.store(true, std::memory_order_release);
     xTaskNotifyGive(this->reconfigure_task_handle_);
     return true;
@@ -912,12 +920,12 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
   // AFE currently torn down (all features were off). Flip the flag and let
   // recreate_instance_ rebuild (or stay stopped if still all-off).
   if (this->afe_stopped_.load(std::memory_order_acquire)) {
-    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
+    const uint32_t request = this->aec_enabled_.request(enabled);
     if (!enabled) {
       return true;  // nothing to rebuild
     }
     if (this->recreate_instance_(false)) return true;
-    this->aec_enabled_.store(old_value, std::memory_order_relaxed);
+    this->aec_enabled_.restore_if_current(request, old_value);
     return false;
   }
 
@@ -937,6 +945,7 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
       return false;
     }
 
+    const uint32_t previous_request = this->aec_enabled_.snapshot();
     int ret = 0;
     const char *backend = "unknown";
 #ifdef USE_ESP_AFE_GMF_PATH
@@ -960,7 +969,14 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     }
 
     ESP_LOGI(TAG, "AEC %s via %s", enabled ? "enabled" : "disabled", backend);
-    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
+    uint32_t applied_request;
+    if (this->aec_enabled_.publish_if_current(previous_request, enabled, &applied_request)) {
+      this->aec_enabled_.acknowledge(applied_request);
+    } else {
+      this->aec_enabled_.invalidate();
+      this->activity_pending_.store(true, std::memory_order_release);
+      if (this->reconfigure_task_handle_ != nullptr) xTaskNotifyGive(this->reconfigure_task_handle_);
+    }
 
     // Live toggle left AFE running. If the user just turned AEC off and
     // every other feature was already off, we should stop the whole
@@ -985,7 +1001,7 @@ bool EspAfe::set_vad_enabled_runtime_(bool enabled) {
     return false;
   }
 
-  if (this->reconfigure_task_handle_ != nullptr && !this->accepting_processing_()) {
+  if (this->reconfigure_task_handle_ != nullptr && !this->processing_owner_current_()) {
     // A retired or pending acquisition has no live VAD to toggle. Publish
     // intent without waiting for its owner: Audio Stack reconciles the
     // continuous-VAD consumer, and the same worker applies the new feature.
@@ -2151,12 +2167,14 @@ bool EspAfe::service_processing_request_() {
   const uint32_t latest = this->processing_request_.load(std::memory_order_acquire);
   if ((latest & 1U) == 0 || this->manager_epoch_.load(std::memory_order_acquire) != (latest >> 1)) return true;
 #ifdef USE_ESP_AFE_GMF_PATH
-  const bool aec_requested = this->aec_enabled_.load(std::memory_order_relaxed);
+  const uint32_t aec_request = this->aec_enabled_.snapshot();
+  const bool aec_requested = AecIntent::enabled(aec_request);
   const int aec_ret = apply_aec_intent(this->afe_manager_, aec_requested);
   if (aec_ret != static_cast<int>(aec_requested)) {
     ESP_LOGW(TAG, "AFE acquisition could not apply AEC intent (ret=%d)", aec_ret);
     return false;
   }
+  this->aec_enabled_.acknowledge(aec_request);
   // A VAD intent may arrive while this acquisition is being installed. Its
   // pending notification guarantees another pass if it changes after this
   // load; only the existing config owner touches the ready manager here.

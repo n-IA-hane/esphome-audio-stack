@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+from afe_admission_support import aec_header
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,7 +77,7 @@ def test_rebuilt_manager_reopens_only_current_requested_acquisition(tmp_path):
     source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     helper_start = source.index("static esp_gmf_err_t apply_vad_intent(")
     helper = source[helper_start : source.index("\n}\n", helper_start) + 2]
-    start = source.index("  const bool aec_requested =", source.index("bool EspAfe::install_instance_("))
+    start = source.index("  const uint32_t aec_request =", source.index("bool EspAfe::install_instance_("))
     end = source.index("\n  return true;", start)
     admission = source[start:end]
     harness = r"""
@@ -102,7 +103,7 @@ int esp_gmf_afe_manager_enable_features(Manager*m,int feature,bool enabled){
 // PRODUCTION_VAD_HELPER
 struct EspAfe {
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0};
- std::atomic<bool> processing_active_{false},aec_enabled_{true},vad_enabled_{true};
+ std::atomic<bool> processing_active_{false},vad_enabled_{true};AecIntent aec_enabled_{true};
  Manager manager;Manager*afe_manager_=&manager;
  bool allow_start=true;unsigned starts=0,cleanups=0;
  bool start_pipeline_(){
@@ -146,7 +147,7 @@ int main(){
 }
 """
     cpp = tmp_path / "install_admission.cpp"
-    cpp.write_text(harness.replace("// PRODUCTION_VAD_HELPER", helper) + admission + checks)
+    cpp.write_text(aec_header() + harness.replace("// PRODUCTION_VAD_HELPER", helper) + admission + checks)
     binary = tmp_path / "install_admission"
     subprocess.run(["g++", "-std=c++17", "-O2", str(cpp), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
