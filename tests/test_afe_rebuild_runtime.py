@@ -14,6 +14,7 @@ def rebuild_source():
     cpp = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
     header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
     methods = "\n".join(method(cpp, signature) for signature in (
+        "static int apply_aec_intent(",
         "static esp_gmf_err_t apply_vad_intent(",
         "bool EspAfe::install_instance_(",
         "EspAfe::AfeInstance EspAfe::detach_instance_(",

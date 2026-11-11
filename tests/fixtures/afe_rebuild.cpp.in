@@ -67,8 +67,8 @@ template<class CB>int esp_gmf_afe_manager_set_read_cb(Manager*,CB callback,void*
 }
 int esp_gmf_afe_manager_suspend(Manager*,bool){return 0;}
 using esp_gmf_afe_manager_handle_t=Manager*;
-struct esp_gmf_afe_manager_features_t {bool vad=false;};
-int esp_gmf_afe_manager_get_features(Manager*m,esp_gmf_afe_manager_features_t*f){assert(m);f->vad=m->vad;return 0;}
+struct esp_gmf_afe_manager_features_t {bool aec=false,vad=false;};
+int esp_gmf_afe_manager_get_features(Manager*m,esp_gmf_afe_manager_features_t*f){assert(m);f->aec=m->aec;f->vad=m->vad;return 0;}
 int esp_gmf_afe_manager_enable_features(Manager*m,int feature,bool enable){
  assert(m);
  if(feature==ESP_AFE_FEATURE_AEC){if(failure=="aec")return -1;m->aec=enable;return int(enable);}

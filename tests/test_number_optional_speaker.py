@@ -24,7 +24,7 @@ namespace esphome {inline bool has_saved=false,save_ok=true;inline float saved=0
 #include <cmath>
 #include <functional>
 #include <vector>
-namespace esphome::esp_audio_stack {struct ESPAudioStack {float gain=1,volume=.5;void set_mic_gain(float v){gain=v;}void set_master_volume(float v){volume=v;}float get_master_volume(){return volume;}
+namespace esphome::esp_audio_stack {struct ESPAudioStack {float gain=1,volume=.5,effective_volume=.25;void set_mic_gain(float v){gain=v;}void set_master_volume(float v){volume=v;effective_volume=v*.5f;}float get_master_volume(){return effective_volume;}float get_master_volume_level(){return volume;}
  float requested=12,accepted=12;bool ready=false,es8311=false;std::vector<std::function<void()>> callbacks;
  float get_hardware_gain(bool){return requested;}
  bool request_hardware_gain(bool,float v){if(!std::isfinite(v)||v<0||v>37.5)return false;requested=es8311?int(v/6)*6:v;return true;}
@@ -61,7 +61,9 @@ int main(){using namespace esphome::esp_audio_stack;
  assert(esphome::has_saved&&esphome::saved==6);
  esphome::has_saved=false;
  MasterVolumeNumber volume;volume.set_parent(&parent);volume.setup();volume.dump_config();
+ assert(volume.state==50&&parent.get_master_volume()==.25f&&parent.get_master_volume_level()==.5f);
  static_cast<esphome::number::Number&>(volume).control(35);assert(parent.volume==.35f);
+ assert(volume.state==35&&std::fabs(parent.get_master_volume()-.175f)<.000001f);
 #ifdef USE_SPEAKER
  esphome::speaker::Speaker speaker;MasterVolumeNumber native;native.set_speaker(&speaker);native.setup();
  static_cast<esphome::number::Number&>(native).control(75);assert(speaker.volume==.75f);
