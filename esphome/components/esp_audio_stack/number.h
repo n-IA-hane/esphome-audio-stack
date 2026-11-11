@@ -85,7 +85,7 @@ class MasterVolumeNumber final : public number::Number, public Component {
       this->apply_(value);
       this->publish_state(value);
     } else if (this->parent_ != nullptr) {
-      this->publish_state(this->parent_->get_master_volume() * 100.0f);
+      this->publish_state(this->parent_->get_master_volume_level() * 100.0f);
     }
 #ifdef USE_SPEAKER
     else if (this->speaker_ != nullptr) {

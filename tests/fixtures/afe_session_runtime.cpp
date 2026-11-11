@@ -35,6 +35,7 @@ constexpr bool ESP_AFE_DIAGNOSTIC_COUNTERS=true;
 constexpr unsigned CONFIG_MUTEX_TIMEOUT=10,DRAIN_WAIT_TIMEOUT=20,portMAX_DELAY=UINT32_MAX;
 constexpr unsigned AFE_RUN_EVENT=1,AFE_DESTROYING_EVENT=2,FEED_TASK_DESTROYED=4,FETCH_TASK_DESTROYED=8;
 constexpr unsigned ESP_AFE_FEATURE_VAD=1;
+constexpr unsigned ESP_AFE_FEATURE_AEC=2;
 const char *TAG="afe";
 using TickType_t=unsigned;using EventBits_t=unsigned;using esp_gmf_err_t=int;using esp_gmf_err_io_t=int;
 std::mutex observe_mutex;std::condition_variable observed;
@@ -135,13 +136,14 @@ struct esp_gmf_afe_manager_t {
  ManagerTask feed,fetch;Read read_cb=nullptr;void *read_ctx=nullptr;Dsp *afe_data=nullptr;
  Result result_proc=nullptr;void *result_ctx=nullptr;EventGroupHandle_t ctrl_events=nullptr;
  SemaphoreHandle_t read_cb_lock=nullptr,result_cb_lock=nullptr;Iface *esp_afe=nullptr;
- bool vad_enabled=true;
+ bool vad_enabled=true,aec_enabled=true;
 };
 using esp_gmf_afe_manager_handle_t=esp_gmf_afe_manager_t*;
-struct esp_gmf_afe_manager_features_t{bool vad;};
-int esp_gmf_afe_manager_get_features(esp_gmf_afe_manager_handle_t m,esp_gmf_afe_manager_features_t*f){f->vad=m->vad_enabled;return 0;}
+struct esp_gmf_afe_manager_features_t{bool vad;bool aec;};
+int esp_gmf_afe_manager_get_features(esp_gmf_afe_manager_handle_t m,esp_gmf_afe_manager_features_t*f){f->vad=m->vad_enabled;f->aec=m->aec_enabled;return 0;}
 int esp_gmf_afe_manager_enable_features(esp_gmf_afe_manager_handle_t m,unsigned feature,bool enabled){
- assert(m!=nullptr&&feature==ESP_AFE_FEATURE_VAD);m->vad_enabled=enabled;return 0;
+ assert(m!=nullptr);if(feature==ESP_AFE_FEATURE_AEC){m->aec_enabled=enabled;return static_cast<int>(enabled);}
+ assert(feature==ESP_AFE_FEATURE_VAD);m->vad_enabled=enabled;return 0;
 }
 std::atomic<unsigned> managers_created{0},managers_destroyed{0};
 std::vector<std::unique_ptr<HostTask>> fetch_threads;
@@ -180,6 +182,7 @@ struct EspAfe:Processor {
  using ReconfigureRequest=Request;static constexpr unsigned RECONFIGURE_TASK_STACK_BYTES=12288;
  std::atomic<bool> processing_active_{false},drain_request_{false},process_busy_{false},instance_ready_{false};
  std::atomic<bool> afe_stopped_{false},vad_enabled_{true},voice_present_{false};
+ std::atomic<bool> aec_enabled_{true};
  bool continuous_vad_=true;
  std::atomic<uint32_t> processing_request_{0},manager_epoch_{0};
  std::atomic<bool> activity_pending_{false};
@@ -211,6 +214,7 @@ struct EspAfe:Processor {
  void clear_process_busy_();void setup();
  void set_processing_active(bool);bool start_pipeline_();bool pause_pipeline_();void stop_pipeline_();
  bool set_vad_enabled_runtime_(bool);
+ bool set_aec_enabled_runtime_(bool);
  bool start_reconfigure_task_();static void reconfigure_task_trampoline(void*);void reconfigure_task_loop_();bool is_reconfigure_idle()const;
  bool quiesce_process_(TickType_t);bool retire_processing_session_();bool service_processing_request_();
  ~EspAfe();
@@ -232,6 +236,21 @@ struct ESPAudioStack {
 // ADAPTER_METHODS
 int main(int argc,char **argv){
  assert(argc==2);unsigned scenario=std::stoul(argv[1]);auto owner=std::make_unique<EspAfe>();auto &afe=*owner;
+ if(scenario==21||scenario==22){
+  afe.continuous_vad_=false;afe.setup();afe.set_processing_active(true);
+  until([&]{return afe.afe_manager_&&afe.afe_manager_->afe_data->entered.load();});auto *old=afe.afe_manager_;
+  afe.set_processing_active(false);until([&]{return destroying>=1;});
+  if(scenario==21){release_fetch(old);until([&]{return managers_destroyed==1&&afe.is_reconfigure_idle();});}
+  assert(afe.set_aec_enabled_runtime_(false)&&!afe.aec_enabled_);
+  if(scenario==22)release_fetch(old);
+  until([&]{return managers_destroyed==1&&afe.is_reconfigure_idle();});
+  assert(managers_created==1&&afe.afe_manager_==nullptr&&!afe.processing_active_);
+  afe.set_processing_active(true);
+  until([&]{return managers_created==2&&afe.processing_active_.load();});auto *fresh=afe.afe_manager_;
+  assert(!fresh->aec_enabled);until([&]{return fresh->afe_data->entered.load();});release_fetch(fresh);
+  owner.reset();for(auto &t:fetch_threads)if(t->thread.joinable())t->thread.join();
+  assert(managers_created==managers_destroyed);return 0;
+ }
  if(scenario>=10&&scenario<=15){
   psram_present=scenario!=11;
   psram_failure=scenario==12?1:scenario==13?2:0;

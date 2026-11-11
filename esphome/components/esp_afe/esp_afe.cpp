@@ -32,6 +32,15 @@ static const TickType_t DRAIN_WAIT_TIMEOUT = pdMS_TO_TICKS(50);
 static constexpr uint32_t REINIT_STAGE_WARN_US = 50000;
 
 #ifdef USE_ESP_AFE_GMF_PATH
+// Keep an unchanged live AEC out of the vendor enable/disable callbacks.
+static int apply_aec_intent(esp_gmf_afe_manager_handle_t manager, bool enabled) {
+  esp_gmf_afe_manager_features_t features{};
+  const int ret = esp_gmf_afe_manager_get_features(manager, &features);
+  if (ret != ESP_GMF_ERR_OK) return ret < 0 ? ret : ESP_GMF_ERR_FAIL;
+  if (features.aec == enabled) return static_cast<int>(enabled);
+  return esp_gmf_afe_manager_enable_features(manager, ESP_AFE_FEATURE_AEC, enabled);
+}
+
 // Called only by the existing config owner. GMF resets VAD on every feature
 // call, so an unchanged intent must not be reapplied as a reset operation.
 static esp_gmf_err_t apply_vad_intent(esp_gmf_afe_manager_handle_t manager, bool enabled) {
@@ -888,6 +897,16 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
   if (this->config_mutex_ == nullptr) {
     ESP_LOGW(TAG, "AEC toggle requested before setup");
     return false;
+  }
+
+  if (this->reconfigure_task_handle_ != nullptr && !this->accepting_processing_()) {
+    // A retired/pending acquisition has no active AEC to control. The existing
+    // owner applies this intent before reopening capture; AEC alone is not a
+    // microphone consumer and must not rebuild an idle manager here.
+    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
+    this->activity_pending_.store(true, std::memory_order_release);
+    xTaskNotifyGive(this->reconfigure_task_handle_);
+    return true;
   }
 
   // AFE currently torn down (all features were off). Flip the flag and let
@@ -2132,6 +2151,12 @@ bool EspAfe::service_processing_request_() {
   const uint32_t latest = this->processing_request_.load(std::memory_order_acquire);
   if ((latest & 1U) == 0 || this->manager_epoch_.load(std::memory_order_acquire) != (latest >> 1)) return true;
 #ifdef USE_ESP_AFE_GMF_PATH
+  const bool aec_requested = this->aec_enabled_.load(std::memory_order_relaxed);
+  const int aec_ret = apply_aec_intent(this->afe_manager_, aec_requested);
+  if (aec_ret != static_cast<int>(aec_requested)) {
+    ESP_LOGW(TAG, "AFE acquisition could not apply AEC intent (ret=%d)", aec_ret);
+    return false;
+  }
   // A VAD intent may arrive while this acquisition is being installed. Its
   // pending notification guarantees another pass if it changes after this
   // load; only the existing config owner touches the ready manager here.

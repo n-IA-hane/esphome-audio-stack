@@ -43,11 +43,11 @@ def session_binary(tmp_path_factory):
         "esp_gmf_err_t esp_gmf_afe_manager_set_read_cb",
         "esp_gmf_err_t esp_gmf_afe_manager_set_result_cb", "esp_gmf_err_t esp_gmf_afe_manager_destroy",
     ))
-    methods = [method(adapter, "static esp_gmf_err_t apply_vad_intent(")]
+    methods = [method(adapter, "static int apply_aec_intent("), method(adapter, "static esp_gmf_err_t apply_vad_intent(")]
     names = ["set_processing_active", "start_pipeline_", "pause_pipeline_", "stop_pipeline_",
              "manager_result_cb_", "gmf_output_release_", "update_fetch_ring_free_pct_",
              "start_reconfigure_task_", "reconfigure_task_trampoline", "reconfigure_task_loop_",
-             "is_reconfigure_idle", "clear_process_busy_", "setup", "set_vad_enabled_runtime_"]
+             "is_reconfigure_idle", "clear_process_busy_", "setup", "set_vad_enabled_runtime_", "set_aec_enabled_runtime_"]
     names += [name for name in ("quiesce_process_", "retire_processing_session_", "service_processing_request_")
               if f"EspAfe::{name}(" in adapter]
     for name in names:
@@ -109,6 +109,13 @@ def test_vad_intent_restarts_only_the_owned_background_path(session_binary, scen
         [str(session_binary), str(scenario)], capture_output=True, text=True, timeout=15,
         preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)),
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("scenario", [21, 22], ids=["aec-after-retirement", "aec-during-retirement"])
+def test_aec_intent_is_deferred_without_a_consumer_and_applied_on_acquisition(session_binary, scenario):
+    result = subprocess.run([str(session_binary), str(scenario)], capture_output=True, text=True, timeout=15,
+                            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
     assert result.returncode == 0, result.stdout + result.stderr
 
 

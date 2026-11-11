@@ -30,10 +30,14 @@ struct EspAfe {
  std::atomic<bool> aec_enabled_{true},afe_stopped_{false};
  void* config_mutex_=this; void* afe_manager_=this;
  bool is_initialized()const{return ready;}
+ void* reconfigure_task_handle_=this;
+ std::atomic<bool> activity_pending_{false};
+ bool accepting_processing_()const{return ready;}
  bool all_features_disabled_()const{return !others_enabled && !aec_enabled_.load();}
  bool recreate_instance_(bool){++rebuilds;afe_stopped_=all_features_disabled_();return true;}
  bool set_aec_enabled_runtime_(bool);
 };
+void xTaskNotifyGive(void*){}
 """
     checks = r"""
 int main(){
@@ -56,6 +60,13 @@ int main(){
   afe.others_enabled=false;assert(afe.set_aec_enabled_runtime_(false));
   assert(afe.rebuilds==1 && afe.afe_stopped_);
   assert(afe.set_aec_enabled_runtime_(true));assert(afe.rebuilds==2 && !afe.afe_stopped_);
+  // Last-consumer retirement destroys the manager without the all-features-off flag.
+  afe.ready=false;afe.afe_manager_=nullptr;afe.afe_stopped_=false;afe.others_enabled=true;
+  const int old_calls=calls,old_rebuilds=afe.rebuilds;
+  assert(afe.set_aec_enabled_runtime_(false));assert(!afe.aec_enabled_);
+  assert(calls==old_calls && afe.rebuilds==old_rebuilds && afe.activity_pending_);
+  assert(afe.set_aec_enabled_runtime_(true));assert(afe.aec_enabled_);
+  assert(calls==old_calls && afe.rebuilds==old_rebuilds);
  }
 }
 """

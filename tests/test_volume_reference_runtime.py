@@ -4,6 +4,7 @@ Compile production methods with transport/codec adapters. This checks gain
 ownership and reference delivery, not AEC/AFE acoustic performance.
 """
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -19,6 +20,40 @@ def method(text, signature):
         depth += (text[end] == "{") - (text[end] == "}")
         end += 1
     return text[start:end]
+
+
+@pytest.mark.parametrize("hardware_master", [False, True])
+def test_master_number_bootstrap_reports_requested_level_not_effective_gain(tmp_path, hardware_master):
+    header = (ROOT / "esp_audio_stack.h").read_text()
+    number = (ROOT / "number.h").read_text().split("class MasterVolumeNumber", 1)[1]
+    setup = method(number, "void setup()")
+    getter_name = re.search(r"parent_->(get_master_volume\w*)\(\) \* 100", setup)[1]
+    getter = method(header, "float " + getter_name + "()")
+    cpp = tmp_path / "master_level.cpp"
+    cpp.write_text(r'''
+#include <atomic>
+#include <cassert>
+#include <cmath>
+struct ESPAudioStack {
+ std::atomic<float> master_volume_linear_{.5f};
+ std::atomic<float> master_volume_public_{0};
+''' + getter + r'''
+};
+int main(){
+ ESPAudioStack stack;
+ // Independent requested UI level and applied gain for the unchanged -49 dB curve.
+ const float applied=std::pow(10.f,(-49.f+49.f*.5f)/20.f);
+ stack.master_volume_public_=HARDWARE ? .5f : applied;
+ const float published=stack.''' + getter_name + r'''()*100.f;
+ assert(std::abs(published-50.f)<.0001f);
+ // Reading the logical control cannot rewrite either applied DSP or codec state.
+ assert(std::abs(stack.master_volume_public_.load()-(HARDWARE ? .5f : applied))<.0001f);
+}
+''')
+    binary = tmp_path / "master_level"
+    subprocess.run(["g++", "-std=c++17", f"-DHARDWARE={int(hardware_master)}", str(cpp), "-o", str(binary)], check=True)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("hardware_master", [False, True])
