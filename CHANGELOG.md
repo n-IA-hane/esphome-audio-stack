@@ -1,8 +1,15 @@
 # Changelog
 
-## 2026.11.1-dev
+## 2026.12.0-dev
 
 Changes since stable **2026.11.0**.
+
+### Correct DC-blocker transients
+
+- Preserve the filter's feedback in wide fixed-point storage and saturate the
+  S16 output explicitly. Large valid microphone level changes no longer wrap
+  into samples with the opposite sign. Keep the existing coefficient and
+  independent channel histories; no wiring or gain setting changes.
 
 ### Reliable audio handoffs
 
