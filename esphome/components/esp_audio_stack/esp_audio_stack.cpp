@@ -3,6 +3,9 @@
 #ifdef USE_ESP32
 
 #include <driver/i2s_common.h>
+#if CONFIG_IDF_TARGET_ESP32S3
+#include <soc/i2s_struct.h>  // rx_timing (rx_data_delay)
+#endif
 #include <esp_heap_caps.h>
 #include <freertos/idf_additions.h>
 #include <esp_idf_version.h>
@@ -537,6 +540,12 @@ void ESPAudioStack::dump_config() {
   if (this->use_apll_) {
     ESP_LOGCONFIG(TAG, "  APLL: enabled");
   }
+  if (this->rx_fast_clock_) {
+    ESP_LOGCONFIG(TAG, "  RX Clock: fast (PLL 240 MHz / 2)");
+  }
+  if (this->rx_data_delay_ != 0) {
+    ESP_LOGCONFIG(TAG, "  RX Data Delay: %s", this->rx_data_delay_ == 1 ? "pos_edge" : "neg_edge");
+  }
   if (this->correct_dc_offset_) {
     ESP_LOGCONFIG(TAG, "  DC Offset Correction: enabled");
   }
@@ -965,6 +974,16 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     if (slot_bw != I2S_SLOT_BIT_WIDTH_AUTO) {
       rx_cfg.slot_cfg.slot_bit_width = slot_bw;
     }
+#if CONFIG_IDF_TARGET_ESP32S3
+    // rx_clock: fast: the full-duplex RX slave samples BCLK/WS with its own clock divider. Give it PLL 240 MHz / 2 =
+    // 120 MHz (integer divider) instead of the TX settings; IDF allows a different RX clock in a separately allocated
+    // pair (HW v2). mclk_multiple is cast: IDF only multiplies it with the sample rate (validated to divide 120 MHz).
+    if (this->rx_fast_clock_ && !dual_bus && this->sample_rate_ > 0 && (240000000U / 2U) % this->sample_rate_ == 0) {
+      rx_cfg.clk_cfg.clk_src = I2S_CLK_SRC_PLL_240M;
+      rx_cfg.clk_cfg.mclk_multiple = static_cast<i2s_mclk_multiple_t>(240000000U / 2U / this->sample_rate_);
+      ESP_LOGD(TAG, "RX clock: PLL 240 MHz / 2, MCLK multiple %u", (unsigned) rx_cfg.clk_cfg.mclk_multiple);
+    }
+#endif
 
     if (this->tx_handle_) {
       err = i2s_channel_init_std_mode(this->tx_handle_, &tx_cfg);
@@ -1152,6 +1171,15 @@ bool ESPAudioStack::enable_i2s_channels_() {
   this->codec_backend_.set_output_volume(this->master_volume_linear_.load(std::memory_order_relaxed));
   this->codec_backend_.set_output_mute(false);
 #else
+#if CONFIG_IDF_TARGET_ESP32S3
+  // rx_data_delay: IDF never writes rx_timing, but the peripheral reset at channel allocation clears it, so it is set
+  // at every start before RX is enabled (i2s_ll_rx_start() sets rx_update first).
+  if (this->rx_data_delay_ != 0 && this->rx_handle_) {
+    i2s_dev_t *hw = this->i2s_num_ == 0 ? &I2S0 : &I2S1;
+    hw->rx_timing.rx_sd_in_dm = this->rx_data_delay_;
+    ESP_LOGD(TAG, "RX data delay: rx_sd_in_dm = %u", (unsigned) hw->rx_timing.rx_sd_in_dm);
+  }
+#endif
   if (this->tx_handle_) {
     if (!this->prime_tx_completion_records_(true)) {
       this->deinit_i2s_();

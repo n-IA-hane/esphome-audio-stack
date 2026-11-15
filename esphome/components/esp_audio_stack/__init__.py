@@ -64,6 +64,8 @@ CONF_RX_SLOT_MODE = "rx_slot_mode"
 CONF_RX_MIC_SLOTS = "rx_mic_slots"
 CONF_I2S_MODE = "i2s_mode"
 CONF_USE_APLL = "use_apll"
+CONF_RX_CLOCK = "rx_clock"
+CONF_RX_DATA_DELAY = "rx_data_delay"
 CONF_I2S_NUM = "i2s_num"
 CONF_MCLK_MULTIPLE = "mclk_multiple"
 CONF_I2S_COMM_FMT = "i2s_comm_fmt"
@@ -476,6 +478,17 @@ CONFIG_SCHEMA = cv.All(
                 "primary", "secondary", lower=True
             ),
             cv.Optional(CONF_USE_APLL, default=False): cv.boolean,
+            # Clock of the full-duplex RX slave (shared STD bus, ESP32-S3). default = same settings as TX: the slave
+            # detects the BCLK edges with a coarse fractional clock (e.g. 4 ticks per BCLK) and samples a random number
+            # of ticks after the rising edge, so mics that change DATA soon after it (SPH0645: 7..66 ns) are read
+            # correctly, one BCLK late or slipping, chosen anew at every start. fast = RX alone on PLL 240 MHz / 2 =
+            # 120 MHz (integer divider, ~39 ticks per BCLK at 48 kHz). TX is not changed.
+            cv.Optional(CONF_RX_CLOCK, default="default"): cv.one_of("default", "fast", lower=True),
+            # Delay of the RX data input (ESP32-S3 register rx_timing.rx_sd_in_dm, IDF leaves it at bypass), written
+            # at every start before RX is enabled. pos_edge delays SD by one RX clock tick, neg_edge by about half a
+            # tick, so the RX effectively samples earlier. A bit lasts ~325 ns at 48 kHz / 64 bit: no risk of
+            # sampling the previous bit.
+            cv.Optional(CONF_RX_DATA_DELAY, default="none"): cv.one_of("none", "pos_edge", "neg_edge", lower=True),
             cv.Optional(CONF_I2S_NUM, default=0): cv.int_range(min=0, max=2),
             cv.Optional(CONF_RX_BUS): I2S_RX_BUS_SCHEMA,
             cv.Optional(CONF_TX_BUS): I2S_TX_BUS_SCHEMA,
@@ -657,6 +670,21 @@ def _final_validate(config):
             f"use_apll is not supported on {variant}. "
             "APLL clock source is only available on ESP32-P4 in the maintained target set."
         )
+    if config.get(CONF_RX_DATA_DELAY, "none") != "none" and variant != VARIANT_ESP32S3:
+        raise cv.Invalid(f"rx_data_delay is only supported on ESP32-S3, not on {variant}")
+    if config.get(CONF_RX_CLOCK, "default") == "fast":
+        if variant != VARIANT_ESP32S3:
+            raise cv.Invalid(f"rx_clock: fast is only supported on ESP32-S3, not on {variant}")
+        if CONF_RX_BUS in config or CONF_TX_BUS in config:
+            raise cv.Invalid("rx_clock: fast is for the shared full-duplex bus, not for rx_bus/tx_bus")
+        if config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config:
+            raise cv.Invalid("rx_clock: fast is only implemented for standard I2S, not TDM")
+        if config.get(CONF_I2S_MODE, "primary") != "primary":
+            raise cv.Invalid("rx_clock: fast needs i2s_mode: primary (the ESP32 drives BCLK/WS)")
+        if (240_000_000 // 2) % config[CONF_SAMPLE_RATE] != 0:
+            raise cv.Invalid(
+                f"rx_clock: fast needs a sample_rate that divides 120 MHz, not {config[CONF_SAMPLE_RATE]}"
+            )
 
     full_config = fv.full_config.get()
 
@@ -817,6 +845,10 @@ async def to_code(config):
         ),
     )
     cg.add(var.set_i2s_mode_secondary(config[CONF_I2S_MODE] == "secondary"))
+    if config[CONF_RX_CLOCK] == "fast":
+        cg.add(var.set_rx_fast_clock(True))
+    if config[CONF_RX_DATA_DELAY] != "none":
+        cg.add(var.set_rx_data_delay({"pos_edge": 1, "neg_edge": 2}[config[CONF_RX_DATA_DELAY]]))
 
     if CONF_RX_BUS in config:
         rx_bus = config[CONF_RX_BUS]

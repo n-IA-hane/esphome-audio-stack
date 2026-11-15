@@ -232,6 +232,10 @@ class ESPAudioStack final : public Component {
   uint8_t get_speaker_channels() const { return this->use_tdm_bus_ ? 1 : this->speaker_channels_; }
   void set_i2s_mode_secondary(bool secondary) { this->i2s_mode_secondary_ = secondary; }
   void set_use_apll(bool use) { this->use_apll_ = use; }
+  // rx_clock: fast (ESP32-S3, shared STD bus): full-duplex RX slave on PLL 240 MHz / 2 instead of the TX clock
+  void set_rx_fast_clock(bool fast) { this->rx_fast_clock_ = fast; }
+  // rx_data_delay (ESP32-S3): rx_timing.rx_sd_in_dm, 0 = bypass (IDF default), 1 = pos edge, 2 = neg edge
+  void set_rx_data_delay(uint8_t mode) { this->rx_data_delay_ = mode; }
   void set_i2s_num(uint8_t num) { this->i2s_num_ = num; }
   void set_mclk_multiple(uint32_t mult) { this->mclk_multiple_ = mult; }
   void set_i2s_comm_fmt(uint8_t fmt) { this->i2s_comm_fmt_ = fmt; }
@@ -810,6 +814,8 @@ class ESPAudioStack final : public Component {
   uint8_t speaker_channels_{1};        // Public ESPHome speaker stream channels
   bool i2s_mode_secondary_{false};     // false = primary controller, true = secondary peripheral
   bool use_apll_{false};               // Use APLL clock source (ESP32 original only)
+  bool rx_fast_clock_{false};          // rx_clock: fast
+  uint8_t rx_data_delay_{0};           // rx_data_delay: 0 none, 1 pos_edge, 2 neg_edge
   uint8_t i2s_num_{0};                 // I2S port number (0 or 1)
   uint32_t mclk_multiple_{256};        // MCLK multiple: 128, 256, 384, or 512
   uint8_t i2s_comm_fmt_{0};            // 0=philips, 1=msb, 2=pcm_short, 3=pcm_long
