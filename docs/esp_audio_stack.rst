@@ -125,6 +125,13 @@ I2S bus (single-bus mode):
   ``512``. Defaults to ``256``.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. Among the
   supported targets, this is available on ESP32-P4. Defaults to ``false``.
+- **rx_clock** (*Optional*, string): ``default`` or ``fast``. ESP32-S3 shared primary STD bus only:
+  ``fast`` clocks the full-duplex RX channel alone from PLL 240 MHz / 2, so it detects BCLK edges
+  with a fine instead of a coarse clock. Use it if microphone samples are read one BCLK late or
+  slip after some starts. ``sample_rate`` must divide 120 MHz. Defaults to ``default``.
+- **rx_data_delay** (*Optional*, string): ``none``, ``pos_edge`` or ``neg_edge``. ESP32-S3 only:
+  delays the RX data input by one (``pos_edge``) or about half (``neg_edge``) an RX clock tick, for
+  microphones that change DATA soon after the BCLK edge. Defaults to ``none``.
 - **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, ``2`` to ``16``.
   When omitted, TX uses two descriptors; RX starts at six and retains the TDM
   capture-headroom policy. An explicit count sets TX and the RX starting count.

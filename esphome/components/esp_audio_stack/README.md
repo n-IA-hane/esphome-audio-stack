@@ -417,6 +417,8 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 | `tx_channel` | string | `left` | Which stereo channel the speaker writes to: `left` or `right`. |
 | `i2s_mode` | string | `primary` | I2S role: `primary` (ESP drives the clocks, default) or `secondary` (codec drives the clocks). |
 | `use_apll` | bool | false | Use the APLL clock source on ESP32-P4 for cleaner audio at non-multiple-of-8 kHz rates. Costs APLL availability for other peripherals. |
+| `rx_clock` | string | `default` | ESP32-S3, shared primary STD bus only. `fast` clocks the full-duplex RX channel alone from PLL 240 MHz / 2 instead of the TX settings, so it detects BCLK edges with ~39 instead of 4 ticks per bit at 48 kHz. Use it if a microphone's samples are read one BCLK late (6 dB louder, MSB lost) or slip (distorted audio) at random after some starts. `sample_rate` must divide 120 MHz. TX is unchanged. The correct read can be 6 dB lower than a former late one; raise `input_gain` if needed. |
+| `rx_data_delay` | string | `none` | ESP32-S3 only. Delays the RX data input (`rx_timing.rx_sd_in_dm`): `pos_edge` by one RX clock tick, `neg_edge` by about half a tick, so RX samples earlier relative to the data. Helps microphones that change DATA soon after the BCLK edge (e.g. SPH0645); combine with `rx_clock: fast`. |
 | `i2s_num` | int | 0 | Which I2S peripheral port to use (0-2 depending on SoC). Lets you reserve a port when other components also use I2S. |
 | `mclk_multiple` | int | 256 | MCLK to LRCLK ratio (128, 256, 384, or 512). Most codecs accept 256. |
 | `i2s_comm_fmt` | string | `philips` | I2S frame format: `philips` (default), `msb`, `pcm_short`, `pcm_long`. Codec datasheets specify which one. |

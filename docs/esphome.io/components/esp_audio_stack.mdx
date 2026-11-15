@@ -96,6 +96,8 @@ board requires values different from the defaults.
 - **i2s_comm_fmt** (*Optional*, string): Frame format. One of `philips`, `msb`, `pcm_short`, `pcm_long`. Defaults to `philips`.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio. One of `128`, `256`, `384`, `512`. Defaults to `256`.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. In the maintained target set, only ESP32-P4 supports it. Defaults to `false`.
+- **rx_clock** (*Optional*, string): `default` or `fast`. ESP32-S3 shared primary STD bus only: `fast` clocks the full-duplex RX channel alone from PLL 240 MHz / 2, so it detects BCLK edges with a fine instead of a coarse clock. Use it if microphone samples are read one BCLK late or slip after some starts. `sample_rate` must divide 120 MHz. Defaults to `default`.
+- **rx_data_delay** (*Optional*, string): `none`, `pos_edge` or `neg_edge`. ESP32-S3 only: delays the RX data input by one (`pos_edge`) or about half (`neg_edge`) an RX clock tick, for microphones that change DATA soon after the BCLK edge. Defaults to `none`.
 - **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, from `2` to
   `16`. Omitted: TX uses two descriptors; RX starts at six and retains its TDM
   capture margin. An explicit value sets TX and the RX starting count.

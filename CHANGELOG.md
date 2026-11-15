@@ -4,6 +4,16 @@
 
 Changes since stable **2026.11.0**.
 
+### ESP32-S3 full-duplex RX timing options
+
+- On the shared full-duplex bus the RX channel detects BCLK/WS edges with its
+  own coarse fractional clock. Microphones that change DATA soon after the
+  BCLK edge (e.g. SPH0645) could then be read one BCLK late or slip, chosen
+  anew at every audio session start.
+- New `rx_clock: fast` clocks RX alone from PLL 240 MHz / 2; new
+  `rx_data_delay: pos_edge | neg_edge` delays the RX data input. Both are
+  opt-in, ESP32-S3 only, and leave TX and existing configurations unchanged.
+
 ### Correct DC-blocker transients
 
 - Preserve the filter's feedback in wide fixed-point storage and saturate the
