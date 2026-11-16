@@ -93,10 +93,11 @@ def test_component_rejects_retired_builder_before_hardware_validation(monkeypatc
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     minimum = module.CONFIG_SCHEMA.validators[0]
-    monkeypatch.setattr(cv, 'ESPHOME_VERSION', '2026.9.1')
-    with pytest.raises(cv.Invalid, match='at least ESPHome version 2026.10.0'):
-        minimum({})
-    for version in ('2026.10.0', '2026.10.1', '2026.11.0'):
+    for version in ('2026.9.1', '2026.10.0', '2026.10.2', '2026.11.0'):
+        monkeypatch.setattr(cv, 'ESPHOME_VERSION', version)
+        with pytest.raises(cv.Invalid, match='at least ESPHome version 2026.12.0'):
+            minimum({})
+    for version in ('2026.12.0.dev0', '2026.12.0', '2027.1.0'):
         monkeypatch.setattr(cv, 'ESPHOME_VERSION', version)
         value = {}
         assert minimum(value) is value

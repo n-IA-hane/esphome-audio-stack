@@ -27,8 +27,8 @@ unavailable, output is silence. The optional parent AEC switch is an explicit
 bypass that publishes converted raw mic on the same surface; there is no
 parallel raw microphone entity.
 
-This component requires ESPHome **2026.10.0 or newer**, the ESP-IDF framework
-and the ESPHome ``psram`` component. Arduino is not supported. Maintained release targets are
+The development sources require ESPHome **2026.12.0 or newer**, including
+development builds, the ESP-IDF framework and the ESPHome ``psram`` component. Arduino is not supported. Maintained release targets are
 ESP32-S3 and ESP32-P4.
 
 .. code-block:: yaml

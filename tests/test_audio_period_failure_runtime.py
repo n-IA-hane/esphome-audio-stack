@@ -55,6 +55,7 @@ struct Converter {
  bool process(const int16_t*p,int16_t*m,size_t n){uint8_t o=0;return convert(p,n,1,&o,nullptr,m,nullptr,1);}
 };
 struct AudioTaskCtx {
+ int64_t rx_capture_time_us=0,output_capture_time_us=0;
  int16_t *rx_buffer=nullptr,*mic_buffer=nullptr,*processor_mic_buffer=nullptr,*output_buffer=nullptr;
  const int16_t *processor_input=nullptr;
  size_t input_frame_size=4,bus_frame_size=4;uint8_t i2s_bps=2,processor_mic_channels=1,rx_rate_converter_channels=1;

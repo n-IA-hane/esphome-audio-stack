@@ -301,10 +301,10 @@ async def to_code(config):
     else:
         add_idf_component(
             name="espressif/gmf_ai_audio",
-            repo="https://github.com/n-IA-hane/esp-gmf.git",
-            # Keep ESP-SR 2.6.0: upstream GMF 1.1.1 still requires ESP-SR 2.5.*.
-            # The direct manager path uses only official runtime APIs.
-            ref="b1e077aa5fd34e937752712f94b1a515d459b116",
+            repo="https://github.com/espressif/esp-gmf.git",
+            # Official GMF accepts ESP-SR 2.6.*. Keep the DSP pin below while
+            # changing only the provider; the manager contract is unchanged.
+            ref="5adde3e2a214d643635ae036e30c2fa5e89f41b3",
             path="elements/gmf_ai_audio",
         )
     add_idf_component(name="espressif/esp-sr", ref="2.6.0")

@@ -37,9 +37,12 @@ def test_directional_io_failure_is_not_cleared_by_other_direction(tmp_path, fail
     pipeline=(COMPONENT/'audio_pipeline.cpp').read_text()
     code=completion_source().split('int main(int argc,char**argv)')[0]
     code=code.replace('struct AudioTaskCtx{uint8_t speaker_channels=1;',
-                      'struct AudioTaskCtx{int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16,rx_pending_bytes=0,bus_frame_size=8;int consecutive_rx_errors=0,invalid_rx_state_errors=0;uint8_t speaker_channels=1;')
+                      'struct AudioTaskCtx{int16_t storage[8]{},*rx_buffer=storage;size_t rx_frame_bytes=16,rx_pending_bytes=0,bus_frame_size=8;int64_t rx_capture_time_us=0;int consecutive_rx_errors=0,invalid_rx_state_errors=0;uint8_t speaker_channels=1;')
     code=code.replace(' bool write_tx_frame_(AudioTaskCtx&',
-                      ' bool read_rx_frame_(AudioTaskCtx&,const char*);void *rx_handle_=this;\n bool write_tx_frame_(AudioTaskCtx&')
+                      ' bool read_rx_frame_(AudioTaskCtx&,const char*);void *rx_handle_=this;\n'
+                      ' std::atomic<uint32_t>rx_dma_buffers_dropped_{0};\n'
+                      ' void update_rx_capture_time_(AudioTaskCtx&,size_t,uint32_t){}\n'
+                      ' bool write_tx_frame_(AudioTaskCtx&')
     adapter="int rx_error=0;int i2s_channel_read(void*,void*,size_t n,size_t *read,unsigned){*read=rx_error?0:n;return rx_error;}\n"
     # The actual RX method is added after its adapter; TX uses its new DMA owner.
     pos=code.index('struct ESPAudioStack{')
@@ -163,50 +166,69 @@ int main(){
     run_cpp(tmp_path, code, "-O1", "-g", "-fsanitize=address,undefined")
 
 
-def test_microphone_unmute_during_callback_is_not_overwritten(tmp_path):
+def test_microphone_unmute_during_callback_preserves_native_capture_metadata(tmp_path):
     import esphome.components.microphone as upstream
 
     upstream_header = (Path(upstream.__file__).parent / "microphone.h").read_text()
     wrapper = method(upstream_header, "template<typename F> void add_data_callback(")
+    capture_adapter = method(upstream_header, "template<typename F> auto as_capture_callback(")
+    publisher = method(upstream_header, "void publish_audio_(")
     cpp = (COMPONENT / "microphone/esp_audio_stack_microphone.cpp").read_text()
     code = (
-        r"""
+        r'''
 #include <cassert>
 #include <cstring>
 #include <cstdint>
 #include <functional>
+#include <span>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #define LOG_W_THROTTLED(...) ((void)0)
-namespace microphone {enum {STATE_STOPPED,STATE_RUNNING};}
+namespace audio {struct AudioStreamInfo {unsigned bits=16,channels=1,rate=16000;};}
+namespace microphone {
+enum {STATE_STOPPED,STATE_RUNNING};
+struct AudioCapture {std::span<const uint8_t> data;audio::AudioStreamInfo stream_info;int64_t capture_time_us=0;};
+template<typename F>void warn_vector_data_callback(){}
+'''
+        + capture_adapter
+        + r'''
+}
+using microphone::as_capture_callback;
+using microphone::AudioCapture;
 struct Callbacks {
- std::vector<std::function<void(const std::vector<uint8_t>&)>> callbacks;
+ std::vector<std::function<void(const AudioCapture&)>> callbacks;
  template<class F>void add(F f){callbacks.emplace_back(f);}
- void call(const std::vector<uint8_t>& v){for(auto &f:callbacks)f(v);}
+ void call(const AudioCapture& capture){for(auto &f:callbacks)f(capture);}
 };
 struct ESPAudioStackMicrophone {
  int state_=microphone::STATE_RUNNING;bool mute_state_=true;
+ audio::AudioStreamInfo audio_stream_info_;
  std::vector<uint8_t> audio_buffer_;Callbacks data_callbacks_;
  void set_mute_state(bool v){mute_state_=v;}
- void on_audio_data_(const uint8_t*,size_t);
-"""
+ void on_audio_data_(const uint8_t*,size_t,int64_t);
+'''
         + wrapper
+        + publisher
         + "\n};\n"
         + method(cpp, "void ESPAudioStackMicrophone::on_audio_data_(")
-        + r"""
+        + r'''
 int main(){
  ESPAudioStackMicrophone m;m.audio_buffer_.reserve(16);int calls=0;
- m.add_data_callback([&](const std::vector<uint8_t>&pcm){
-  if(calls++==0){for(auto v:pcm)assert(v==0);m.set_mute_state(false);}
-  else assert((pcm==std::vector<uint8_t>{1,2,3,4}));
+ m.add_data_callback([&](const AudioCapture& capture){
+  assert(capture.stream_info.bits==16&&capture.stream_info.channels==1&&capture.stream_info.rate==16000);
+  assert(capture.capture_time_us==123456);
+  if(calls++==0){for(auto v:capture.data)assert(v==0);m.set_mute_state(false);}
+  else assert((std::vector<uint8_t>(capture.data.begin(),capture.data.end())==std::vector<uint8_t>{1,2,3,4}));
  });
- const uint8_t pcm[]={1,2,3,4};m.on_audio_data_(pcm,4);
+ const uint8_t pcm[]={1,2,3,4};m.on_audio_data_(pcm,4,123456);
  assert(!m.mute_state_ && "dispatch must not overwrite the public unmute request");
- m.on_audio_data_(pcm,4);assert(calls==2);
- m.state_=microphone::STATE_STOPPED;m.on_audio_data_(pcm,4);assert(calls==2);
+ m.on_audio_data_(pcm,4,123456);assert(calls==2);
+ m.state_=microphone::STATE_STOPPED;m.on_audio_data_(pcm,4,999999);assert(calls==2);
 }
-"""
+'''
     )
-    run_cpp(tmp_path, code)
+    run_cpp(tmp_path, code, "-std=c++20")
 
 
 @pytest.mark.parametrize("ratio", [1, 3])
@@ -373,7 +395,7 @@ def test_failed_rx_read_cannot_redispatch_prior_frame(tmp_path):
         r"""
 #include <cassert>
 #include <cstdint>
-struct AudioTaskCtx {int16_t storage[4]{},*output_buffer=storage,*processor_input=storage,*mic_buffer=storage;bool mic_running=true;};
+struct AudioTaskCtx {int16_t storage[4]{},*output_buffer=storage,*processor_input=storage,*mic_buffer=storage;bool mic_running=true;uint32_t ratio=1;int64_t rx_capture_time_us=0,output_capture_time_us=123456;};
 struct ESPAudioStack {
  void *rx_handle_=this;
  bool read_rx_frame_(AudioTaskCtx&,const char*){return false;}
@@ -387,7 +409,7 @@ struct ESPAudioStack {
         + method(source, "bool ESPAudioStack::can_dispatch_mic_frame_(")
         + r"""
 int main(){ESPAudioStack s;AudioTaskCtx c;assert(s.can_dispatch_mic_frame_(c));s.process_rx_path_(c);
- assert(!s.can_dispatch_mic_frame_(c)&&c.processor_input==nullptr);}
+ assert(!s.can_dispatch_mic_frame_(c)&&c.processor_input==nullptr&&c.output_capture_time_us==0);}
 """
     )
     run_cpp(tmp_path, code)

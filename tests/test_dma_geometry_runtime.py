@@ -65,6 +65,7 @@ int i2s_new_channel(Config *config,void **tx,void **rx){
 }
 struct ESPAudioStack{
  bool dma_desc_num_configured_=false;unsigned dma_desc_num_=6;void *tx_handle_=nullptr,*rx_handle_=nullptr;
+ unsigned rx_dma_descriptor_count_=0;
  void set_i2s_hardware_state_(I2SHardwareState){}void deinit_i2s_(){}
  bool allocate(bool need_tx,bool need_rx,unsigned tx_i2s_num,unsigned rx_i2s_num){
   Config chan_cfg;unsigned dma_desc_num=10;
@@ -81,6 +82,9 @@ struct ESPAudioStack{
 '''
     if receive:
         code += f'assert(!calls[1].tx && calls[1].config.id=={rx_port} && calls[1].config.dma_desc_num==10);'
+        code += 'assert(owner.rx_dma_descriptor_count_==calls[1].config.dma_desc_num);'
+    else:
+        code += 'assert(owner.rx_dma_descriptor_count_==0);'
     code += '}'
     cpp = tmp_path / 'allocation.cpp'
     cpp.write_text(code)

@@ -32,6 +32,9 @@
 #endif
 #include "audio_core_audio_utils.h"
 #include "audio_core_log_utils.h"
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+#include "native_i2s_capture_time.h"
+#endif
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
 #include "audio_core_ring_buffer_caps.h"
 #endif
@@ -955,6 +958,34 @@ void ESPAudioStack::drain_rx_minimal_(AudioTaskCtx &ctx) {
     return;
 }
 
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+void ESPAudioStack::update_rx_capture_time_(AudioTaskCtx &ctx, size_t bytes_read, uint32_t drops_before_read) {
+  portENTER_CRITICAL(&this->rx_capture_lock_);
+  const uint32_t bytes_received = this->rx_dma_bytes_received_;
+  const uint32_t drops = this->rx_dma_buffers_dropped_.load(std::memory_order_relaxed);
+  const int64_t received_at = this->rx_dma_receive_time_us_;
+  portEXIT_CRITICAL(&this->rx_capture_lock_);
+
+  const uint32_t bytes_before = this->rx_dma_bytes_read_;
+  this->rx_dma_bytes_read_ += static_cast<uint32_t>(bytes_read);
+  const bool first_part = ctx.rx_pending_bytes == bytes_read;
+  const int64_t captured_at = this->rx_capture_tracking_active_.load(std::memory_order_acquire)
+                                  ? i2s_audio::dma_capture_time_us(
+                                        bytes_received, drops, drops_before_read, received_at, bytes_before,
+                                        static_cast<uint32_t>(bytes_read), this->rx_dma_descriptor_count_,
+                                        this->rx_dma_buffer_bytes_,
+                                        audio::AudioStreamInfo(ctx.i2s_bps * 8, ctx.rx_layout.stride, this->sample_rate_))
+                                  : 0;
+  if (first_part) {
+    ctx.rx_capture_time_us = captured_at;
+  } else if (captured_at == 0 || drops != ctx.rx_capture_frame_drops) {
+    // A partial read can span a dropped DMA buffer. Keep the PCM policy, but never invent continuity.
+    ctx.rx_capture_time_us = 0;
+  }
+  ctx.rx_capture_frame_drops = drops;
+}
+#endif
+
 bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
   if (!this->rx_handle_ || ctx.rx_buffer == nullptr)
     return false;
@@ -963,6 +994,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
   const bool read_ok = this->codec_backend_.read(ctx.rx_buffer, ctx.rx_frame_bytes);
   const bool io_closed = !this->codec_backend_.is_open();
 #else
+  const uint32_t drops_before_read = this->rx_dma_buffers_dropped_.load(std::memory_order_relaxed);
   size_t bytes_read = 0;
   const uint32_t timeout_ms = std::max<uint32_t>(
       1, (static_cast<uint64_t>(ctx.bus_frame_size) * 1000 + this->sample_rate_ - 1) / this->sample_rate_);
@@ -971,10 +1003,12 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
       i2s_channel_read(this->rx_handle_, reinterpret_cast<uint8_t *>(ctx.rx_buffer) + ctx.rx_pending_bytes,
                        remaining, &bytes_read, timeout_ms);
   ctx.rx_pending_bytes += bytes_read;
+  this->update_rx_capture_time_(ctx, bytes_read, drops_before_read);
   const bool read_ok = read_err == ESP_OK && ctx.rx_pending_bytes == ctx.rx_frame_bytes;
   const bool io_closed = read_err == ESP_ERR_INVALID_STATE;
   if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
     ctx.rx_pending_bytes = 0;
+    ctx.rx_capture_time_us = 0;
     return false;
   }
   if (read_ok) {
@@ -987,6 +1021,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
     return false;
   } else if (read_err != ESP_ERR_TIMEOUT) {
     ctx.rx_pending_bytes = 0;
+    ctx.rx_capture_time_us = 0;
   }
 #endif
   if (!read_ok && io_closed) {
@@ -1034,6 +1069,7 @@ void ESPAudioStack::process_rx_path_(AudioTaskCtx &ctx) {
   // A failed read must not re-dispatch PCM from the preceding period.
   ctx.output_buffer = nullptr;
   ctx.processor_input = nullptr;
+  ctx.output_capture_time_us = 0;
   if (!this->read_rx_frame_(ctx, "audio"))
     return;
 
@@ -1055,6 +1091,11 @@ void ESPAudioStack::process_rx_path_(AudioTaskCtx &ctx) {
     return;
   }
   this->apply_input_conditioning_(ctx);
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  // Channel selection and gain retain sample position. Rate-converter delay is not yet mapped.
+  if (ctx.ratio == 1)
+    ctx.output_capture_time_us = ctx.rx_capture_time_us;
+#endif
 }
 
 bool ESPAudioStack::convert_rx_frame_(AudioTaskCtx &ctx) {
@@ -1406,6 +1447,12 @@ bool ESPAudioStack::can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const {
 void ESPAudioStack::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
   if (!this->can_dispatch_mic_frame_(ctx))
     return;
+#ifdef USE_AUDIO_PROCESSOR
+  // AFE/GMF can stage, prebuffer and split frames independently of this RX period.
+  // Its output has no demonstrated first-input-frame mapping; zero means unknown.
+  if (ctx.processor_enabled)
+    ctx.output_capture_time_us = 0;
+#endif
 
 #ifdef USE_ESP_AUDIO_STACK_CAPTURE
 #if defined(USE_ESP_AUDIO_STACK_TEST_INPUT) && defined(USE_AUDIO_PROCESSOR)
@@ -1547,7 +1594,8 @@ void ESPAudioStack::dispatch_mic_callbacks_(const AudioTaskCtx &ctx) {
   for (size_t i = 0; i < this->mic_callback_count_; i++) {
     const auto &slot = this->mic_callbacks_[i];
     if (slot.fn != nullptr) {
-      slot.fn(slot.ctx, (const uint8_t *) ctx.output_buffer, ctx.current_output_frame_bytes);
+      slot.fn(slot.ctx, (const uint8_t *) ctx.output_buffer, ctx.current_output_frame_bytes,
+              ctx.output_capture_time_us);
     }
   }
 }

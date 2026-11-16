@@ -90,7 +90,7 @@ template<typename T> struct RAMAllocator {
 };
 }
 ''',
-        'esphome/core/log.h': '#pragma once\n#define ESP_LOGD(...) ((void)0)\n',
+        'esphome/core/log.h': '#pragma once\n#define ESPHOME_LOG_TAG(name, tag) [[maybe_unused]] static constexpr const char *const name = tag\n#define ESP_LOGD(...) ((void)0)\n',
     }
     for name, content in files.items():
         path = stubs / name
@@ -193,9 +193,10 @@ int main(int argc,char **argv) {
     binary = directory / 'partial'
     esphome_root = Path(esphome.__file__).resolve().parent
     ring = esphome_root / 'components/ring_buffer/ring_buffer.cpp'
-    subprocess.run(['g++', '-std=c++17', '-DUSE_ESP32', '-I'+str(stubs),
-                    '-I'+str(esphome_root.parent), str(unit), str(ring), '-o', str(binary)],
-                   check=True, capture_output=True, text=True)
+    compiled = subprocess.run(['g++', '-std=c++17', '-DUSE_ESP32', '-I'+str(stubs),
+                               '-I'+str(esphome_root.parent), str(unit), str(ring), '-o', str(binary)],
+                              capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
     return binary
 
 

@@ -37,10 +37,13 @@ int i2s_channel_read(void*,void*out,size_t capacity,size_t*bytes,uint32_t timeou
 struct AudioTaskCtx {
  int16_t storage[256]{},*rx_buffer=storage;size_t rx_frame_bytes=512,bus_frame_size=256,rx_pending_bytes=0;
  int consecutive_rx_errors=0,invalid_rx_state_errors=0;
+ int64_t rx_capture_time_us=0;
 };
 struct ESPAudioStack {
  void*rx_handle_=this;uint32_t sample_rate_=16000;
  std::atomic<bool>audio_stack_running_{true},has_i2s_error_{false};
+ std::atomic<uint32_t>rx_dma_buffers_dropped_{0};
+ void update_rx_capture_time_(AudioTaskCtx&,size_t,uint32_t){}
  bool read_rx_frame_(AudioTaskCtx&,const char*);
 };
 ''' + method(pipeline, "bool ESPAudioStack::read_rx_frame_(") + r'''

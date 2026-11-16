@@ -43,9 +43,24 @@ providers.
 [Previous stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 
-Use ESPHome **2026.10.0 or newer**,
-ESP-IDF, and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode and
-pins from your board's schematic.
+Current development sources require ESPHome **2026.12.0 or newer**, including
+development builds. The tested official source is commit
+`373224c141dceadbb67ace263040cbfc802c5968`, which identifies itself as
+`2026.12.0.dev0`. Install that source with:
+
+```sh
+python -m pip install "esphome @ https://github.com/esphome/esphome/archive/373224c141dceadbb67ace263040cbfc802c5968.tar.gz"
+```
+
+Use ESP-IDF and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode
+and pins from your board's schematic. Published stable releases retain the core
+requirements documented at their release tags.
+
+The native microphone `AudioCapture` callback carries the first sample's capture
+time for direct, unprocessed IDF RX without rate conversion. CodecDev,
+resampling and AEC/AFE paths currently report `0` (unknown), rather than a time
+inferred from callback arrival. See the [capture-time contract](esphome/components/esp_audio_stack/README.md#exact-public-pcm-formats)
+for the supported path and loss handling.
 
 Optional [microphone downmix, analog tuning and PCM capture](docs/AUDIO_TUNING.md)
 are available for board development. Existing profiles keep their delivery and
@@ -1128,13 +1143,15 @@ Dependencies selected by the current component sources:
   pre-v3 ESP32-P4 engineering-sample path;
 - `esp-sr` `2.6.0` for AEC/AFE; the wrappers no longer add a separate direct
   `esp-dsp` constraint, though dependencies can still bring DSP transitively;
-- AFE's `gmf_ai_audio` from `n-IA-hane/esp-gmf`, pinned in
+- AFE's `gmf_ai_audio` from official `espressif/esp-gmf`, pinned in
   [the component configuration](esphome/components/esp_afe/__init__.py) to
-  `b1e077aa5fd34e937752712f94b1a515d459b116` by default.
+  `5adde3e2a214d643635ae036e30c2fa5e89f41b3` by default.
 
-The release dependency set pins GMF AI Audio 1.1.1 with a manifest compatible
-with ESP-SR 2.6.0. The AFE adapter now uses official manager callbacks directly;
-it no longer needs the fork's separate AFE-element output callback.
+The current development dependency is official GMF AI Audio 1.1.2, whose manifest
+accepts ESP-SR 2.6.*; the DSP dependency remains pinned to 2.6.0. The AFE adapter
+uses official manager callbacks directly. Earlier qualification records used
+compatibility-fork commit `b1e077aa5fd34e937752712f94b1a515d459b116`; those records
+remain tied to their original firmware and dependency set.
 `gmf_source` remains available for explicitly identified local experiments. See
 [development dependency identity](esphome/components/esp_afe/README.md#dependency-identity-for-development-builds).
 Published stable releases retain their own recorded dependency set.

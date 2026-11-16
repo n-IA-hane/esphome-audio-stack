@@ -25,7 +25,8 @@ is allocated. Normal Audio Stack input can keep microphone channels separate
 until this assembly; diagnostic capture and writable test input retain their
 interleaved contract.
 
-Requires ESPHome **2026.10.0 or newer**, ESP-IDF and PSRAM. The parent Audio
+Development sources require ESPHome **2026.12.0 or newer**, including
+development builds, ESP-IDF and PSRAM. The parent Audio
 Stack owns the bus and sample-rate conversion.
 
 .. code-block:: yaml

@@ -804,7 +804,7 @@ bool ESPAudioStack::prepare_i2s_channels_() {
 #endif
 
   i2s_chan_config_t chan_cfg =
-      I2S_CHANNEL_DEFAULT_CONFIG(static_cast<i2s_port_t>(dual_bus ? tx_i2s_num : this->i2s_num_),
+      I2S_CHANNEL_DEFAULT_CONFIG(static_cast<decltype(i2s_chan_config_t{}.id)>(dual_bus ? tx_i2s_num : this->i2s_num_),
                                  this->i2s_mode_secondary_ ? static_cast<i2s_role_t>(1) : I2S_ROLE_MASTER);
   chan_cfg.dma_desc_num = dma_desc_num;
   chan_cfg.dma_frame_num = dma_frame_num;
@@ -821,7 +821,7 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   const uint32_t tx_dma_desc_num = this->dma_desc_num_configured_ ? this->dma_desc_num_ : 2U;
   esp_err_t err = ESP_OK;
   if (need_tx) {
-    chan_cfg.id = static_cast<i2s_port_t>(tx_i2s_num);
+    chan_cfg.id = static_cast<decltype(chan_cfg.id)>(tx_i2s_num);
     chan_cfg.dma_desc_num = tx_dma_desc_num;
     err = i2s_new_channel(&chan_cfg, &this->tx_handle_, nullptr);
     if (err != ESP_OK) {
@@ -830,7 +830,7 @@ bool ESPAudioStack::prepare_i2s_channels_() {
     }
   }
   if (need_rx) {
-    chan_cfg.id = static_cast<i2s_port_t>(rx_i2s_num);
+    chan_cfg.id = static_cast<decltype(chan_cfg.id)>(rx_i2s_num);
     chan_cfg.dma_desc_num = dma_desc_num;
     err = i2s_new_channel(&chan_cfg, nullptr, &this->rx_handle_);
     if (err != ESP_OK) {
@@ -838,6 +838,9 @@ bool ESPAudioStack::prepare_i2s_channels_() {
       this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
       return false;
     }
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+    this->rx_dma_descriptor_count_ = dma_desc_num;
+#endif
   }
 
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
@@ -1088,6 +1091,38 @@ bool ESPAudioStack::setup_codec_backend_(i2s_clock_src_t clk_src) {
 }
 #endif
 
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+void ESPAudioStack::prepare_rx_capture_tracking_() {
+  // Channels are disabled here. Reset all counters together before the next generation can receive DMA.
+  this->rx_capture_tracking_active_.store(false, std::memory_order_release);
+  this->rx_dma_bytes_received_ = 0;
+  this->rx_dma_buffers_dropped_.store(0, std::memory_order_relaxed);
+  this->rx_dma_receive_time_us_ = 0;
+  this->rx_dma_bytes_read_ = 0;
+  this->rx_dma_buffer_bytes_ = 0;
+  if (this->rx_handle_ == nullptr)
+    return;
+  i2s_chan_info_t info{};
+  if (i2s_channel_get_info(this->rx_handle_, &info) != ESP_OK || this->rx_dma_descriptor_count_ == 0 ||
+      info.total_dma_buf_size == 0 || info.total_dma_buf_size % this->rx_dma_descriptor_count_ != 0) {
+    ESP_LOGW(TAG, "RX DMA geometry unavailable; capture timestamps remain unknown");
+    return;
+  }
+  this->rx_dma_buffer_bytes_ = info.total_dma_buf_size / this->rx_dma_descriptor_count_;
+  const i2s_event_callbacks_t callbacks = {
+      .on_recv = ESPAudioStack::rx_on_recv_callback,
+      .on_recv_q_ovf = ESPAudioStack::rx_on_recv_q_ovf_callback,
+  };
+  const esp_err_t error = i2s_channel_register_event_callback(this->rx_handle_, &callbacks, this);
+  if (error != ESP_OK) {
+    // A missing timestamp must not prevent an otherwise usable audio stream.
+    ESP_LOGW(TAG, "RX capture callbacks unavailable: %s", esp_err_to_name(error));
+    return;
+  }
+  this->rx_capture_tracking_active_.store(true, std::memory_order_release);
+}
+#endif
+
 bool ESPAudioStack::enable_i2s_channels_() {
   auto state = static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed));
   if (state == I2SHardwareState::RUNNING) {
@@ -1100,6 +1135,9 @@ bool ESPAudioStack::enable_i2s_channels_() {
   if (!this->prepare_i2s_channels_()) {
     return false;
   }
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  this->prepare_rx_capture_tracking_();
+#endif
 
   if (this->tx_handle_ != nullptr) {
     if (!this->prepare_tx_completion_tracking_()) {
@@ -1186,6 +1224,10 @@ bool ESPAudioStack::enable_i2s_channels_() {
 bool ESPAudioStack::init_audio_stack_() { return this->enable_i2s_channels_(); }
 
 void ESPAudioStack::close_audio_io_() {
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  // Revoke metadata before disabling channels, so a late callback cannot publish an old clock.
+  this->rx_capture_tracking_active_.store(false, std::memory_order_release);
+#endif
   auto state = static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed));
   if (state != I2SHardwareState::RUNNING && state != I2SHardwareState::STOPPING) {
     return;
@@ -1277,6 +1319,34 @@ static inline void IRAM_ATTR isr_increment_u32(std::atomic<uint32_t> &value) {
 static inline void IRAM_ATTR isr_decrement_u32(std::atomic<uint32_t> &value) {
   __atomic_fetch_sub(reinterpret_cast<uint32_t *>(&value), 1U, __ATOMIC_RELAXED);
 }
+
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+bool IRAM_ATTR ESPAudioStack::rx_on_recv_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
+  auto *self = static_cast<ESPAudioStack *>(user_ctx);
+  if (self == nullptr || event == nullptr || handle != self->rx_handle_)
+    return false;
+  const int64_t now = esp_timer_get_time();
+  portENTER_CRITICAL_ISR(&self->rx_capture_lock_);
+  if (isr_load_flag(self->rx_capture_tracking_active_)) {
+    self->rx_dma_bytes_received_ += event->size;
+    self->rx_dma_receive_time_us_ = now;
+  }
+  portEXIT_CRITICAL_ISR(&self->rx_capture_lock_);
+  return false;
+}
+
+bool IRAM_ATTR ESPAudioStack::rx_on_recv_q_ovf_callback(i2s_chan_handle_t handle, i2s_event_data_t *, void *user_ctx) {
+  auto *self = static_cast<ESPAudioStack *>(user_ctx);
+  if (self == nullptr || handle != self->rx_handle_)
+    return false;
+  if (isr_load_flag(self->rx_capture_tracking_active_)) {
+    // IDF serializes this channel's callbacks. Match upstream's load/store increment, including uint32 wrap.
+    __atomic_store_n(reinterpret_cast<uint32_t *>(&self->rx_dma_buffers_dropped_),
+                     isr_load_u32(self->rx_dma_buffers_dropped_) + 1U, __ATOMIC_RELAXED);
+  }
+  return false;
+}
+#endif
 
 bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
   auto *self = static_cast<ESPAudioStack *>(user_ctx);

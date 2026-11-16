@@ -52,7 +52,8 @@ static constexpr UBaseType_t MAX_LISTENERS = 16;
 // IMPORTANT: Callbacks are invoked from the audio task (high priority, Core 0).
 // They MUST NOT block, allocate memory, do network I/O, or hold locks.
 // Target completion: <1ms to avoid I2S DMA underruns.
-using MicDataCallback = void (*)(void *ctx, const uint8_t *data, size_t len);
+// capture_time_us is the first frame's esp_timer time, or zero when unknown.
+using MicDataCallback = void (*)(void *ctx, const uint8_t *data, size_t len, int64_t capture_time_us);
 // Callback type for speaker output: reports frames played and timestamp (for mixer pending_playback tracking).
 // Same real-time constraints as MicDataCallback apply.
 using SpeakerOutputCallback = void (*)(void *ctx, uint32_t frames, int64_t timestamp);
@@ -643,6 +644,10 @@ class ESPAudioStack final : public Component {
     // Raw I2S timeouts can return a partial frame. Retain its bytes only for
     // this session; conversion and callbacks require a complete frame.
     size_t rx_pending_bytes{0};
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+    int64_t rx_capture_time_us{0};
+    uint32_t rx_capture_frame_drops{0};
+#endif
     int consecutive_rx_errors{0};
     int consecutive_tx_errors{0};
     // INVALID_STATE counter: codec/GMF IO can surface invalid state
@@ -659,6 +664,7 @@ class ESPAudioStack final : public Component {
     int16_t *output_buffer{nullptr};  // points to mic_buffer or aec_output
     size_t current_output_frame_bytes{0};
     size_t current_output_frame_size{0};
+    int64_t output_capture_time_us{0};
     bool mic_separate{false};  // true if mic_buffer != rx_buffer
     bool need_rx_processing{false};
     bool need_rx_drain{false};
@@ -699,6 +705,12 @@ class ESPAudioStack final : public Component {
   void update_runtime_audio_flags_(AudioTaskCtx &ctx);
   void process_rx_path_(AudioTaskCtx &ctx);
   bool read_rx_frame_(AudioTaskCtx &ctx, const char *label);
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  void prepare_rx_capture_tracking_();
+  void update_rx_capture_time_(AudioTaskCtx &ctx, size_t bytes_read, uint32_t drops_before_read);
+  static bool IRAM_ATTR rx_on_recv_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+  static bool IRAM_ATTR rx_on_recv_q_ovf_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+#endif
   void fail_audio_session_(const char *stage);
   bool convert_rx_frame_(AudioTaskCtx &ctx);
   bool process_rx_passthrough_(AudioTaskCtx &ctx);
@@ -840,6 +852,18 @@ class ESPAudioStack final : public Component {
   // I2S handles managed as a coordinated RX/TX pair
   i2s_chan_handle_t tx_handle_{nullptr};
   i2s_chan_handle_t rx_handle_{nullptr};
+#ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  // Same bounded DMA clock/count contract as the official I2S microphone.
+  // Only the audio task reads bytes; ISR writes are snapshotted under this lock.
+  portMUX_TYPE rx_capture_lock_ = portMUX_INITIALIZER_UNLOCKED;
+  std::atomic<bool> rx_capture_tracking_active_{false};
+  std::atomic<uint32_t> rx_dma_buffers_dropped_{0};
+  uint32_t rx_dma_bytes_received_{0};
+  int64_t rx_dma_receive_time_us_{0};
+  uint32_t rx_dma_bytes_read_{0};
+  uint32_t rx_dma_descriptor_count_{0};
+  uint32_t rx_dma_buffer_bytes_{0};
+#endif
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   CodecDevBackend codec_backend_;
 #endif

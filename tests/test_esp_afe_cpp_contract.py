@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -138,14 +139,27 @@ def test_esp_afe_uses_current_espressif_afe_dependencies() -> None:
     init = read("__init__.py")
     aec_init = read_aec("__init__.py")
 
-    assert 'add_idf_component(name="espressif/esp-sr", ref="2.6.0")' in init
-    assert 'name="espressif/gmf_ai_audio"' in init
-    assert 'repo="https://github.com/n-IA-hane/esp-gmf.git"' in init
-    assert 'ref="b1e077aa5fd34e937752712f94b1a515d459b116"' in init
-    assert 'path="elements/gmf_ai_audio"' in init
+    dependencies = []
+    for source in (init, aec_init):
+        dependencies.append([
+            {keyword.arg: keyword.value.value for keyword in node.keywords
+             if isinstance(keyword.value, ast.Constant)}
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "add_idf_component"
+        ])
+    afe_dependencies, aec_dependencies = dependencies
+    gmf = next(item for item in afe_dependencies
+               if item.get("name") == "espressif/gmf_ai_audio" and "repo" in item)
+    assert (gmf["repo"], gmf["ref"], gmf["path"]) == (
+        "https://github.com/espressif/esp-gmf.git",
+        "5adde3e2a214d643635ae036e30c2fa5e89f41b3",
+        "elements/gmf_ai_audio",
+    )
+    assert {"name": "espressif/esp-sr", "ref": "2.6.0"} in afe_dependencies
     assert not (AFE / "idf_components" / "gmf_ai_audio").exists()
     assert 'ref="0.8.3"' not in init
-    assert 'add_idf_component(name="espressif/esp-sr", ref="2.6.0")' in aec_init
+    assert {"name": "espressif/esp-sr", "ref": "2.6.0"} in aec_dependencies
     assert 'ref="^2.4.4"' not in aec_init
     assert 'name="espressif/esp-dsp"' not in init + aec_init
     assert 'path=source' in init

@@ -26,8 +26,8 @@ class ESPAudioStackMicrophone final : public microphone::Microphone, public Comp
   void stop() override;
 
  protected:
-  static void mic_data_callback(void *ctx, const uint8_t *data, size_t len);
-  void on_audio_data_(const uint8_t *data, size_t len);
+  static void mic_data_callback(void *ctx, const uint8_t *data, size_t len, int64_t capture_time_us);
+  void on_audio_data_(const uint8_t *data, size_t len, int64_t capture_time_us);
 
   std::vector<uint8_t> audio_buffer_;
 

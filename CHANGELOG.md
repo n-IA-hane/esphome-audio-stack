@@ -4,6 +4,20 @@
 
 Changes since stable **2026.11.0**.
 
+### Official providers and capture metadata
+
+- Use the official Espressif GMF AFE manager while retaining ESP-SR2.6.0 and
+  the existing processing configuration. The selected manager implementation
+  matches the previously used manager.
+- Carry native capture format and sample-acquisition time through the
+  microphone adapter where that mapping is known. AFE/resampled output keeps
+  an explicit unknown timestamp when no reliable acquisition mapping exists;
+  delivery time is not substituted for capture time.
+- Use the SDK's native I2S channel-ID type on both IDF5 and IDF6, preserving
+  port selection, DMA layout and gain settings. Apply a scoped ESP-DL header
+  prerequisite on IDF6 until the official dependency includes
+  [its upstream fix](https://github.com/espressif/esp-dl/pull/348).
+
 ### Correct DC-blocker transients
 
 - Preserve the filter's feedback in wide fixed-point storage and saturate the
@@ -30,11 +44,30 @@ Changes since stable **2026.11.0**.
   existing TX DMA staging for clock-only silence. The resulting memory saving
   depends on the configured formats, channels and processing backend.
 
+### Native microphone capture timing and official AFE dependency
+
+- Pass the first sample's capture time through the existing native
+  `AudioCapture` callback for direct, unprocessed IDF RX without rate conversion.
+  Reuse ESPHome's DMA capture-time helper; partial reads retain their first
+  sample's time and detected DMA loss invalidates that frame's timestamp.
+- Keep capture time at `0` (unknown) for CodecDev, resampling and AEC/AFE output,
+  whose input-to-output timing has not been established. Callback arrival time
+  is not used as a substitute; no extra audio queue or task is added.
+- Use official Espressif GMF AI Audio **1.1.2**, pinned to
+  `5adde3e2a214d643635ae036e30c2fa5e89f41b3`, with ESP-SR **2.6.0** unchanged.
+  Preserve the existing manager callbacks, channel mapping and gain settings.
+
 ### Updating
 
-Existing YAML, wiring and gain settings remain valid. Refresh the `dev`
-component sources, rebuild and upload to apply these changes. The supported
-ESPHome version and Espressif dependencies remain those of 2026.11.0.
+The development sources require ESPHome **2026.12.0 or newer**, including
+`2026.12.0.dev0` at official commit
+`373224c141dceadbb67ace263040cbfc802c5968`. Existing YAML, wiring and gain
+settings remain valid. Refresh the `dev` sources and rebuild with that core
+before uploading. Published stable releases retain their documented dependencies.
+
+Host and configuration regressions cover this stabilization checkpoint. They
+do not establish device interrupt timing, acoustic performance or firmware
+promotion; those require evidence for the exact board and source set.
 
 ## 2026.11.0
 

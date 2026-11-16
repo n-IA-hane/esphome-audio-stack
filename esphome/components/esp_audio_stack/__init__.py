@@ -10,12 +10,16 @@ If output_sample_rate is omitted, no rate conversion occurs (backward compatible
 """
 
 import math
+from pathlib import Path
+
+import esphome
 
 from esphome import automation, pins
 import esphome.codegen as cg
 from esphome.components import i2c, psram
 from esphome.components.esp32 import (
     add_idf_component,
+    add_extra_build_file,
     add_idf_sdkconfig_option,
     get_esp32_variant,
     include_builtin_idf_component,
@@ -421,7 +425,7 @@ def _validate_dual_bus_config(config):
 
 
 CONFIG_SCHEMA = cv.All(
-    cv.require_esphome_version(2026, 10, 0),
+    cv.require_esphome_version(2026, 12, 0),
     cv.only_with_framework(Framework.ESP_IDF),
     cv.requires_component(psram.DOMAIN),
     cv.Schema(
@@ -722,6 +726,11 @@ def _add_config_setters(var, config, setters):
 
 
 async def to_code(config):
+    # Reuse the installed official helper without loading or instantiating an I2S bus.
+    add_extra_build_file(
+        "src/esphome/components/esp_audio_stack/native_i2s_capture_time.h",
+        Path(esphome.__file__).parent / "components/i2s_audio/microphone/capture_time.h",
+    )
     var = cg.new_Pvariable(config[CONF_ID])
     if config[CONF_MIC_MIX] == "average":
         cg.add_define("USE_ESP_AUDIO_STACK_MIC_DOWNMIX")

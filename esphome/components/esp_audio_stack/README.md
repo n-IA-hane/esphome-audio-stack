@@ -7,6 +7,11 @@ Word facade, but moves low-level audio ownership to the ESP-IDF and Espressif
 audio libraries: `esp_driver_i2s`, `esp_codec_dev`, `esp_audio_effects`
 and, through optional processors, ESP-SR/GMF AFE.
 
+The development provider requires ESPHome 2026.12.0 or newer, including development
+builds. It is aligned with official commit
+`373224c141dceadbb67ace263040cbfc802c5968` (`2026.12.0.dev0`), whose native
+`AudioCapture` and DMA capture-time helper are used by the microphone facade.
+
 This independently maintained ESPHome component integrates Espressif libraries so board YAMLs can cover shared
 codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,
 hardware and software AEC references, and full AFE processors without each
@@ -98,6 +103,23 @@ The microphone facade always publishes 16-bit mono PCM at the parent's
 The speaker accepts 16-bit PCM at the parent's `sample_rate`, with
 `speaker_channels` channels (always mono for TDM). These are exact capabilities,
 not a promise of implicit conversion by downstream consumers.
+
+The microphone uses the native `AudioCapture` callback. `capture_time_us` is
+the first sample's capture time on the ESP timer clock, or zero when unknown.
+Direct IDF RX tracks DMA completion, driver drops and consumed bytes using the
+official ESPHome capture-time helper, copied from the installed core into the
+generated build without loading another I2S bus. Partial reads retain the first
+sample's time; a DMA drop makes that frame's timestamp unknown. The counters
+use the same uint32 wrap contract as the native microphone and reset with the
+channel's existing lifecycle.
+
+CodecDev conversion, rate conversion and AEC/AFE output currently report zero:
+their output-to-input timing relationship has not been established. In
+particular, an AFE result may span staged or prebuffered input, so the time of
+its callback is not substituted for capture time. This is not complete AFE
+timestamp propagation. PCM format, gain, mute, buffering and processing policy
+remain unchanged. The existing parent microphone callback now carries the
+same timestamp as a fourth argument; it does not create a second audio path.
 
 For example, use `sample_rate: 48000` and `output_sample_rate: 16000` for a
 48 kHz speaker plus a 16 kHz microphone for Voice Assistant. Put a resampler

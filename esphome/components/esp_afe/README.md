@@ -759,9 +759,9 @@ see the repository `THIRD_PARTY_NOTICES.md`.
 
 AEC and AFE select ESP-SR 2.6.0 explicitly. Direct manager callbacks are official
 GMF APIs and do not require the fork's external-output callback extension.
-The pinned GMF source remains because its dependency manifest allows the selected
-ESP-SR 2.6.0; the upstream GMF AI Audio 1.1.1 manifest currently requests
-ESP-SR 2.5.*. Removing that pin requires a separately validated dependency update.
+The development default is official `espressif/esp-gmf` commit
+`5adde3e2a214d643635ae036e30c2fa5e89f41b3` (GMF AI Audio 1.1.2), whose manifest
+accepts ESP-SR 2.6.*. The DSP dependency stays pinned to ESP-SR 2.6.0.
 The manager settings keep feed/fetch stacks internal on P4 and in PSRAM on S3.
 Existing channel mapping, mode choices and external MWW processing are unchanged.
 
@@ -771,8 +771,9 @@ its upstream revision and the dirty source hash with the firmware artifacts.
 Omit it for the published pinned dependency. This override changes the source of
 the same GMF component; it does not select a second AFE implementation.
 
-This release pins GMF commit
-`b1e077aa5fd34e937752712f94b1a515d459b116`. No local `gmf_source` override is
-needed for this dependency set. Native callback/lifecycle tests exercise the
+Earlier qualification records used compatibility-fork commit
+`b1e077aa5fd34e937752712f94b1a515d459b116`; retain their original source identities.
+No local `gmf_source` override is needed for the current development dependency.
+Native callback/lifecycle tests exercise the
 adapter, but they do not qualify device scheduling, acoustic cancellation or
 playback quality. Keep firmware and device evidence tied to the exact source set.

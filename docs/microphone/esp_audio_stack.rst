@@ -20,6 +20,12 @@ The public stream is mono signed 16-bit PCM at the parent's
 parent rather than the microphone platform. A native ``MicrophoneSource`` can
 convert channels, sample width and gain; it does not resample this stream.
 
+The native ``AudioCapture`` callback supplies the first sample's capture time
+for direct IDF RX without processing or rate conversion. Partial reads preserve
+that time; detected DMA loss makes it unknown. CodecDev, resampling and AEC/AFE
+output currently report ``0`` (unknown), because their input-to-output timing
+has not been established. Callback arrival time is not a capture timestamp.
+
 .. code-block:: yaml
 
     esp_audio_stack:
