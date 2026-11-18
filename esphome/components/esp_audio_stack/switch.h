@@ -38,6 +38,19 @@ class AECSwitch final : public switch_::Switch, public Component {
   ESPAudioStack *parent_{nullptr};
 };
 
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+class AdaptiveVolumeSwitch final : public switch_::Switch, public Component, public Parented<ESPAudioStack> {
+ public:
+  void setup() override { this->write_state(this->get_initial_state_with_restore_mode().value_or(false)); }
+
+ protected:
+  void write_state(bool state) override {
+    this->parent_->set_adaptive_volume_enabled(state);
+    this->publish_state(state);
+  }
+};
+#endif
+
 }  // namespace esphome::esp_audio_stack
 
 #endif  // USE_ESP32 && USE_SWITCH

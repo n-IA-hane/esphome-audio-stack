@@ -11,6 +11,9 @@
 #include "audio_core_audio_utils.h"
 #include "audio_core_ring_buffer_caps.h"
 #include "audio_core_scoped_lock.h"
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+#include "adaptive_volume.h"
+#endif
 #include "audio_core_task_utils.h"
 
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
@@ -348,6 +351,17 @@ class ESPAudioStack final : public Component {
   // Master volume is independent from the speaker abstraction volume used by
   // ESPHome's media_player. The audio task applies media/speaker volume *
   // master volume, so HA media volume and the board master control cascade.
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+  void configure_adaptive_volume(float quiet_dbfs, float loud_dbfs, float max_reduction_db) {
+    this->adaptive_volume_.configure(quiet_dbfs, loud_dbfs, max_reduction_db);
+  }
+  void set_adaptive_volume_enabled(bool enabled) {
+    // The ESPHome switch owns these transitions. Preserve both edges of an
+    // off/on while the audio task is parked.
+    if ((this->adaptive_volume_epoch_.load(std::memory_order_relaxed) & 1U) != static_cast<unsigned>(enabled))
+      this->adaptive_volume_epoch_.fetch_add(1, std::memory_order_relaxed);
+  }
+#endif
   void set_master_volume_min_db(float db);
   void set_master_volume(float volume);
   void set_master_volume_q31(int32_t q31);
@@ -1040,6 +1054,10 @@ class ESPAudioStack final : public Component {
   std::atomic<float> input_gain_{1.0f};           // Public/debug value before the processor.
   std::atomic<int32_t> input_gain_q31_{INT32_MAX};
   std::atomic<float> input_gain_boost_{1.0f};
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+  AdaptivePlaybackVolume adaptive_volume_;
+  std::atomic<uint32_t> adaptive_volume_epoch_{0};
+#endif
   std::atomic<float> master_volume_public_{1.0f};          // public/debug master value
   std::atomic<int32_t> hot_output_volume_q31_{INT32_MAX};  // combined hot-path fixed-point output volume
   std::atomic<int32_t> output_volume_q31_{INT32_MAX};      // media_player/speaker abstraction volume

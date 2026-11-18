@@ -811,6 +811,12 @@ void ESPAudioStack::audio_session_() {
       ctx.aec_ref_mic_active = ctx.mic_running;
     }
 #endif
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+    this->adaptive_volume_.sync_switch(this->adaptive_volume_epoch_.load(std::memory_order_relaxed));
+    // Apply only attenuation to the existing TX multiplier, before the AEC
+    // reference tap. The user's Master (including a hardware mute) keeps ownership.
+    ctx.hot_output_volume_q31 = this->adaptive_volume_.apply_to(ctx.hot_output_volume_q31);
+#endif
     this->update_runtime_audio_flags_(ctx);
 
     ctx.processor_enabled = this->processor_enabled_.load(std::memory_order_relaxed);
@@ -830,6 +836,10 @@ void ESPAudioStack::audio_session_() {
     if (!this->audio_stack_running_.load(std::memory_order_relaxed))
       break;
 
+#ifdef USE_ESP_AUDIO_STACK_ADAPTIVE_VOLUME
+    const auto *ambient_mic = ctx.need_rx_processing && ctx.mic_running && ctx.output_buffer ? ctx.mic_buffer : nullptr;
+    this->adaptive_volume_.observe(ctx.now_ms, ambient_mic, ctx.input_frame_size, ctx.speaker_running);
+#endif
     if (ctx.need_rx_processing) {
       this->process_aec_and_callbacks_(ctx);
     }

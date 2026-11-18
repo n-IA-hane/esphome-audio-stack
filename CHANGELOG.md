@@ -25,6 +25,12 @@ Changes since stable **2026.11.0**.
   prerequisite on IDF6 until the official dependency includes
   [its upstream fix](https://github.com/espressif/esp-dl/pull/348).
 
+### Optional adaptive playback volume
+
+- An optional Home Assistant switch lowers playback in a quiet room and follows
+  sustained changes in microphone level. The user's Master sets the ceiling.
+  The estimator uses fixed storage and shares the existing audio task.
+
 ### Correct DC-blocker transients
 
 - Preserve the filter's feedback in wide fixed-point storage and saturate the

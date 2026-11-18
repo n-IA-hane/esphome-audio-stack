@@ -932,6 +932,35 @@ number:
 The parent `aec` switch bypasses the entire processor. The AFE-specific AEC
 switch controls echo cancellation while leaving other AFE stages active.
 
+### Adaptive playback volume
+
+Add an optional Home Assistant switch on an Audio Stack device with an active
+microphone and speaker. The switch starts off on first use and remembers the
+user's choice. Omit the switch to exclude the feature from the firmware.
+
+```yaml
+switch:
+  - platform: esp_audio_stack
+    adaptive_volume:
+      name: Adaptive volume
+      quiet_level: -50
+      loud_level: -30
+      max_reduction: 18
+```
+
+In a quiet room, this reduces speaker output by up to `max_reduction` dB.
+Sustained room noise brings it back towards the existing Master and player
+settings. Both controls keep their values, including mute. Disabling the switch
+removes the extra attenuation.
+
+`quiet_level` and `loud_level` are microphone levels in dBFS. Choose thresholds
+appropriate to the board's microphone gain. The stack samples the configured primary
+microphone signal (the mixed signal when downmix is enabled) while capture is already running and the speaker
+is idle. Sixteen readings spaced half a second apart reject short noises.
+Playback holds the last attenuation. On enable, playback starts at maximum
+reduction until enough readings are available. This also applies on devices
+whose microphone runs only during a call.
+
 ## Technical Notes
 
 - **Sample Format**: 16-bit signed PCM, mono TX / stereo RX (ES8311 feedback mode)
