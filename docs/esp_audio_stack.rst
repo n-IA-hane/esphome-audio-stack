@@ -125,6 +125,11 @@ I2S bus (single-bus mode):
   ``512``. Defaults to ``256``.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. Among the
   supported targets, this is available on ESP32-P4. Defaults to ``false``.
+- **rx_data_delay** (*Optional*, string): Delay microphone data on the positive
+  (``pos_edge``) or negative (``neg_edge``) edge of the RX peripheral clock.
+  Defaults to ``none``. Available on ESP32-S3 with a shared primary standard
+  I2S bus, an ``i2s_din_pin`` and no ``codec`` block. Use this when the
+  microphone data shifts by one bit between sessions, as observed with SPH0645.
 - **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, ``2`` to ``16``.
   When omitted, TX uses two descriptors; RX starts at six and retains the TDM
   capture-headroom policy. An explicit count sets TX and the RX starting count.

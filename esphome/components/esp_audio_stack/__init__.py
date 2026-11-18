@@ -68,6 +68,7 @@ CONF_RX_SLOT_MODE = "rx_slot_mode"
 CONF_RX_MIC_SLOTS = "rx_mic_slots"
 CONF_I2S_MODE = "i2s_mode"
 CONF_USE_APLL = "use_apll"
+CONF_RX_DATA_DELAY = "rx_data_delay"
 CONF_I2S_NUM = "i2s_num"
 CONF_MCLK_MULTIPLE = "mclk_multiple"
 CONF_I2S_COMM_FMT = "i2s_comm_fmt"
@@ -480,6 +481,9 @@ CONFIG_SCHEMA = cv.All(
                 "primary", "secondary", lower=True
             ),
             cv.Optional(CONF_USE_APLL, default=False): cv.boolean,
+            cv.Optional(CONF_RX_DATA_DELAY, default="none"): cv.one_of(
+                "none", "pos_edge", "neg_edge", lower=True
+            ),
             cv.Optional(CONF_I2S_NUM, default=0): cv.int_range(min=0, max=2),
             cv.Optional(CONF_RX_BUS): I2S_RX_BUS_SCHEMA,
             cv.Optional(CONF_TX_BUS): I2S_TX_BUS_SCHEMA,
@@ -662,6 +666,20 @@ def _final_validate(config):
             "APLL clock source is only available on ESP32-P4 in the maintained target set."
         )
 
+    if config.get(CONF_RX_DATA_DELAY, "none") != "none":
+        if variant != VARIANT_ESP32S3:
+            raise cv.Invalid("rx_data_delay requires ESP32-S3", path=[CONF_RX_DATA_DELAY])
+        if CONF_RX_BUS in config or use_tdm_bus or config.get(CONF_I2S_MODE, "primary") != "primary":
+            raise cv.Invalid(
+                "rx_data_delay requires a shared standard I2S bus in primary mode",
+                path=[CONF_RX_DATA_DELAY],
+            )
+        if config.get(CONF_I2S_DIN_PIN, -1) < 0 or CONF_CODEC in config:
+            raise cv.Invalid(
+                "rx_data_delay requires i2s_din_pin and direct I2S capture without codec",
+                path=[CONF_RX_DATA_DELAY],
+            )
+
     full_config = fv.full_config.get()
 
     # esp_aec and esp_afe are mutually exclusive: both provide AudioProcessor
@@ -767,6 +785,11 @@ async def to_code(config):
     cg.add_define("USE_ESP_AUDIO_STACK")
     if config[CONF_ENABLE_TEST_INPUT]:
         cg.add_define("USE_ESP_AUDIO_STACK_TEST_INPUT")
+    if config[CONF_RX_DATA_DELAY] != "none":
+        cg.add_define(
+            "USE_ESP_AUDIO_STACK_RX_DATA_DELAY",
+            {"pos_edge": 1, "neg_edge": 2}[config[CONF_RX_DATA_DELAY]],
+        )
     if CONF_RX_BUS in config:
         cg.add_define("USE_ESP_AUDIO_STACK_DUAL_BUS")
     if use_tdm_bus:

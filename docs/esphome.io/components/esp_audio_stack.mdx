@@ -96,6 +96,11 @@ board requires values different from the defaults.
 - **i2s_comm_fmt** (*Optional*, string): Frame format. One of `philips`, `msb`, `pcm_short`, `pcm_long`. Defaults to `philips`.
 - **mclk_multiple** (*Optional*, int): MCLK to sample-rate ratio. One of `128`, `256`, `384`, `512`. Defaults to `256`.
 - **use_apll** (*Optional*, boolean): Use the APLL clock source. In the maintained target set, only ESP32-P4 supports it. Defaults to `false`.
+- **rx_data_delay** (*Optional*, string): Delay microphone data on the positive
+  (`pos_edge`) or negative (`neg_edge`) edge of the RX peripheral clock.
+  Defaults to `none`. Available on ESP32-S3 with a shared primary standard I2S
+  bus, an `i2s_din_pin` and no `codec` block. Use this when the microphone
+  data shifts by one bit between sessions, as observed with SPH0645.
 - **dma_desc_num** (*Optional*, int): Explicit DMA descriptor count, from `2` to
   `16`. Omitted: TX uses two descriptors; RX starts at six and retains its TDM
   capture margin. An explicit value sets TX and the RX starting count.

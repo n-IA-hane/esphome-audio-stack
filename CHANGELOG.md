@@ -4,6 +4,13 @@
 
 Changes since stable **2026.11.0**.
 
+### ESP32-S3 microphone input timing
+
+- Add `rx_data_delay` for direct microphone capture on a shared primary
+  standard I2S bus. The default is `none`. On an Onju Voice with SPH0645
+  microphones, Roy Meissner measured correct samples in 20 of 20 session
+  starts with `pos_edge` and the default clock. [PR #17](https://github.com/n-IA-hane/esphome-audio-stack/pull/17)
+
 ### Official providers and capture metadata
 
 - Use the official Espressif GMF AFE manager while retaining ESP-SR2.6.0 and

@@ -439,6 +439,7 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 | `tx_channel` | string | `left` | Which stereo channel the speaker writes to: `left` or `right`. |
 | `i2s_mode` | string | `primary` | I2S role: `primary` (ESP drives the clocks, default) or `secondary` (codec drives the clocks). |
 | `use_apll` | bool | false | Use the APLL clock source on ESP32-P4 for cleaner audio at non-multiple-of-8 kHz rates. Costs APLL availability for other peripherals. |
+| `rx_data_delay` | string | `none` | Delay microphone data on the positive (`pos_edge`) or negative (`neg_edge`) edge of the RX peripheral clock. Available on ESP32-S3 with a shared primary standard I2S bus, an `i2s_din_pin` and no `codec` block. On Onju Voice with SPH0645 microphones, `pos_edge` corrected a one-bit shift that varied between sessions. |
 | `i2s_num` | int | 0 | Which I2S peripheral port to use (0-2 depending on SoC). Lets you reserve a port when other components also use I2S. |
 | `mclk_multiple` | int | 256 | MCLK to LRCLK ratio (128, 256, 384, or 512). Most codecs accept 256. |
 | `i2s_comm_fmt` | string | `philips` | I2S frame format: `philips` (default), `msb`, `pcm_short`, `pcm_long`. Codec datasheets specify which one. |

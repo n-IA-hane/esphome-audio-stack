@@ -3,6 +3,9 @@
 #ifdef USE_ESP32
 
 #include <driver/i2s_common.h>
+#if CONFIG_IDF_TARGET_ESP32S3 && defined(USE_ESP_AUDIO_STACK_RX_DATA_DELAY)
+#include <hal/i2s_ll.h>
+#endif
 #include <esp_heap_caps.h>
 #include <freertos/idf_additions.h>
 #include <esp_idf_version.h>
@@ -534,6 +537,9 @@ void ESPAudioStack::dump_config() {
   static const char *const FMT_NAMES[] = {"Philips", "MSB", "PCM Short", "PCM Long"};
   ESP_LOGCONFIG(TAG, "  Comm Format: %s", FMT_NAMES[this->i2s_comm_fmt_ & 3]);
   ESP_LOGCONFIG(TAG, "  MCLK Multiple: %u", (unsigned) this->mclk_multiple_);
+#if CONFIG_IDF_TARGET_ESP32S3 && defined(USE_ESP_AUDIO_STACK_RX_DATA_DELAY)
+  ESP_LOGCONFIG(TAG, "  RX data delay: %s", USE_ESP_AUDIO_STACK_RX_DATA_DELAY == 1 ? "pos_edge" : "neg_edge");
+#endif
   if (this->use_apll_) {
     ESP_LOGCONFIG(TAG, "  APLL: enabled");
   }
@@ -988,6 +994,17 @@ bool ESPAudioStack::prepare_i2s_channels_() {
         this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
         return false;
       }
+#if CONFIG_IDF_TARGET_ESP32S3 && defined(USE_ESP_AUDIO_STACK_RX_DATA_DELAY)
+      i2s_chan_info_t info{};
+      if (i2s_channel_get_info(this->rx_handle_, &info) != ESP_OK || info.pair_chan != this->tx_handle_) {
+        ESP_LOGE(TAG, "RX data delay requires a shared I2S channel pair");
+        this->deinit_i2s_();
+        this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+        return false;
+      }
+      // Channel allocation can reset the peripheral. RX start latches this timing setting.
+      I2S_LL_GET_HW(info.id)->rx_timing.rx_sd_in_dm = USE_ESP_AUDIO_STACK_RX_DATA_DELAY;
+#endif
       ESP_LOGD(TAG, "RX channel initialized (%s)", this->use_stereo_aec_ref_ ? "stereo" : "mono");
     }
   }
