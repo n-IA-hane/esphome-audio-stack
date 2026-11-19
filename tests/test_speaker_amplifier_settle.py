@@ -4,6 +4,8 @@ import re
 import subprocess
 import sys
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 import esphome
 import pytest
 from esphome.core import Lambda
@@ -44,7 +46,7 @@ def test_optional_amplifier_gate_real_methods_and_upstream_retention(tmp_path):
     header = (COMPONENT / "speaker/esp_audio_stack_speaker.h").read_text()
     methods = [method(parent, signature) for signature in (
         "void ESPAudioStack::start_speaker()", "void ESPAudioStack::stop_speaker()",
-        "void ESPAudioStack::service_speaker_reset_()", "size_t ESPAudioStack::play(",
+        "void ESPAudioStack::service_speaker_reset_()", "size_t ESPAudioStack::play(", "size_t ESPAudioStack::play_with_admission_(",
     )]
     methods += [method(facade, signature) for signature in (
         "void ESPAudioStackSpeaker::start()", "void ESPAudioStackSpeaker::stop()",
@@ -84,6 +86,8 @@ struct AudioSinkTransferBuffer : AudioTransferBuffer {
   size_t transfer_data_to_sink(TickType_t, bool);
 };
 ''' + transfer_methods + r'''
+#include <future>
+#include <thread>
 bool idle_timer_running=false;
 unsigned evaluations=0, gpio_calls=0, gpio_at=0;
 uint32_t configured_settle=250;
@@ -118,11 +122,24 @@ int main() {
     pending.buffer_=pending.data_start_=pcm.data(); pending.buffer_length_=pcm.size();
     assert(pending.transfer_data_to_sink(20,false)==0 && pending.available()==pcm.size() && waited==20);
     clock_ms=249; r.sink.loop();
-    const unsigned before=waited;
-    assert(pending.transfer_data_to_sink(UINT32_MAX,false)==0 && waited-before==1);
+    assert(pending.transfer_data_to_sink(0,false)==0);
     assert(pending.available()==pcm.size() && r.parent.storage.queued.empty());
-    clock_ms=250; r.sink.loop(); assert(r.sink.state_==speaker::STATE_RUNNING);
+    std::promise<void> armed;
+    auto blocked = armed.get_future();
     r.parent.storage.capacity=10;
+    size_t first=0;
+    std::thread producer([&] {
+      speaker_wait_hook=[&](unsigned ticks) {
+        assert(ticks==portMAX_DELAY);
+        armed.set_value();
+      };
+      first=pending.transfer_data_to_sink(portMAX_DELAY,false);
+    });
+    assert(blocked.wait_for(std::chrono::seconds(1))==std::future_status::ready);
+    clock_ms=250; r.sink.loop();
+    producer.join();
+    assert(r.sink.state_==speaker::STATE_RUNNING && first==10);
+    r.parent.storage.emit();
     while(pending.available()) {
       const size_t n=pending.transfer_data_to_sink(0,false);
       assert(n && n%2==0); r.parent.storage.emit();
@@ -162,7 +179,7 @@ int main() {
   // re-evaluating or discarding the in-progress PA interval.
   { Rig r; prepare(r); arm_gpio(r); r.sink.start(); r.sink.loop();
     r.sink.finish(); r.sink.start(); r.sink.loop();
-    assert(!r.sink.finishing_ && evaluations==1 && r.sink.state_==speaker::STATE_STARTING);
+    assert((r.sink.admission_ != SpeakerAdmission::DRAINING) && evaluations==1 && r.sink.state_==speaker::STATE_STARTING);
     clock_ms=250; r.sink.loop(); r.sink.finish(); r.sink.loop(); r.sink.loop();
     r.parent.service_speaker_reset_(); assert(r.sink.state_==speaker::STATE_STOPPED);
     arm_gpio(r); r.sink.start(); r.sink.loop(); assert(r.sink.state_==speaker::STATE_RUNNING);
@@ -182,7 +199,7 @@ int main() {
 ''')
     binary = tmp_path / "settle"
     compiled = subprocess.run(
-        ["g++", "-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+        ["g++", *SPEAKER_GATE_FLAGS, "-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
          "-DUSE_SPEAKER", "-DUSE_ESP_AUDIO_STACK_AMP_SETTLE", "-fsanitize=address,undefined",
          "-fno-omit-frame-pointer", str(source), "-o", str(binary)],
         capture_output=True, text=True,

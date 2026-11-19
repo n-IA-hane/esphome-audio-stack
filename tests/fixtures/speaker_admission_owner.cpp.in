@@ -47,14 +47,19 @@ struct Buffer {
     if (frames && on_played) on_played(frames);
   }
 };
+void xTaskNotifyGive(void*) {}
 struct ESPAudioStack {
+ void *audio_task_handle_ = nullptr;
+  HostSpeakerGate speaker_write_gate_;
+  std::atomic<uint32_t> tx_playback_generation_{0};
+  void notify_speaker_writers_(bool cancel=false) { speaker_write_gate_.notify(cancel); }
   Buffer storage; Buffer *speaker_buffer_ = &storage;
   std::atomic<bool> speaker_requested_{false}, speaker_running_{false}, has_mic_consumers_{false};
   std::atomic<bool> request_speaker_reset_{false}, has_i2s_error_{false}, audio_stack_running_{true};
   Callback speaker_start_callback_, speaker_idle_callback_;
   bool starting = false, failed = false, async_start = false;
   unsigned start_calls = 0, stop_calls = 0, generation = 0;
-  void reset_tx_playback_() { ++generation; }
+  void reset_tx_playback_() { ++generation; ++tx_playback_generation_; }
   void update_runtime_state_() {}
   void stop() { ++stop_calls; audio_stack_running_ = false; starting = false; }
   void start() {
@@ -79,12 +84,14 @@ struct ESPAudioStack {
   void set_speaker_paused(bool) {}
   void start_speaker(); void stop_speaker(); void service_speaker_reset_();
   size_t play(const uint8_t *, size_t, TickType_t);
+  size_t play_with_admission_(const uint8_t *, size_t, TickType_t, const std::atomic<SpeakerAdmission> *);
 };
 struct ESPAudioStackSpeaker {
+  std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::STOPPED};
   ESPAudioStack *parent_ = nullptr;
   int state_ = speaker::STATE_STOPPED;
   std::atomic<bool> listener_registered_{false}, implicit_recovery_used_{false};
-  bool finishing_ = false, pause_state_ = false, i2s_error_latched_ = false, parent_requested_ = false;
+  bool pause_state_ = false, i2s_error_latched_ = false, parent_requested_ = false;
   unsigned last_write_ms_ = 0;
   std::optional<unsigned> timeout_{1000};
   OutputCallback audio_output_callback_;
@@ -104,7 +111,7 @@ struct Rig {
   ESPAudioStack parent;
   ESPAudioStackSpeaker sink;
   Rig() {
-    clock_ms = 0; waited = 0; sink.parent_ = &parent;
+    simulate_speaker_timeout = true; speaker_wait_hook = [](unsigned ticks) { waited += ticks; }; clock_ms = 0; waited = 0; sink.parent_ = &parent;
     parent.storage.on_played = [this](unsigned frames) {
       ESPAudioStackSpeaker::speaker_output_callback(&sink, frames, clock_ms * 1000LL);
     };
@@ -221,9 +228,9 @@ int main() {
   // Finish drains; a fresh explicit start supersedes an unconsumed finish.
   { Rig rig; rig.start(); uint8_t pcm[16]{};
     assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm));
-    rig.sink.finish(); rig.sink.loop(); assert(rig.sink.finishing_ && rig.sink.listener_registered_);
+    rig.sink.finish(); rig.sink.loop(); assert((rig.sink.admission_ == SpeakerAdmission::DRAINING) && rig.sink.listener_registered_);
     rig.sink.start(); rig.parent.storage.emit(); rig.sink.loop();
-    assert(!rig.sink.finishing_ && rig.sink.state_ == speaker::STATE_RUNNING);
+    assert((rig.sink.admission_ != SpeakerAdmission::DRAINING) && rig.sink.state_ == speaker::STATE_RUNNING);
     rig.sink.finish(); rig.sink.loop(); rig.sink.loop(); rig.parent.service_speaker_reset_();
     assert(rig.sink.state_ == speaker::STATE_STOPPED); rig.start();
     assert(rig.sink.play(pcm, sizeof(pcm), 0) == sizeof(pcm));

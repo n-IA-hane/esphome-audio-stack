@@ -211,6 +211,10 @@ Task, memory and diagnostics:
 - **buffers_in_psram** (*Optional*, boolean): Place eligible non-DMA audio
   buffers in PSRAM. The amount follows the active topology/frame sizes; DMA
   buffers remain internal. Defaults to ``false``.
+- **speaker_buffer_in_psram** (*Optional*, boolean): Prefer PSRAM for the
+  speaker's PCM staging ring with an internal fallback, default ``true``.
+  Set ``false`` to allocate this ring strictly in internal RAM. The configured
+  duration and allocation diagnostics report its size and actual placement.
 - **audio_task_stack_in_psram** (*Optional*, boolean): Place the configured
   audio-task stack in PSRAM. This recovers approximately ``task_stack_size``
   bytes of internal allocation but can increase per-frame latency. It uses

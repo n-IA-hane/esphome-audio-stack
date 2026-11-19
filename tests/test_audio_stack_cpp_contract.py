@@ -113,7 +113,7 @@ def test_tx_completion_tracking_is_session_scoped() -> None:
         cpp.index("void ESPAudioStack::apply_pending_hardware_volume_")
     ]
     assert "tx_completion_tracking_active_.store(false" in failure
-    assert "has_i2s_error_.store(true" in failure
+    assert "set_i2s_error_(true)" in failure
     assert "audio_stack_running_.store(false" in failure
     assert "teardown_pending_.store(true" in failure
 

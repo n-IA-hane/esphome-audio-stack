@@ -262,21 +262,23 @@ void ESPAudioStack::service_speaker_reset_() {
   if (!this->request_speaker_reset_.load(std::memory_order_acquire)) {
     return;
   }
-  if (this->speaker_buffer_) {
-    this->speaker_buffer_->reset();
-  }
-  this->reset_tx_playback_();
+  this->speaker_write_gate_.reset([this]() {
+    if (this->speaker_buffer_) {
+      this->speaker_buffer_->reset();
+    }
+    this->reset_tx_playback_();
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
-  this->direct_aec_ref_valid_ = false;
+    this->direct_aec_ref_valid_ = false;
 #endif
 #ifdef USE_ESP_AUDIO_STACK_RING_REF
-  if (this->aec_ref_ring_buffer_) {
-    this->aec_ref_ring_buffer_->reset();
-  }
+    if (this->aec_ref_ring_buffer_) {
+      this->aec_ref_ring_buffer_->reset();
+    }
 #endif
-  // Keep admission closed until the audio task has completed the reset. Stop
-  // requests coalesce while no new playback can be accepted into this buffer.
-  this->request_speaker_reset_.store(false, std::memory_order_release);
+    // Keep admission closed until the audio task has completed the reset. Stop
+    // requests coalesce while no new playback can be accepted into this buffer.
+    this->request_speaker_reset_.store(false, std::memory_order_release);
+  });
 }
 
 void ESPAudioStack::log_memory_snapshot_(const char *label) const {
@@ -387,7 +389,13 @@ void ESPAudioStack::setup() {
     this->speaker_buffer_size_ =
         std::max<size_t>(SPEAKER_BUFFER_MIN_BYTES,
                          (speaker_bytes_per_second * static_cast<size_t>(this->speaker_buffer_duration_ms_)) / 1000);
-    this->speaker_buffer_ = create_prefer_psram(this->speaker_buffer_size_, "audio_stack.speaker");
+    if (!this->speaker_write_gate_.setup()) {
+      ESP_LOGE(TAG, "Failed to initialize speaker write mutex");
+      this->mark_failed();
+      return;
+    }
+    this->speaker_buffer_ = create_ring_buffer(this->speaker_buffer_size_,
+        this->speaker_buffer_in_psram_ ? RingBufferPolicy::PREFER_PSRAM : RingBufferPolicy::INTERNAL, "audio_stack.speaker");
     if (!this->speaker_buffer_) {
       ESP_LOGE(TAG, "Failed to create speaker ring buffer (%u bytes)", (unsigned) this->speaker_buffer_size_);
       this->mark_failed();
@@ -412,7 +420,7 @@ void ESPAudioStack::setup() {
                          this->audio_task_stack_in_psram_, TAG, &this->audio_task_handle_, &this->audio_task_tcb_,
                          &this->audio_task_stack_)) {
     ESP_LOGE(TAG, "Failed to create permanent audio task");
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->mark_failed();
     return;
   }
@@ -1583,7 +1591,7 @@ void ESPAudioStack::mark_tx_completion_desync_(const char *reason) {
 void ESPAudioStack::fail_tx_completion_tracking_(const char *reason) {
   ESP_LOGE(TAG, "%s; stopping audio stack to restore TX completion lockstep", reason);
   this->tx_completion_tracking_active_.store(false, std::memory_order_release);
-  this->has_i2s_error_.store(true, std::memory_order_relaxed);
+  this->set_i2s_error_(true);
   this->audio_stack_running_.store(false, std::memory_order_relaxed);
   this->teardown_pending_.store(true, std::memory_order_release);
 }
@@ -1647,12 +1655,12 @@ void ESPAudioStack::service_audio_lifecycle_() {
       this->service_speaker_reset_();
     }
     this->teardown_pending_.store(false, std::memory_order_release);
-    this->has_i2s_error_.store(!opened, std::memory_order_release);
+    this->set_i2s_error_(!opened);
     phase = opened ? AudioStartPhase::STOPPED : AudioStartPhase::FAILED;
   } else {
     this->hardware_volume_dirty_.store(true, std::memory_order_release);
     this->apply_pending_hardware_volume_();
-    this->has_i2s_error_.store(false, std::memory_order_release);
+    this->set_i2s_error_(false);
     phase = AudioStartPhase::READY;
   }
   this->ready_generation_.store(generation, std::memory_order_release);
@@ -1691,7 +1699,7 @@ void ESPAudioStack::finish_audio_lifecycle_() {
     }
   } else if (phase == AudioStartPhase::FAILED && current) {
     this->start_requested_.store(false, std::memory_order_release);
-    this->has_i2s_error_.store(true, std::memory_order_release);
+    this->set_i2s_error_(true);
     if (this->speaker_running_.exchange(false, std::memory_order_acq_rel))
       this->speaker_idle_callback_.call();
 #ifdef USE_AUDIO_PROCESSOR
@@ -1711,7 +1719,7 @@ void ESPAudioStack::start() {
     if (!start_pinned_task(audio_task, "audio_stack", this->task_stack_size_, this, this->task_priority_, core,
                            this->audio_task_stack_in_psram_, TAG, &this->audio_task_handle_, &this->audio_task_tcb_,
                            &this->audio_task_stack_)) {
-      this->has_i2s_error_.store(true, std::memory_order_relaxed);
+      this->set_i2s_error_(true);
       return;
     }
   }
@@ -1726,7 +1734,16 @@ void ESPAudioStack::start() {
 void ESPAudioStack::stop() {
   const bool requested = this->start_requested_.exchange(false, std::memory_order_acq_rel);
   const bool running = this->audio_stack_running_.load(std::memory_order_acquire);
-  if (!requested && !running) return;
+  if (this->speaker_buffer_) {
+    this->request_speaker_reset_.store(true, std::memory_order_release);
+    this->notify_speaker_writers_(true);
+  }
+  if (!requested && !running) {
+    // Direct C++ producers can prebuffer before I2S starts. The parked owner
+    // must retire their pending stream on an explicit stop as well.
+    if (this->speaker_buffer_ && this->audio_task_handle_ != nullptr) xTaskNotifyGive(this->audio_task_handle_);
+    return;
+  }
   // Publish the cleanup barrier before user callbacks can inspect idle or
   // request another start, including cancellation before hardware has opened.
   this->teardown_pending_.store(true, std::memory_order_release);
@@ -1895,9 +1912,11 @@ void ESPAudioStack::start_speaker() {
 }
 
 void ESPAudioStack::stop_speaker() {
-  // Close PCM admission before callbacks can request the next stream. Its
-  // producer retries after the audio owner has discarded the old stream.
+  // Close admission before callbacks can submit another stream. Wake the audio
+  // owner even when already parked: reset must not depend on the next start.
   this->request_speaker_reset_.store(true, std::memory_order_release);
+  this->notify_speaker_writers_(true);
+  if (this->audio_task_handle_ != nullptr) xTaskNotifyGive(this->audio_task_handle_);
   this->speaker_requested_.store(false, std::memory_order_release);
   if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
     this->speaker_idle_callback_.call();
@@ -1919,32 +1938,34 @@ void ESPAudioStack::stop_speaker() {
 }
 
 size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
-  if (!this->speaker_buffer_ || this->request_speaker_reset_.load(std::memory_order_acquire) ||
-      this->has_i2s_error_.load(std::memory_order_acquire)) {
-    // Reset admission is closed, but the caller still owns its PCM. Respect
-    // its wait budget; zero remains nonblocking and does not promise fairness.
-    vTaskDelay(ticks_to_wait);
-    return 0;
-  }
+  return this->play_with_admission_(data, len, ticks_to_wait, nullptr);
+}
 
-  // Data arrives at bus rate (e.g. 48kHz from mixer/resampler). Partial writes
-  // are allowed because upstream ESPHome sources retry unwritten tails, but a
-  // partial must never split an interleaved PCM frame.
+size_t ESPAudioStack::play_with_admission_(const uint8_t *data, size_t len, TickType_t ticks_to_wait,
+                                           const std::atomic<SpeakerAdmission> *admission) {
+  const uint32_t generation = this->tx_playback_generation_.load(std::memory_order_acquire);
   const size_t frame_bytes = sizeof(int16_t) * static_cast<size_t>(this->get_speaker_channels());
-  if (frame_bytes == 0) {
-    return 0;
-  }
-  const size_t aligned_len = len - (len % frame_bytes);
-  if (aligned_len == 0) {
-    return 0;
-  }
-  const size_t free_bytes = this->speaker_buffer_->free();
-  const size_t aligned_free = free_bytes - (free_bytes % frame_bytes);
-  // Write only complete frames that fit now. If none fit, wait for one frame,
-  // not the whole caller block (which can exceed the ring's capacity). Keep
-  // RingBuffer's byte-oriented partial fallback disabled: it can split a frame.
-  const size_t write_len = std::min(aligned_len, std::max(frame_bytes, aligned_free));
-  return this->speaker_buffer_->write_without_replacement(data, write_len, ticks_to_wait, false);
+  if (data == nullptr || !this->speaker_buffer_ || frame_bytes == 0 || len < frame_bytes) return 0;
+  const size_t aligned_len = len - len % frame_bytes;
+  size_t written = 0;
+  this->speaker_write_gate_.run(ticks_to_wait, [&]() {
+    const auto state = admission == nullptr ? SpeakerAdmission::READY : admission->load(std::memory_order_acquire);
+    if (generation != this->tx_playback_generation_.load(std::memory_order_acquire) ||
+        state == SpeakerAdmission::DRAINING || state == SpeakerAdmission::STOPPING)
+      return true;
+    // A failed producer retains its PCM. Finite retries can wait for recovery;
+    // a terminal error must also return to a caller with an unlimited budget.
+    if (this->has_i2s_error_.load(std::memory_order_acquire)) return ticks_to_wait == portMAX_DELAY;
+    if (state == SpeakerAdmission::STOPPED) return true;
+    if (this->request_speaker_reset_.load(std::memory_order_acquire) || state != SpeakerAdmission::READY)
+      return false;
+    const size_t free = this->speaker_buffer_->free();
+    const size_t bytes = std::min(aligned_len, free - free % frame_bytes);
+    if (bytes == 0) return false;
+    written = this->speaker_buffer_->write_without_replacement(data, bytes, 0, false);
+    return written != 0;
+  });
+  return written;
 }
 
 size_t ESPAudioStack::get_speaker_buffer_available() const {

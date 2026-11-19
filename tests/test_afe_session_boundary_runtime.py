@@ -121,6 +121,13 @@ def test_aec_intent_is_deferred_without_a_consumer_and_applied_on_acquisition(se
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("scenario", [23, 24, 25], ids=["explicit-internal", "explicit-psram", "psram-exhausted"])
+def test_reconfigure_task_uses_configured_resources_without_silent_memory_change(session_binary, scenario):
+    result = subprocess.run([str(session_binary), str(scenario)], capture_output=True, text=True, timeout=15,
+                            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("static_allocation", [0, 1], ids=["dynamic-only-idf", "external-stack-disabled"])
 def test_afe_worker_keeps_internal_stack_when_idf_disallows_external(session_binary, tmp_path, static_allocation):
     binary = tmp_path / "internal_only"

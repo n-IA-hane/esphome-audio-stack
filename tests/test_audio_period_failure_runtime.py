@@ -65,6 +65,7 @@ struct AudioTaskCtx {
  bool processor_planar_input=false;
 };
 struct ESPAudioStack {
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
  std::atomic<bool> has_i2s_error_{false},audio_stack_running_{true};
  Converter rx_rate_converter_,mic_rate_converter_;
  bool read_ok=true;unsigned conditioning=0,dispatches=0,clocks=0;

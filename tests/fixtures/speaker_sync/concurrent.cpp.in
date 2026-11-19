@@ -1,0 +1,80 @@
+// The producer barrier runs just after registration and mutex release. The owner
+// changes state with one producer in the kernel wait and one still arming.
+void concurrent(const std::string &scenario, ESPAudioStack &stack, RingBuffer &ring, size_t frame, size_t capacity) {
+  std::mutex mutex;
+  std::condition_variable barrier;
+  unsigned registered = 0;
+  bool released = false;
+  bool kernel_wait_entered = false;
+  ESPAudioStackSpeaker sink{&stack};
+  sink.admission_ = scenario == "ready" ? SpeakerAdmission::STARTING : SpeakerAdmission::READY;
+  auto initial = sequence(capacity, 13);
+  if (scenario != "ready") assert(ring.write_without_replacement(initial.data(), capacity, 0, false) == capacity);
+  const auto input = sequence(frame, 76);
+  std::array<size_t, 2> accepted{};
+  std::array<std::thread, 2> threads;
+  for (size_t i = 0; i < threads.size(); ++i) {
+    threads[i] = std::thread([&, i] {
+      if (i == 0) {
+        speaker_parking_hook = [&] {
+          std::lock_guard lock(mutex);
+          kernel_wait_entered = true;
+          barrier.notify_all();
+        };
+      }
+      speaker_wait_hook = [&](TickType_t) {
+        std::unique_lock lock(mutex);
+        ++registered;
+        barrier.notify_all();
+        if (i == 1) barrier.wait(lock, [&] { return released; });
+      };
+      accepted[i] = sink.play(input.data(), input.size(), portMAX_DELAY);
+    });
+  }
+  {
+    std::unique_lock lock(mutex);
+    assert(barrier.wait_for(lock, std::chrono::seconds(2), [&] { return registered == 2 && kernel_wait_entered; }));
+  }
+  const bool allow = scenario == "ready" || scenario == "space";
+  if (scenario == "reset") {
+    stack.request_speaker_reset_ = true;
+    stack.service_speaker_reset_();
+  } else if (scenario == "stop") {
+    sink.stop();
+    stack.request_speaker_reset_ = true;
+    stack.service_speaker_reset_();
+  } else if (scenario == "finish") {
+    sink.finish();
+    assert(drain(ring, capacity) == initial);  // previously accepted PCM survives finish
+  } else if (scenario == "error") {
+    stack.set_i2s_error_(true);
+    stack.request_speaker_reset_ = true;
+    stack.service_speaker_reset_();
+    stack.set_i2s_error_(false);
+  } else if (scenario == "space") {
+    assert(drain(ring, capacity) == initial);
+    stack.notify_speaker_writers_();
+  } else {
+    assert(scenario == "ready");
+    sink.admission_ = SpeakerAdmission::READY;
+    stack.notify_speaker_writers_();
+  }
+  // The following stream can already be ready before the old callers resume.
+  sink.admission_ = SpeakerAdmission::READY;
+  {
+    std::lock_guard guard(mutex);
+    released = true;
+    barrier.notify_all();
+  }
+  for (auto &thread : threads) thread.join();
+  for (size_t n : accepted) assert(n == (allow ? frame : 0));
+  if (allow) {
+    auto expected = input;
+    expected.insert(expected.end(), input.begin(), input.end());
+    assert(drain(ring, capacity) == expected);
+  } else {
+    assert(ring.available() == 0);
+    assert(stack.play(input.data(), frame, 0) == frame);
+    assert(drain(ring, capacity) == input);
+  }
+}

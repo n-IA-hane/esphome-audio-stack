@@ -24,6 +24,7 @@ void xTaskNotifyGive(void*){++wakeups;}
 template<class... T> bool start_pinned_task(T...){return true;}
 struct Callback {void call(){}};
 struct ESPAudioStack {
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
  std::atomic<bool> audio_stack_running_{false}, teardown_pending_{false},has_i2s_error_{false};
  void *audio_task_handle_=this,*audio_task_tcb_=nullptr,*audio_task_stack_=nullptr;
  int task_core_=1,task_stack_size_=4096,task_priority_=5;bool audio_task_stack_in_psram_=false;
@@ -89,6 +90,9 @@ struct ObservedGeneration {
  void store(uint32_t v,std::memory_order order){value.store(v,order);}
 };
 struct ESPAudioStack {
+ void *speaker_buffer_=nullptr;
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
+ void notify_speaker_writers_(bool){}
  std::atomic<bool> audio_stack_running_{false}, teardown_pending_{false},has_i2s_error_{false};
  std::atomic<bool> start_requested_{false},speaker_requested_{false},speaker_running_{false},has_mic_consumers_{false};
  Processor *processor_=nullptr;

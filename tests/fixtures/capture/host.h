@@ -31,6 +31,8 @@ struct HostTask {
  std::thread thread;std::mutex mutex;std::condition_variable cv;unsigned notifications=0;bool deleted=false;
 };
 using TaskHandle_t=HostTask*;using SemaphoreHandle_t=std::mutex*;
+using BaseType_t=int;
+constexpr int tskNO_AFFINITY=-1;
 constexpr int pdPASS=1,pdTRUE=1;constexpr unsigned portMAX_DELAY=UINT32_MAX;
 inline unsigned pdMS_TO_TICKS(unsigned n){return n;}
 inline thread_local HostTask *current_task=nullptr;
@@ -39,6 +41,11 @@ inline std::atomic<unsigned> notify_wait_calls=0;
 inline int xTaskCreate(void(*fn)(void*),const char*,unsigned,void *arg,int,TaskHandle_t *handle){
  auto *task=new HostTask;*handle=task;++task_count;task->thread=std::thread([=]{current_task=task;fn(arg);});return pdPASS;
 }
+inline int xTaskCreatePinnedToCore(void(*fn)(void*),const char* name,unsigned stack,void*arg,int priority,TaskHandle_t* handle,int core){
+ assert(stack>=2048&&priority>=1&&core>=-1&&core<=1);
+ return xTaskCreate(fn,name,stack,arg,priority,handle);
+}
+inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t){return 2048;}
 inline void xTaskNotifyGive(TaskHandle_t task){std::lock_guard guard(task->mutex);++task->notifications;task->cv.notify_all();}
 inline unsigned ulTaskNotifyTake(int,unsigned timeout){
  ++notify_wait_calls;

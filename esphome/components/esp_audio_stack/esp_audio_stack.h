@@ -2,6 +2,7 @@
 
 #include "esphome/core/defines.h"
 #include "audio_slot_layout.h"
+#include "speaker_write_gate.h"
 
 #ifdef USE_ESP32
 
@@ -447,6 +448,7 @@ class ESPAudioStack final : public Component {
   size_t play(const uint8_t *data, size_t len, TickType_t ticks_to_wait = portMAX_DELAY);
   void start_speaker();
   void stop_speaker();
+  void set_speaker_buffer_in_psram(bool enabled) { this->speaker_buffer_in_psram_ = enabled; }
   void set_speaker_buffer_duration(uint32_t ms) { this->speaker_buffer_duration_ms_ = ms; }
   bool is_speaker_running() const { return this->speaker_running_.load(std::memory_order_relaxed); }
   void set_speaker_paused(bool paused) { this->speaker_paused_.store(paused, std::memory_order_relaxed); }
@@ -985,6 +987,14 @@ class ESPAudioStack final : public Component {
   void dump_bus_configuration_() const;
 
   void service_speaker_reset_();
+  friend class ESPAudioStackSpeaker;
+  size_t play_with_admission_(const uint8_t *data, size_t len, TickType_t ticks_to_wait,
+                              const std::atomic<SpeakerAdmission> *admission);
+  void notify_speaker_writers_(bool cancel = false) { this->speaker_write_gate_.notify(cancel); }
+  void set_i2s_error_(bool error) {
+    this->has_i2s_error_.store(error, std::memory_order_release);
+    this->notify_speaker_writers_(error);
+  }
 
 #ifdef USE_ESP_AUDIO_STACK_TDM_REF_DIAGNOSTIC
   // TDM AEC reference health: diagnostic-only counter for slot-map bring-up.
@@ -1028,6 +1038,8 @@ class ESPAudioStack final : public Component {
 
   // Speaker ring buffer: stores data at bus rate (sample_rate_)
   RingBufferPtr speaker_buffer_;
+  SpeakerWriteGate speaker_write_gate_;
+  bool speaker_buffer_in_psram_{true};
   size_t speaker_buffer_size_{0};  // Actual allocated size (scales with rate_conversion_ratio_)
   uint32_t speaker_buffer_duration_ms_{500};
 

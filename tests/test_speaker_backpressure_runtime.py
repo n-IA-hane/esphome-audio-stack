@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 ROOT = Path(__file__).resolve().parents[1] / 'esphome/components/esp_audio_stack'
 
 
@@ -18,7 +20,8 @@ def method(text, signature):
 def test_rejected_output_yields_without_accepting_or_dropping_pcm(tmp_path):
     adapter = method((ROOT / 'speaker/esp_audio_stack_speaker.cpp').read_text(),
                      'size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t ticks_to_wait)')
-    stack = method((ROOT / 'esp_audio_stack.cpp').read_text(), 'size_t ESPAudioStack::play(')
+    owner = (ROOT / 'esp_audio_stack.cpp').read_text()
+    stack = method(owner, 'size_t ESPAudioStack::play(') + '\n' + method(owner, 'size_t ESPAudioStack::play_with_admission_(')
     code = r'''
 #include <atomic>
 #include <algorithm>
@@ -35,25 +38,31 @@ struct Buffer {
  size_t write_without_replacement(const void*,size_t length,unsigned,bool){++writes;return length;}
 };
 struct ESPAudioStack {
+  HostSpeakerGate speaker_write_gate_;
+  std::atomic<uint32_t> tx_playback_generation_{0};
+  void notify_speaker_writers_(bool cancel=false) { speaker_write_gate_.notify(cancel); }
  Buffer *speaker_buffer_=nullptr;std::atomic<bool> request_speaker_reset_{false};
  std::atomic<bool> has_i2s_error_{false};
  bool has_failed_session()const{return false;}
  void start(){}
  unsigned get_speaker_channels(){return 1;}
  size_t play(const uint8_t*,size_t,TickType_t);
+  size_t play_with_admission_(const uint8_t*,size_t,TickType_t, const std::atomic<SpeakerAdmission> *);
 };
 namespace speaker {enum {STATE_STOPPED,STATE_RUNNING,STATE_STARTING};}
 struct ESPAudioStackSpeaker {
+  std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::STOPPED};
  std::atomic<bool> implicit_recovery_used_{false};
  void enable_loop_soon_any_context(){}
  bool failed=false;int state_=speaker::STATE_RUNNING;
  std::atomic<bool> listener_registered_{true};unsigned last_write_ms_=0;
  ESPAudioStack *parent_;bool is_failed(){return failed;}
- void start(){listener_registered_=true;state_=speaker::STATE_STARTING;}
+ void start(){listener_registered_=true;state_=speaker::STATE_STARTING;admission_=SpeakerAdmission::STARTING;}
  size_t play(const uint8_t*,size_t,TickType_t);
 };
 ''' + stack + '\n' + adapter + r'''
 int main(){
+ speaker_wait_hook=[](unsigned ticks){waited+=ticks;};
  ESPAudioStack stack;Buffer buffer;stack.speaker_buffer_=&buffer;
  ESPAudioStackSpeaker sink;sink.parent_=&stack;uint8_t pcm[64]{};
  // The output was stopped while a mixer task still has an exposed buffer.
@@ -61,7 +70,7 @@ int main(){
  assert(sink.play(pcm,sizeof(pcm),25)==0);
  assert(waited==25 && buffer.writes==0);
  // Audio task reset is another temporarily unavailable sink, not a busy loop.
- waited=0;sink.listener_registered_=true;stack.request_speaker_reset_=true;
+ waited=0;sink.admission_=SpeakerAdmission::READY;sink.listener_registered_=true;stack.request_speaker_reset_=true;
  assert(sink.play(pcm,sizeof(pcm),25)==0);
  assert(waited==25 && buffer.writes==0);
  // Nonblocking callers remain nonblocking; normal playback gets no added wait.
@@ -74,6 +83,6 @@ int main(){
     source = tmp_path / 'backpressure.cpp'
     source.write_text(code)
     binary = tmp_path / 'backpressure'
-    subprocess.run(['g++','-std=c++17',str(source),'-o',str(binary)],check=True,capture_output=True,text=True)
+    subprocess.run(['g++', *SPEAKER_GATE_FLAGS,'-std=c++17',str(source),'-o',str(binary)],check=True,capture_output=True,text=True)
     result=subprocess.run(['bash','-c','ulimit -c 0; exec "$1"','bash',str(binary)],capture_output=True,text=True)
     assert result.returncode==0,result.stderr

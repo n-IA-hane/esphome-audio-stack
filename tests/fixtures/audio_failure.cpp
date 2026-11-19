@@ -33,6 +33,10 @@ struct Ring {
   size_t write_without_replacement(const void*,size_t n,unsigned,bool){auto k=std::min(n,free());queued+=k;return k;}
 };
 struct ESPAudioStack {
+  void set_i2s_error_(bool err) { has_i2s_error_ = err; notify_speaker_writers_(err); }
+  HostSpeakerGate speaker_write_gate_;
+  std::atomic<uint32_t> tx_playback_generation_{0};
+  void notify_speaker_writers_(bool cancel=false) { speaker_write_gate_.notify(cancel); }
   std::atomic<bool> audio_stack_running_{false},teardown_pending_{false},has_i2s_error_{false};
   std::atomic<bool> start_requested_{false},speaker_requested_{true},speaker_running_{false},has_mic_consumers_{true};
   std::atomic<bool> audio_task_idle_{true},hardware_volume_dirty_{false},tx_completion_tracking_active_{false};
@@ -65,11 +69,13 @@ struct ESPAudioStack {
   void start_speaker();void stop_speaker();void service_speaker_reset_();
   void fail_tx_completion_tracking_(const char*);void fail_audio_session_(const char*);
   size_t play(const uint8_t*,size_t,TickType_t);
+  size_t play_with_admission_(const uint8_t*,size_t,TickType_t, const std::atomic<SpeakerAdmission> *);
 };
 namespace speaker {enum State {STATE_STOPPED,STATE_STARTING,STATE_RUNNING,STATE_STOPPING};}
 namespace microphone {enum State {STATE_STOPPED,STATE_STARTING,STATE_RUNNING,STATE_STOPPING};}
 struct ESPAudioStackSpeaker {
   ESPAudioStack *parent_;
+  std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::STOPPED};
   speaker::State state_=speaker::STATE_RUNNING;
   std::atomic<bool> listener_registered_{true},implicit_recovery_used_{false};
   bool parent_requested_=true,i2s_error_latched_=false,finishing_=true,pause_state_=false,error=false;

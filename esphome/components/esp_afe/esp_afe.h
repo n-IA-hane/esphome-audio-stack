@@ -166,6 +166,10 @@ class EspAfe final : public Component, public AudioProcessor {
   void set_fetch_task_core(int core) { this->fetch_task_core_ = core; }
   void set_fetch_task_priority(int prio) { this->fetch_task_priority_ = prio; }
   void set_fetch_task_stack_size(int size) { this->fetch_task_stack_size_ = size; }
+  void set_reconfigure_task_core(int core) { this->reconfigure_task_core_ = core; }
+  void set_reconfigure_task_priority(int priority) { this->reconfigure_task_priority_ = priority; }
+  void set_reconfigure_task_stack_size(uint32_t bytes) { this->reconfigure_task_stack_size_ = bytes; }
+  void set_reconfigure_task_stack_memory(uint8_t memory) { this->reconfigure_task_stack_memory_ = memory; }
   void set_input_format_override(const char *fmt);
   void set_feed_buf_in_psram(bool psram) { this->feed_buf_in_psram_ = psram; }
   void set_feed_ring_in_psram(bool psram) { this->feed_ring_in_psram_ = psram; }
@@ -437,6 +441,11 @@ class EspAfe final : public Component, public AudioProcessor {
     char mode[32]{};
   };
   static constexpr uint32_t RECONFIGURE_TASK_STACK_BYTES = 12288;
+  int reconfigure_task_core_{0};
+  int reconfigure_task_priority_{4};
+  uint32_t reconfigure_task_stack_size_{RECONFIGURE_TASK_STACK_BYTES};
+  uint8_t reconfigure_task_stack_memory_{0};  // auto, internal, psram
+  bool reconfigure_task_stack_external_{false};
   QueueHandle_t reconfigure_queue_{nullptr};
   StaticQueue_t reconfigure_queue_struct_{};
   uint8_t reconfigure_queue_storage_[sizeof(ReconfigureRequest)]{};

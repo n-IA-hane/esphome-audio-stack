@@ -3,6 +3,8 @@
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -11,7 +13,7 @@ def test_early_capture_and_shared_listener_lifecycle(tmp_path):
     methods = ""
     for component, cls, names in [
         ("microphone", "ESPAudioStackMicrophone", ["start", "release_listener_", "stop", "loop"]),
-        ("speaker", "ESPAudioStackSpeaker", ["start", "stop", "loop"]),
+        ("speaker", "ESPAudioStackSpeaker", ["start", "stop", "finish", "loop"]),
     ]:
         source = (root / component / f"esp_audio_stack_{component}.cpp").read_text()
         for name in names:
@@ -36,6 +38,7 @@ uint32_t millis(){return 100;}
 namespace microphone {enum {STATE_STOPPED,STATE_STARTING,STATE_RUNNING,STATE_STOPPING};}
 namespace speaker {enum {STATE_STOPPED,STATE_STARTING,STATE_RUNNING,STATE_STOPPING};}
 struct Parent {
+ void notify_speaker_writers_(bool=false) {}
  bool ready=false;unsigned starts=0,stops=0;
  bool has_i2s_error(){return false;}
  bool has_failed_session(){return false;}
@@ -59,9 +62,11 @@ struct ESPAudioStackMicrophone:Base {
  void start();bool release_listener_();void stop();void loop();
 };
 struct ESPAudioStackSpeaker:Base {
+ std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::STOPPED};
  std::atomic<bool> implicit_recovery_used_{false};
  std::atomic<bool> listener_registered_{false};bool parent_requested_=false;
- bool finishing_=false,pause_state_=false,buffered=false;
+ bool pause_state_=false,buffered=false;
+ void finish();
  uint32_t last_write_ms_=0;std::optional<uint32_t> timeout_{500};
  bool has_buffered_data(){return buffered;}
  void set_pause_state(bool value){pause_state_=value;}
@@ -89,13 +94,13 @@ int main(){
  spk.backing.ready=true;spk.loop();assert(spk.backing.starts==1);
  spk.stop();spk.stop();spk.loop();assert(spk.backing.stops==1 && !spk.listener_registered_);
  spk.start();spk.stop();spk.loop();assert(spk.backing.starts==1);
- spk.start();spk.loop();spk.finishing_=true;spk.buffered=true;spk.loop();assert(spk.listener_registered_);
+ spk.start();spk.loop();spk.finish();spk.buffered=true;spk.loop();assert(spk.listener_registered_);
  spk.buffered=false;spk.loop();spk.loop();assert(!spk.listener_registered_ && spk.backing.stops==2);
 }
 '''
     cpp = tmp_path / "listeners.cpp"
     cpp.write_text(harness + methods + checks)
     exe = tmp_path / "listeners"
-    subprocess.run(["g++", "-std=c++17", "-pthread", "-Wall", "-Wextra",
+    subprocess.run(["g++", *SPEAKER_GATE_FLAGS, "-std=c++17", "-pthread", "-Wall", "-Wextra",
                     str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

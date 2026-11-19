@@ -4,6 +4,13 @@
 
 Changes since stable **2026.11.0**.
 
+- Wake blocked playback writers when the speaker becomes ready, gains space,
+  resets or fails. Prevent a write from the previous playback generation from
+  entering a freshly reset buffer.
+- Expose configuration-worker and diagnostic-capture core, priority and stack
+  settings, and the placement of the speaker staging buffer. Configuration
+  dumps report worker stack placement and available stack headroom.
+
 ### ESP32-S3 microphone input timing
 
 - Add `rx_data_delay` for direct microphone capture on a shared primary

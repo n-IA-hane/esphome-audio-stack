@@ -285,8 +285,14 @@ def test_clock_only_capture_omits_playback_ring_but_direct_cpp_output_keeps_it(t
 constexpr size_t SPEAKER_BUFFER_MIN_BYTES=2048;
 #define ESP_LOGE(...) ((void)0)
 size_t ring_bytes=0;unsigned calls=0;
-std::shared_ptr<int> create_prefer_psram(size_t n,const char*){++calls;ring_bytes=n;return std::make_shared<int>(1);}
+enum class RingBufferPolicy { INTERNAL, PREFER_PSRAM };
+RingBufferPolicy last_policy;
+std::shared_ptr<int> create_ring_buffer(size_t n,RingBufferPolicy policy,const char*) {
+  ++calls; ring_bytes=n; last_policy=policy; return std::make_shared<int>(1);
+}
 struct ESPAudioStack {
+ struct Gate { bool setup(){return true;} } speaker_write_gate_;
+ bool speaker_buffer_in_psram_=true;
  int din_pin_=4,dout_pin_=-1;bool dual_i2s_bus_=false;
  struct Bus{int din_pin=-1,dout_pin=-1;}rx_bus_,tx_bus_;
  unsigned sample_rate_=16000,speaker_buffer_duration_ms_=500;
@@ -308,7 +314,8 @@ int main(){
 #endif
  // No facade is necessary for advanced C++ play() callers with physical TX.
  s.setup_ring();assert(calls==1&&s.speaker_buffer_&&ring_bytes==16000);
- s.sample_rate_=48000;s.setup_ring();assert(ring_bytes==48000);
+ assert(last_policy==RingBufferPolicy::PREFER_PSRAM);
+ s.speaker_buffer_in_psram_=false;s.sample_rate_=48000;s.setup_ring();assert(ring_bytes==48000 && last_policy==RingBufferPolicy::INTERNAL);
 }
 """
     compile_run(tmp_path, code, *(["-DUSE_ESP_AUDIO_STACK_DUAL_BUS"] if dual else []))

@@ -3,6 +3,8 @@ from pathlib import Path
 import os
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 from test_speaker_backpressure_runtime import method
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +27,7 @@ def test_playback_admission_follows_running_session(tmp_path):
     methods = [
         method(parent, signature) for signature in (
             "void ESPAudioStack::start_speaker()", "void ESPAudioStack::stop_speaker()",
-            "void ESPAudioStack::service_speaker_reset_()", "size_t ESPAudioStack::play(",
+            "void ESPAudioStack::service_speaker_reset_()", "size_t ESPAudioStack::play(", "size_t ESPAudioStack::play_with_admission_(",
         )
     ]
     methods += [method(facade, signature) for signature in (
@@ -41,7 +43,7 @@ def test_playback_admission_follows_running_session(tmp_path):
     ))
     binary = tmp_path / "admission"
     compiled = subprocess.run(
-        ["g++", "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", "-g",
+        ["g++", *SPEAKER_GATE_FLAGS, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", "-g",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source), "-o", str(binary)],
         capture_output=True, text=True,
     )

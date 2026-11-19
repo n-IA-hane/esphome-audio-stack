@@ -40,7 +40,10 @@ void ESPAudioCapture::setup() {
 void ESPAudioCapture::dump_config() {
   ESP_LOGCONFIG(TAG, "Optional PCM capture: %s:%u, %u ms, %u bytes", this->address_.c_str(), this->port_,
                 static_cast<unsigned>(this->duration_ms_), static_cast<unsigned>(this->buffer_size_));
-  ESP_LOGCONFIG(TAG, "  Task stack: 4096 bytes, PSRAM requested: %s", YESNO(this->task_stack_in_psram_));
+  ESP_LOGCONFIG(TAG, "  Task: core=%d priority=%d stack=%u memory=%s minimum_free=%u",
+                this->task_core_, this->task_priority_, (unsigned) this->task_stack_size_,
+                this->task_stack_in_psram_ ? "PSRAM" : "internal",
+                this->worker_handle_ == nullptr ? 0U : (unsigned) uxTaskGetStackHighWaterMark(this->worker_handle_));
 #ifdef USE_ESP_AUDIO_BOUNDARY_PROBES
   ESP_LOGCONFIG(TAG, "  Boundary probes: ON (frontend consumption and delegated AFE feed; capture session only)");
 #endif
@@ -70,18 +73,18 @@ bool ESPAudioCapture::start() {
   this->connected_.store(false, std::memory_order_relaxed);
   this->worker_done_.store(false, std::memory_order_relaxed);
   this->deadline_us_ = esp_timer_get_time() + uint64_t(this->duration_ms_) * 1000;
-  // Keep the existing temporary owner, priority and stack size. Explicit PSRAM
-  // requests fail without an internal fallback that could consume audio DMA headroom.
+  // Explicit PSRAM placement must not consume the internal DMA reserve on failure.
+  const BaseType_t core = this->task_core_ < 0 ? tskNO_AFFINITY : this->task_core_;
   bool created = false;
   if (this->task_stack_in_psram_) {
 #if configSUPPORT_STATIC_ALLOCATION && CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
-    created = xTaskCreatePinnedToCoreWithCaps(&ESPAudioCapture::worker_entry_, "pcm_capture", 4096, this, 2,
-                                             &this->worker_handle_, tskNO_AFFINITY,
+    created = xTaskCreatePinnedToCoreWithCaps(&ESPAudioCapture::worker_entry_, "pcm_capture", this->task_stack_size_,
+                                             this, this->task_priority_, &this->worker_handle_, core,
                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS;
 #endif
   } else {
-    created = xTaskCreate(&ESPAudioCapture::worker_entry_, "pcm_capture", 4096, this, 2,
-                          &this->worker_handle_) == pdPASS;
+    created = xTaskCreatePinnedToCore(&ESPAudioCapture::worker_entry_, "pcm_capture", this->task_stack_size_,
+                                     this, this->task_priority_, &this->worker_handle_, core) == pdPASS;
   }
   if (!created) {
     this->worker_handle_ = nullptr;

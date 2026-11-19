@@ -3,6 +3,8 @@
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +34,7 @@ def failure_source() -> str:
                    "start_speaker", "stop_speaker", "service_speaker_reset_", "fail_tx_completion_tracking_"):
         source += block(owner, "void ESPAudioStack::" + method + "(") + "\n"
     source += block(owner, "size_t ESPAudioStack::play(") + "\n"
+    source += block(owner, "size_t ESPAudioStack::play_with_admission_(") + "\n"
     source += block((COMPONENT / "audio_pipeline.cpp").read_text(), "void ESPAudioStack::fail_audio_session_(") + "\n"
     for kind, methods in (("speaker", ("start", "stop", "loop")),
                            ("microphone", ("start", "stop", "release_listener_", "loop"))):
@@ -83,8 +86,37 @@ int main(int argc,char **argv){
 }
 ''')
     executable = tmp_path / "failure"
-    result = subprocess.run(["g++", "-std=c++17", "-pthread", str(source), "-o", str(executable)],
+    result = subprocess.run(["g++", *SPEAKER_GATE_FLAGS, "-std=c++17", "-pthread", str(source), "-o", str(executable)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     result = subprocess.run([str(executable), stage], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_explicit_stop_cancels_direct_producer_before_i2s_start(tmp_path):
+    source = tmp_path / "prebuffer_stop.cpp"
+    source.write_text(failure_source() + r'''
+#include <future>
+#include <thread>
+int main() {
+  ESPAudioStack parent;
+  parent.ring.queued = parent.ring.capacity;
+  std::promise<void> parked;
+  auto entered = parked.get_future();
+  auto producer = std::async(std::launch::async, [&] {
+    speaker_wait_hook = [&](unsigned) { parked.set_value(); };
+    uint8_t pcm[4]{};
+    return parent.play(pcm, sizeof(pcm), portMAX_DELAY);
+  });
+  assert(entered.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+  parent.stop();
+  const bool reset_requested = parent.request_speaker_reset_.load();
+  parent.service_speaker_reset_();
+  const bool cancelled = producer.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  if (!cancelled) parent.notify_speaker_writers_(true);  // retire the failing witness
+  assert(producer.get() == 0 && cancelled && reset_requested && parent.ring.queued == 0);
+}
+''')
+    binary = tmp_path / "prebuffer_stop"
+    subprocess.run(["g++", *SPEAKER_GATE_FLAGS, "-std=c++17", "-pthread", str(source), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=6)

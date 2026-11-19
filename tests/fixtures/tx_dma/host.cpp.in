@@ -59,6 +59,7 @@ int i2s_channel_write(I2S*h,const void*src,size_t n,size_t*written,unsigned){
 }
 int i2s_channel_preload_data(I2S*,const void*,size_t n,size_t*loaded){*loaded=n;return ESP_OK;}
 struct ESPAudioStack{
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
  struct AudioTaskCtx{uint8_t speaker_channels=1;int invalid_tx_state_errors=0,consecutive_tx_errors=0;};
  // PRODUCTION_RECORD_TYPES
  Queue*tx_completion_event_queue_=nullptr,*tx_completion_record_queue_=nullptr;

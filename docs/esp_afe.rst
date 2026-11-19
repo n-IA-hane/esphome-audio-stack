@@ -84,6 +84,13 @@ Configuration variables:
 - **feed_task_core**, **feed_task_priority**, **feed_task_stack_size** and the
   matching ``fetch_task_*`` options (*Optional*, int): GMF manager feed/fetch
   task settings.
+- **reconfigure_task_core**, **reconfigure_task_priority** and
+  **reconfigure_task_stack_size** (*Optional*, int): Configuration worker
+  settings, default ``0``, ``4`` and ``12288`` bytes. Core ``-1`` allows either core.
+- **reconfigure_task_stack_memory** (*Optional*, string): ``auto`` (default),
+  ``internal``, or ``psram``. Auto uses external memory when the SDK permits it,
+  with an internal fallback. An explicit PSRAM request requires configured
+  PSRAM and fails if that memory cannot be allocated.
 - **feed_buf_in_psram**, **feed_ring_in_psram**, **fetch_ring_in_psram**
   (*Optional*, boolean): Wrapper scratch/bridge placement controls. GMF staging
   uses ``feed_ring_in_psram``; ``feed_buf_in_psram`` is retained for fallback

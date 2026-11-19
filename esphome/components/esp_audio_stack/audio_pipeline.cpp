@@ -659,7 +659,7 @@ void ESPAudioStack::preallocate_audio_buffers_from_task_() {
     this->log_memory_snapshot_("after_audio_buffer_prealloc");
   } else {
     ESP_LOGE(TAG, "Audio buffer preallocation failed; refusing cold-path allocation");
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
   }
 }
 
@@ -682,7 +682,7 @@ void ESPAudioStack::audio_session_() {
 
   // ── Populate invariants and frame sizing ──
   if (!this->prepare_audio_context_(ctx, false, true)) {
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
     this->speaker_running_.store(false, std::memory_order_relaxed);
     return;
@@ -697,7 +697,7 @@ void ESPAudioStack::audio_session_() {
 
   auto alloc_fail = [this](const char *what) {
     ESP_LOGE(TAG, "Failed to allocate %s", what);
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
     this->speaker_running_.store(false, std::memory_order_relaxed);
   };
@@ -1041,7 +1041,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
                  "Persistent I2S RX INVALID_STATE during %s (%d) - channel "
                  "corrupted",
                  label, ctx.invalid_rx_state_errors);
-        this->has_i2s_error_.store(true, std::memory_order_relaxed);
+        this->set_i2s_error_(true);
         this->audio_stack_running_.store(false, std::memory_order_relaxed);
       }
     }
@@ -1056,7 +1056,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
 #endif
     if (++ctx.consecutive_rx_errors > 100) {
       ESP_LOGE(TAG, "Persistent I2S %s read errors (%d)", label, ctx.consecutive_rx_errors);
-      this->has_i2s_error_.store(true, std::memory_order_relaxed);
+      this->set_i2s_error_(true);
       this->audio_stack_running_.store(false, std::memory_order_relaxed);
     }
     return false;
@@ -1068,7 +1068,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
 
 void ESPAudioStack::fail_audio_session_(const char *stage) {
   ESP_LOGE(TAG, "%s failed; stopping audio session", stage);
-  this->has_i2s_error_.store(true, std::memory_order_relaxed);
+  this->set_i2s_error_(true);
   this->audio_stack_running_.store(false, std::memory_order_relaxed);
 }
 
@@ -1726,7 +1726,7 @@ bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_
   }
   if (this->tx_completion_dma_buffer_bytes_ == 0 || this->tx_completion_dma_frames_ == 0) {
     ESP_LOGE(TAG, "TX DMA completion tracking is not initialized");
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
     return false;
   }
@@ -1735,7 +1735,7 @@ bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_
              "TX frame (%u bytes) is not aligned to DMA buffer (%u bytes); "
              "speaker playback callbacks cannot stay in lockstep",
              (unsigned) tx_bytes, (unsigned) this->tx_completion_dma_buffer_bytes_);
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
     return false;
   }
@@ -1830,6 +1830,7 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
     ctx.speaker_underrun = got < ctx.speaker_frame_bytes;
 
     if (got > 0) {
+      this->notify_speaker_writers_();
       // Hot-path output volume is cached as Q31 when the volume changes, so
       // the audio task does not spend every frame converting float -> fixed.
       auto *spk_bytes = reinterpret_cast<uint8_t *>(ctx.spk_buffer);
@@ -1866,7 +1867,7 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
   size_t tx_bytes;
   if (!this->format_tx_frame_(ctx, &tx_data, &tx_bytes)) {
     ESP_LOGE(TAG, "TX audio-effects format conversion failed; stopping audio session");
-    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->set_i2s_error_(true);
     this->audio_stack_running_.store(false, std::memory_order_relaxed);
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
     this->save_tx_reference_(ctx, nullptr);

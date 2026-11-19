@@ -42,10 +42,13 @@ class ESPAudioCapture final : public Component, public esp_audio_stack::AudioCap
   void set_buffer_size(size_t bytes) { this->buffer_size_ = bytes; }
   void set_duration(uint32_t ms) { this->duration_ms_ = ms; }
   void set_task_stack_in_psram(bool enabled) { this->task_stack_in_psram_ = enabled; }
+  void set_task_core(int core) { this->task_core_ = core; }
+  void set_task_priority(int priority) { this->task_priority_ = priority; }
+  void set_task_stack_size(uint32_t bytes) { this->task_stack_size_ = bytes; }
   void setup() override;
+  void dump_config() override;
   void loop() override;
   void on_shutdown() override { this->stop(); }
-  void dump_config() override;
   bool start();
   void stop();
   bool capture_active(CapturePoint point) const override {
@@ -96,6 +99,9 @@ class ESPAudioCapture final : public Component, public esp_audio_stack::AudioCap
   int socket_fd_{-1};
   bool microphone_held_{false};
   bool task_stack_in_psram_{false};
+  int task_core_{-1};
+  int task_priority_{2};
+  uint32_t task_stack_size_{4096};
 };
 
 template <typename... Ts>

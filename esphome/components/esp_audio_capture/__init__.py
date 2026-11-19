@@ -19,6 +19,9 @@ CONF_POINTS = "points"
 CONF_DURATION = "duration"
 CONF_BUFFER_SIZE = "buffer_size"
 CONF_TASK_STACK_IN_PSRAM = "task_stack_in_psram"
+CONF_TASK_CORE = "task_core"
+CONF_TASK_PRIORITY = "task_priority"
+CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_AFE_ID = "afe_id"
 CONF_BOUNDARY_PROBES = "boundary_probes"
 POINTS = {
@@ -61,6 +64,9 @@ CONFIG_SCHEMA = cv.All(
                 min=65536, max=262144
             ),
             cv.Optional(CONF_TASK_STACK_IN_PSRAM, default=False): psram.validate_task_stack_in_psram,
+            cv.Optional(CONF_TASK_CORE, default=-1): cv.int_range(min=-1, max=1),
+            cv.Optional(CONF_TASK_PRIORITY, default=2): cv.int_range(min=1, max=23),
+            cv.Optional(CONF_TASK_STACK_SIZE, default=4096): cv.int_range(min=2048, max=32768),
             cv.Optional(CONF_DURATION, default="15s"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
@@ -129,6 +135,9 @@ async def to_code(config):
     cg.add(var.set_duration(config[CONF_DURATION].total_milliseconds))
     cg.add(var.set_buffer_size(config[CONF_BUFFER_SIZE]))
     cg.add(var.set_task_stack_in_psram(config[CONF_TASK_STACK_IN_PSRAM]))
+    cg.add(var.set_task_core(config[CONF_TASK_CORE]))
+    cg.add(var.set_task_priority(config[CONF_TASK_PRIORITY]))
+    cg.add(var.set_task_stack_size(config[CONF_TASK_STACK_SIZE]))
     cg.add(
         var.set_points(sum(1 << POINTS[point] for point in set(config[CONF_POINTS])))
     )

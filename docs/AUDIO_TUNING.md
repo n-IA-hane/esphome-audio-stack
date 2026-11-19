@@ -290,6 +290,12 @@ esp_audio_capture:
     - afe_separated
 ```
 
+The capture worker also accepts `task_core` (`-1`, either core, by default),
+`task_priority` (default `2`) and `task_stack_size` (default `4096` bytes).
+Its configuration dump reports the requested settings and the worker's minimum
+free stack while it is running. Explicit PSRAM placement fails if external
+stack storage is unavailable.
+
 `afe_separated` records the first two interleaved vendor output planes in one
 stereo WAV; `afe_selected` records the vendor's selected mono PCM. These are
 DSP outputs, not physical microphone identities. They are available for vendor

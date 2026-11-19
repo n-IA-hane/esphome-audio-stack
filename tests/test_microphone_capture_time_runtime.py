@@ -67,6 +67,7 @@ struct AudioTaskCtx {
  bool processor_enabled=false,processor_ready=false,mic_running=true,use_tdm_ref=false,use_stereo_aec_ref=false;
 };
 struct ESPAudioStack {
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
  void*rx_handle_=this;uint32_t sample_rate_=16000;
  std::atomic<bool>audio_stack_running_{true},has_i2s_error_{false},rx_capture_tracking_active_{true};
  std::atomic<uint32_t>rx_dma_buffers_dropped_{0};

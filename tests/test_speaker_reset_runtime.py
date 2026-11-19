@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO_SOURCE = ROOT / 'esphome/components/esp_audio_stack/esp_audio_stack.cpp'
@@ -37,19 +39,25 @@ struct Buffer {
  size_t write_without_replacement(const void*,size_t len,unsigned,bool){queued+=len;return len;}
 };
 struct Callback {void call(){}};
+void xTaskNotifyGive(void*) {}
 struct ESPAudioStack {
+ void *audio_task_handle_ = nullptr;
+  HostSpeakerGate speaker_write_gate_;
+  std::atomic<uint32_t> tx_playback_generation_{0};
+  void notify_speaker_writers_(bool cancel=false) { speaker_write_gate_.notify(cancel); }
  std::atomic<bool> speaker_requested_{true},speaker_running_{true},has_mic_consumers_{true},request_speaker_reset_{false};
  std::atomic<bool> has_i2s_error_{false};
  Callback speaker_idle_callback_;Buffer buffer;Buffer *speaker_buffer_=&buffer;
- void reset_tx_playback_(){}
+ void reset_tx_playback_(){++tx_playback_generation_;}
  void update_runtime_state_(){}void stop(){}unsigned get_speaker_channels(){return 1;}
  void stop_speaker();void service_speaker_reset_();
  size_t play(const uint8_t*,size_t,TickType_t);
+  size_t play_with_admission_(const uint8_t*,size_t,TickType_t, const std::atomic<SpeakerAdmission> *);
 };
 ''' + '\n'.join(_method(source, name) for name in (
         'void ESPAudioStack::stop_speaker()',
         'void ESPAudioStack::service_speaker_reset_()',
-        'size_t ESPAudioStack::play(',
+        'size_t ESPAudioStack::play(', 'size_t ESPAudioStack::play_with_admission_(',
     )) + r'''
 int main(){
  ESPAudioStack stack;
@@ -79,6 +87,6 @@ int main(){
     cpp = tmp_path / 'reset.cpp'
     binary = tmp_path / 'reset'
     cpp.write_text(code)
-    subprocess.run(['g++','-std=c++17',str(cpp),'-o',str(binary)],check=True,capture_output=True,text=True)
+    subprocess.run(['g++', *SPEAKER_GATE_FLAGS,'-std=c++17',str(cpp),'-o',str(binary)],check=True,capture_output=True,text=True)
     run=subprocess.run(['bash','-c','ulimit -c 0; exec "$1"','bash',str(binary)],capture_output=True,text=True)
     assert run.returncode==0,run.stderr

@@ -48,9 +48,9 @@ class ESPAudioStackSpeaker final : public speaker::Speaker, public Component, pu
   static void speaker_output_callback(void *ctx, uint32_t frames, int64_t timestamp);
 
   bool pause_state_{false};
-  bool finishing_{false};  // Non-blocking drain: finish() sets flag, loop() handles drain+stop
+  std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::STOPPED};
   optional<uint32_t> timeout_;
-  uint32_t last_write_ms_{0};
+  std::atomic<uint32_t> last_write_ms_{0};
   // Reference counting for multiple listeners (media_player, voice_assistant, call components, etc.)
   // Idempotency guard: prevents multiple xSemaphoreTake per stream session.
   // Without this, play() calling start() before loop() sets STATE_RUNNING causes

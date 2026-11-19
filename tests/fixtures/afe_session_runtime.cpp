@@ -80,10 +80,13 @@ unsigned ulTaskNotifyTake(int clear,unsigned wait){
 }
 std::atomic<unsigned> workers{0};bool fail_worker=false;
 using UBaseType_t=unsigned;
+using BaseType_t=int;
+constexpr int tskNO_AFFINITY=-1;
 constexpr unsigned MALLOC_CAP_SPIRAM=1,MALLOC_CAP_INTERNAL=2,MALLOC_CAP_8BIT=4;
 bool psram_present=true;unsigned psram_failure=0,external_attempts=0,internal_attempts=0;
 unsigned external_allocations=0,external_releases=0;StackType_t *live_external_stack=nullptr;
 unsigned caps_deletions=0;
+unsigned expected_stack_bytes=12288;int expected_priority=4,expected_core=0;
 size_t heap_caps_get_total_size(unsigned caps){assert(caps==MALLOC_CAP_SPIRAM);return psram_present?1048576:0;}
 void heap_caps_free(StackType_t *stack){
  assert(stack!=nullptr&&stack==live_external_stack&&owners_deleted==1);
@@ -91,8 +94,8 @@ void heap_caps_free(StackType_t *stack){
 }
 namespace esp_audio_stack {
 struct ScopedLock {SemaphoreHandle_t mutex;ScopedLock(SemaphoreHandle_t m,unsigned):mutex(m){mutex->lock();}~ScopedLock(){mutex->unlock();}operator bool()const{return true;}};
-bool start_pinned_task(void(*entry)(void*),const char*,unsigned bytes,void *ctx,int,int,bool external,const char*,TaskHandle_t *out,StaticTask_t*,StackType_t **stack){
- assert(bytes==12288);*out=nullptr;
+bool start_pinned_task(void(*entry)(void*),const char*,unsigned bytes,void *ctx,int priority,int core,bool external,const char*,TaskHandle_t *out,StaticTask_t*,StackType_t **stack){
+ assert(bytes==expected_stack_bytes&&priority==expected_priority&&core==expected_core);*out=nullptr;
  if(external){
   ++external_attempts;*stack=nullptr;
   if(fail_worker||psram_failure==1)return false;
@@ -181,6 +184,10 @@ std::atomic<bool> fail_build{false};
 struct Processor {virtual ~Processor()=default;virtual bool wants_background_input()const=0;};
 struct EspAfe:Processor {
  using ReconfigureRequest=Request;static constexpr unsigned RECONFIGURE_TASK_STACK_BYTES=12288;
+ int reconfigure_task_core_=0,reconfigure_task_priority_=4;
+ unsigned reconfigure_task_stack_size_=12288;
+ unsigned char reconfigure_task_stack_memory_=0;
+ bool reconfigure_task_stack_external_=false;
  std::atomic<bool> processing_active_{false},drain_request_{false},process_busy_{false},instance_ready_{false};
  std::atomic<bool> afe_stopped_{false},vad_enabled_{true},voice_present_{false};
  AecIntent aec_enabled_{true};
@@ -237,6 +244,19 @@ struct ESPAudioStack {
 // ADAPTER_METHODS
 int main(int argc,char **argv){
  assert(argc==2);unsigned scenario=std::stoul(argv[1]);auto owner=std::make_unique<EspAfe>();auto &afe=*owner;
+ if(scenario>=23&&scenario<=25){
+  afe.reconfigure_task_core_=expected_core=-1;afe.reconfigure_task_priority_=expected_priority=3;
+  afe.reconfigure_task_stack_size_=expected_stack_bytes=16384;
+  afe.reconfigure_task_stack_memory_=scenario==23?1:2;
+  if(scenario==25)psram_failure=1;
+  const bool started=afe.start_reconfigure_task_();
+  assert(started==(scenario!=25));
+  assert(internal_attempts==(scenario==23?1U:0U));
+  assert(external_attempts==(scenario==23?0U:1U));
+  assert(afe.reconfigure_task_stack_external_==(scenario==24));
+  owner.reset();assert(workers==(started?1U:0U)&&owners_deleted==(started?1U:0U));
+  assert(live_external_stack==nullptr);return 0;
+ }
  if(scenario==21||scenario==22){
   afe.continuous_vad_=false;afe.setup();afe.set_processing_active(true);
   until([&]{return afe.afe_manager_&&afe.afe_manager_->afe_data->entered.load();});auto *old=afe.afe_manager_;

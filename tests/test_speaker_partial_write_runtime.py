@@ -7,6 +7,8 @@ check, not a FreeRTOS scheduling or physical audio qualification.
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 import esphome
 import pytest
 
@@ -103,8 +105,22 @@ template<typename T> struct RAMAllocator {
         depth += (source[end] == '{') - (source[end] == '}')
         end += 1
     body = source[start:end]
+    from test_speaker_backpressure_runtime import method
+    facade = (ROOT / 'esphome/components/esp_audio_stack/speaker/esp_audio_stack_speaker.cpp').read_text()
+    body += '\n' + method(source, 'size_t ESPAudioStack::play_with_admission_(')
+    lifecycle = method(source, 'void ESPAudioStack::service_speaker_reset_()')
+    header = (ROOT / 'esphome/components/esp_audio_stack/esp_audio_stack.h').read_text()
+    set_error = method(header, 'void set_i2s_error_(')
+    adapter_methods = '\n'.join(method(facade, signature) for signature in (
+        'void ESPAudioStackSpeaker::stop()', 'void ESPAudioStackSpeaker::finish()',
+        'size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t ticks_to_wait)',
+    ))
     harness = r'''
 #include <atomic>
+#include <array>
+#include <chrono>
+#include <condition_variable>
+#include <thread>
 #include <vector>
 #include <string>
 #include <cstdlib>
@@ -119,9 +135,32 @@ struct ESPAudioStack {
   std::atomic<bool> request_speaker_reset_{false};
   unsigned channels;
   std::atomic<bool> has_i2s_error_{false};
+  HostSpeakerGate speaker_write_gate_;
+  std::atomic<uint32_t> tx_playback_generation_{0};
+  void notify_speaker_writers_(bool cancel=false) { speaker_write_gate_.notify(cancel); }
+  bool has_failed_session() const { return has_i2s_error_; }
+  void start() {}
+  void service_speaker_reset_();
+  void reset_tx_playback_() { ++tx_playback_generation_; }
+  // PRODUCTION_SET_ERROR
   unsigned get_speaker_channels() const { return channels; }
   size_t play(const uint8_t*,size_t,TickType_t);
+  size_t play_with_admission_(const uint8_t*,size_t,TickType_t, const std::atomic<SpeakerAdmission> *);
 };
+struct ESPAudioStackSpeaker {
+  ESPAudioStack *parent_;
+  std::atomic<SpeakerAdmission> admission_{SpeakerAdmission::READY};
+  std::atomic<bool> listener_registered_{true}, implicit_recovery_used_{false};
+  std::atomic<uint32_t> last_write_ms_{0};
+  bool pause_state_{false};
+  bool is_failed() const { return false; }
+  void enable_loop_soon_any_context() {}
+  void set_pause_state(bool value) { pause_state_ = value; }
+  void start() { listener_registered_ = true; admission_ = SpeakerAdmission::STARTING; }
+  void stop(); void finish();
+  size_t play(const uint8_t *, size_t, TickType_t);
+};
+unsigned millis() { return xTaskGetTickCount(); }
 // PRODUCTION_PLAY
 std::vector<uint8_t> sequence(size_t size,unsigned seed=0) {
   std::vector<uint8_t> result(size);
@@ -132,17 +171,47 @@ std::vector<uint8_t> drain(RingBuffer &ring,size_t limit) {
   std::vector<uint8_t> result(limit);
   result.resize(ring.read(result.data(),result.size(),0)); return result;
 }
+// CONCURRENT_CASES
 int main(int argc,char **argv) {
   assert(argc==3); std::string scenario=argv[1]; unsigned channels=std::atoi(argv[2]);
   const size_t frame=channels*sizeof(int16_t);
   const size_t capacity=scenario=="device_sized_wait" ? 3200*channels : 5*frame+(scenario=="wrap" ? 1 : 0);
   std::shared_ptr<RingBuffer> ring=RingBuffer::create(capacity);
   ESPAudioStack stack{ring.get(),false,channels};
+  speaker_wait_hook=[&](unsigned ticks){waited+=ticks;if(wait_hook)wait_hook();};
   auto play=[&](const uint8_t *data,size_t length,TickType_t ticks) {
     return stack.play(data,length,ticks);
   };
   auto input=sequence(17*frame+1,101);
-  if(scenario=="oversized") {
+  if(scenario=="reset" || scenario=="stop" || scenario=="finish" || scenario=="error" ||
+     scenario=="space" || scenario=="ready") {
+    concurrent(scenario, stack, *ring, frame, capacity);
+  } else if(scenario=="timeout_budget") {
+    auto prefix = sequence(capacity, 14);
+    assert(ring->write_without_replacement(prefix.data(), capacity, 0, false) == capacity);
+    use_speaker_test_clock = true;
+    speaker_test_ticks = UINT32_MAX - 4;
+    std::vector<TickType_t> budgets;
+    speaker_wait_hook = [&](TickType_t ticks) {
+      budgets.push_back(ticks);
+      speaker_test_ticks += 3;
+      stack.notify_speaker_writers_();  // progress notification without enough space for this writer
+    };
+    assert(stack.play(input.data(), frame, 7) == 0);
+    assert((budgets == std::vector<TickType_t>{7, 4, 1}));
+    assert(drain(*ring, capacity) == prefix);
+  } else if(scenario=="main_task") {
+    // This call runs on the task which owns the facade readiness transition.
+    ESPAudioStackSpeaker sink{&stack};
+    sink.admission_ = SpeakerAdmission::STARTING;
+    assert(sink.play(input.data(), frame, portMAX_DELAY)==0 && waited==0);
+    sink.admission_ = SpeakerAdmission::READY;
+    assert(sink.play(input.data(), frame, portMAX_DELAY)==frame);
+    assert(drain(*ring,capacity).size()==frame);
+  } else if(scenario=="terminal") {
+    stack.set_i2s_error_(true);
+    assert(stack.play(input.data(),frame,portMAX_DELAY)==0);
+  } else if(scenario=="oversized") {
     const size_t total=17*frame; size_t offset=0; std::vector<uint8_t> heard;
     while(offset<total) {
       size_t written=play(input.data()+offset,total-offset,7);
@@ -164,7 +233,7 @@ int main(int argc,char **argv) {
     auto prefix=sequence(capacity);
     assert(ring->write_without_replacement(prefix.data(),prefix.size(),0,false)==capacity);
     std::vector<uint8_t> consumed;
-    if(scenario!="wait_timeout") wait_hook=[&]{consumed=drain(*ring,frame);};
+    if(scenario!="wait_timeout") wait_hook=[&]{consumed=drain(*ring,frame);stack.notify_speaker_writers_();};
     if(scenario=="device_sized_wait") input=sequence(8192);
     size_t written=play(input.data(),input.size(),scenario=="no_space" ? 0 : 7);
     if(scenario=="wait" || scenario=="device_sized_wait") {
@@ -187,13 +256,16 @@ int main(int argc,char **argv) {
   } else { assert(false); }
   assert(ring->available()==0);
 }
-'''.replace('// PRODUCTION_PLAY', body)
+'''.replace('// PRODUCTION_PLAY', body + '\n' + lifecycle + '\n' + adapter_methods)
+    harness = harness.replace('// PRODUCTION_SET_ERROR', set_error).replace(
+        '// CONCURRENT_CASES', (ROOT / 'tests/fixtures/speaker_sync/concurrent.cpp.in').read_text()
+    )
     unit = directory / 'partial.cpp'
     unit.write_text(harness)
     binary = directory / 'partial'
     esphome_root = Path(esphome.__file__).resolve().parent
     ring = esphome_root / 'components/ring_buffer/ring_buffer.cpp'
-    compiled = subprocess.run(['g++', '-std=c++17', '-DUSE_ESP32', '-I'+str(stubs),
+    compiled = subprocess.run(['g++', *SPEAKER_GATE_FLAGS, '-std=c++17', '-DUSE_ESP32', '-I'+str(stubs),
                                '-I'+str(esphome_root.parent), str(unit), str(ring), '-o', str(binary)],
                               capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
@@ -201,9 +273,9 @@ int main(int argc,char **argv) {
 
 
 @pytest.mark.parametrize('channels', [1, 2])
-@pytest.mark.parametrize('scenario', ['almost_full', 'oversized', 'wrap', 'wait', 'no_space', 'unaligned', 'device_sized_wait', 'wait_timeout'])
+@pytest.mark.parametrize('scenario', ['reset', 'stop', 'finish', 'error', 'space', 'ready', 'terminal', 'main_task', 'timeout_budget', 'almost_full', 'oversized', 'wrap', 'wait', 'no_space', 'unaligned', 'device_sized_wait', 'wait_timeout'])
 def test_pcm_progress_alignment_and_retry(partial_writer, channels, scenario):
     result = subprocess.run(['bash', '-c', 'ulimit -c 0; exec "$@"', 'bash',
                              str(partial_writer), scenario, str(channels)],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr

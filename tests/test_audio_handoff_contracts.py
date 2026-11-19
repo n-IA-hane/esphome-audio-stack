@@ -7,6 +7,8 @@ from the current checkout, never from the audit's frozen reproductions.
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 import pytest
 
 from test_volume_reference_runtime import method
@@ -21,7 +23,7 @@ def run_cpp(tmp_path, source, *flags):
     cpp.write_text(source)
     binary = tmp_path / "contract"
     result = subprocess.run(
-        ["g++", "-std=c++17", "-pthread", *flags, str(cpp), "-o", str(binary)],
+        ["g++", "-std=c++17", "-pthread", *(SPEAKER_GATE_FLAGS if "HostSpeakerGate" in source else ()), *flags, str(cpp), "-o", str(binary)],
         capture_output=True,
         text=True,
     )
@@ -278,6 +280,8 @@ struct ESPAudioStack {
  void *tx_handle_=this;Ring ring,reference_ring;Ring *speaker_buffer_=&ring,*aec_ref_ring_buffer_=&reference_ring;
  int16_t saved[4]{};int16_t *direct_aec_ref_=saved;bool direct_aec_ref_valid_=false;
  std::atomic<bool> has_i2s_error_{false},audio_stack_running_{true};
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
+ void notify_speaker_writers_(){}
  Converter play_ref_rate_converter_;std::vector<int16_t> wire;bool write_ok=true;
  void fail_audio_session_(const char*){has_i2s_error_=true;audio_stack_running_=false;}
  void process_tx_path_(AudioTaskCtx&);void process_tx_clock_only_(AudioTaskCtx&);

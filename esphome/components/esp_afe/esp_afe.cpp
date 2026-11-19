@@ -1178,6 +1178,13 @@ void EspAfe::dump_config() {
   ESP_LOGCONFIG(TAG, "  Processed output prebuffer: %u frame(s)",
                 static_cast<unsigned>(this->output_prebuffer_frames_));
   ESP_LOGCONFIG(TAG, "  Initialized: %s", this->is_initialized() ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG, "  Reconfigure task: core=%d priority=%d stack=%u memory=%s minimum_free=%u",
+                this->reconfigure_task_core_, this->reconfigure_task_priority_,
+                (unsigned) this->reconfigure_task_stack_size_,
+                this->reconfigure_task_handle_ == nullptr ? "not started" :
+                  this->reconfigure_task_stack_external_ ? "PSRAM" : "internal",
+                this->reconfigure_task_handle_ == nullptr ? 0U :
+                  (unsigned) uxTaskGetStackHighWaterMark(this->reconfigure_task_handle_));
 }
 
 FrameSpec EspAfe::frame_spec() const {
@@ -1673,12 +1680,15 @@ bool EspAfe::start_reconfigure_task_() {
   this->reconfigure_task_running_.store(true, std::memory_order_release);
   xSemaphoreTake(this->reconfigure_done_, 0);
   auto start_owner = [this]([[maybe_unused]] UBaseType_t caps) {
+    const BaseType_t core = this->reconfigure_task_core_ < 0 ? tskNO_AFFINITY : this->reconfigure_task_core_;
 #if configSUPPORT_STATIC_ALLOCATION
     return xTaskCreatePinnedToCoreWithCaps(&EspAfe::reconfigure_task_trampoline, "afe_reinit",
-        RECONFIGURE_TASK_STACK_BYTES, this, 4, &this->reconfigure_task_handle_, 0, caps) == pdPASS;
+        this->reconfigure_task_stack_size_, this, this->reconfigure_task_priority_,
+        &this->reconfigure_task_handle_, core, caps) == pdPASS;
 #else
     return xTaskCreatePinnedToCore(&EspAfe::reconfigure_task_trampoline, "afe_reinit",
-        RECONFIGURE_TASK_STACK_BYTES, this, 4, &this->reconfigure_task_handle_, 0) == pdPASS;
+        this->reconfigure_task_stack_size_, this, this->reconfigure_task_priority_,
+        &this->reconfigure_task_handle_, core) == pdPASS;
 #endif
   };
   // This configuration owner parks between requests and never performs flash
@@ -1686,10 +1696,12 @@ bool EspAfe::start_reconfigure_task_() {
   // IDF releases a failed attempt before the single internal fallback.
   bool started = false;
 #if configSUPPORT_STATIC_ALLOCATION && CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
-  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0)
+  if (this->reconfigure_task_stack_memory_ != 1 && heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0)
     started = start_owner(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
-  if (!started && !start_owner(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)) {
+  this->reconfigure_task_stack_external_ = started;
+  if (!started && (this->reconfigure_task_stack_memory_ == 2 ||
+                   !start_owner(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT))) {
     ESP_LOGE(TAG, "Failed to create AFE reconfigure task");
     this->reconfigure_task_running_.store(false, std::memory_order_release);
     return false;

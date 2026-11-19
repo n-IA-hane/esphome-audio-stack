@@ -79,6 +79,10 @@ CONF_FEED_TASK_STACK_SIZE = "feed_task_stack_size"
 CONF_FETCH_TASK_CORE = "fetch_task_core"
 CONF_FETCH_TASK_PRIORITY = "fetch_task_priority"
 CONF_FETCH_TASK_STACK_SIZE = "fetch_task_stack_size"
+CONF_RECONFIGURE_TASK_CORE = "reconfigure_task_core"
+CONF_RECONFIGURE_TASK_PRIORITY = "reconfigure_task_priority"
+CONF_RECONFIGURE_TASK_STACK_SIZE = "reconfigure_task_stack_size"
+CONF_RECONFIGURE_TASK_STACK_MEMORY = "reconfigure_task_stack_memory"
 CONF_FEED_BUF_IN_PSRAM = "feed_buf_in_psram"
 CONF_FEED_RING_IN_PSRAM = "feed_ring_in_psram"
 CONF_FETCH_RING_IN_PSRAM = "fetch_ring_in_psram"
@@ -125,6 +129,12 @@ def _validate_task_layout(config):
             "Espressif GMF AFE troubleshooting recommends separate cores "
             "to avoid AFE task watchdog timeouts"
         )
+    return config
+
+
+def _validate_reconfigure_memory(config):
+    if config[CONF_RECONFIGURE_TASK_STACK_MEMORY] == 2:
+        cv.requires_component("psram")(True)
     return config
 
 
@@ -196,6 +206,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_FETCH_TASK_STACK_SIZE, default=3072): cv.int_range(
                 min=1024, max=16384
             ),
+            cv.Optional(CONF_RECONFIGURE_TASK_CORE, default=0): cv.int_range(min=-1, max=1),
+            cv.Optional(CONF_RECONFIGURE_TASK_PRIORITY, default=4): cv.int_range(min=1, max=23),
+            cv.Optional(CONF_RECONFIGURE_TASK_STACK_SIZE, default=12288): cv.int_range(min=4096, max=32768),
+            cv.Optional(CONF_RECONFIGURE_TASK_STACK_MEMORY, default="auto"): cv.enum(
+                {"auto": 0, "internal": 1, "psram": 2}, lower=True
+            ),
             # Optional esp-sr AFE input format override for diagnostics and
             # board-specific dual-mic layouts. Default auto preserves the
             # historical MR/MMR behavior. On single-mic runtime shape the
@@ -222,6 +238,7 @@ CONFIG_SCHEMA = cv.All(
     _validate_esp32_variant,
     _validate_feature_config,
     _validate_task_layout,
+    _validate_reconfigure_memory,
 )
 
 
@@ -284,6 +301,12 @@ async def to_code(config):
     cg.add(var.set_fetch_task_core(config[CONF_FETCH_TASK_CORE]))
     cg.add(var.set_fetch_task_priority(config[CONF_FETCH_TASK_PRIORITY]))
     cg.add(var.set_fetch_task_stack_size(config[CONF_FETCH_TASK_STACK_SIZE]))
+    cg.add(var.set_reconfigure_task_core(config[CONF_RECONFIGURE_TASK_CORE]))
+    cg.add(var.set_reconfigure_task_priority(config[CONF_RECONFIGURE_TASK_PRIORITY]))
+    cg.add(var.set_reconfigure_task_stack_size(config[CONF_RECONFIGURE_TASK_STACK_SIZE]))
+    cg.add(var.set_reconfigure_task_stack_memory(config[CONF_RECONFIGURE_TASK_STACK_MEMORY]))
+    if config[CONF_RECONFIGURE_TASK_STACK_MEMORY] == 2:
+        psram.request_external_task_stack()
     cg.add(var.set_input_format_override(config[CONF_INPUT_FORMAT]))
     cg.add(var.set_feed_buf_in_psram(config[CONF_FEED_BUF_IN_PSRAM]))
     cg.add(var.set_feed_ring_in_psram(config[CONF_FEED_RING_IN_PSRAM]))

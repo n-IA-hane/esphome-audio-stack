@@ -40,6 +40,7 @@ struct AudioTaskCtx {
  int64_t rx_capture_time_us=0;
 };
 struct ESPAudioStack {
+ void set_i2s_error_(bool error){has_i2s_error_=error;}
  void*rx_handle_=this;uint32_t sample_rate_=16000;
  std::atomic<bool>audio_stack_running_{true},has_i2s_error_{false};
  std::atomic<uint32_t>rx_dma_buffers_dropped_{0};

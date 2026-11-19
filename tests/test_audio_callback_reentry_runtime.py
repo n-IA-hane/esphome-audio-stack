@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+from speaker_gate_host import SPEAKER_GATE_FLAGS
+
 import pytest
 
 from test_audio_failure_runtime import failure_source
@@ -73,7 +75,7 @@ def compile_run(tmp_path, source, *args):
     cpp = tmp_path / "reentry.cpp"
     cpp.write_text(source)
     binary = tmp_path / "reentry"
-    built = subprocess.run(["g++", "-std=c++17", "-O1", "-g", "-pthread", "-fsanitize=address,undefined",
+    built = subprocess.run(["g++", *SPEAKER_GATE_FLAGS, "-std=c++17", "-O1", "-g", "-pthread", "-fsanitize=address,undefined",
                             str(cpp), "-o", str(binary)], capture_output=True, text=True)
     assert built.returncode == 0, built.stderr
     run = subprocess.run([str(binary), *args], capture_output=True, text=True)

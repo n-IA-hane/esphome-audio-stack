@@ -4,9 +4,6 @@
 
 #include <cinttypes>
 #include <cmath>
-#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
-#include <algorithm>
-#endif
 
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
@@ -59,8 +56,9 @@ void ESPAudioStackSpeaker::start() {
     this->enable_loop_soon_any_context();
   }
 
-  // Clear finishing flag on new stream start
-  this->finishing_ = false;
+  // An explicit start may cancel a graceful drain. The loop commits readiness.
+  auto draining = SpeakerAdmission::DRAINING;
+  this->admission_.compare_exchange_strong(draining, SpeakerAdmission::STARTING, std::memory_order_acq_rel);
   if (this->pause_state_) {
     this->set_pause_state(false);
   }
@@ -72,6 +70,7 @@ void ESPAudioStackSpeaker::start() {
                                                           std::memory_order_relaxed))
     return;
 
+  this->admission_.store(SpeakerAdmission::STARTING, std::memory_order_release);
   this->enable_loop_soon_any_context();
 }
 
@@ -80,22 +79,24 @@ void ESPAudioStackSpeaker::stop() {
     return;
   this->implicit_recovery_used_.store(false, std::memory_order_release);
 
-  this->finishing_ = false;
   if (this->pause_state_) {
     this->set_pause_state(false);
   }
   if (!this->listener_registered_.exchange(false, std::memory_order_acq_rel))
     return;
-
+  this->admission_.store(SpeakerAdmission::STOPPING, std::memory_order_release);
+  this->parent_->notify_speaker_writers_(true);
   this->enable_loop_soon_any_context();
 }
 
 void ESPAudioStackSpeaker::finish() {
-  // Non-blocking: set flag, loop() will call stop() once buffer is drained
+  if (!this->listener_registered_.load(std::memory_order_acquire)) return;
+  // Accepted PCM drains through the existing hardware completion path.
   if (this->pause_state_) {
     this->set_pause_state(false);
   }
-  this->finishing_ = true;
+  this->admission_.store(SpeakerAdmission::DRAINING, std::memory_order_release);
+  this->parent_->notify_speaker_writers_(true);
   this->enable_loop_soon_any_context();
 }
 
@@ -111,42 +112,16 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length, TickType_t
   }
 
   if (this->parent_->has_failed_session() && this->listener_registered_.load(std::memory_order_acquire)) {
-    if (this->implicit_recovery_used_.exchange(true, std::memory_order_acq_rel)) {
-      vTaskDelay(ticks_to_wait);
-      return 0;
+    if (!this->implicit_recovery_used_.exchange(true, std::memory_order_acq_rel)) {
+      this->parent_->start();
+      this->enable_loop_soon_any_context();
     }
-    this->parent_->start();
-    this->enable_loop_soon_any_context();
   } else if (!this->listener_registered_.load(std::memory_order_acquire) &&
-             this->state_ != speaker::STATE_RUNNING && this->state_ != speaker::STATE_STARTING) {
+             this->admission_.load(std::memory_order_acquire) == SpeakerAdmission::STOPPED) {
     this->start();
   }
 
-  if (!this->listener_registered_.load(std::memory_order_acquire) || this->state_ != speaker::STATE_RUNNING) {
-    // A queued start retains the intent, but cannot admit PCM into the previous
-    // session while its stop/reset is still being dispatched.
-    // Honor the producer's backpressure budget, as the native I2S speaker does.
-    // A zero budget remains nonblocking; retry scheduling belongs to that caller.
-#ifdef USE_ESP_AUDIO_STACK_AMP_SETTLE
-    const uint32_t settle_ms = this->amplifier_settle_ms_.load(std::memory_order_relaxed);
-    if (this->state_ == speaker::STATE_STARTING && settle_ms != 0) {
-      uint32_t remaining_ms = settle_ms;
-      if (this->amplifier_settle_started_.load(std::memory_order_acquire)) {
-        const uint32_t elapsed = millis() - this->amplifier_settle_started_ms_.load(std::memory_order_relaxed);
-        remaining_ms = elapsed < settle_ms ? settle_ms - elapsed : 0;
-      }
-      // The main loop commits RUNNING. An unbounded caller must retry when
-      // settling ends, and one scheduler tick lets that owner commit readiness.
-      const TickType_t settle_ticks = std::max<TickType_t>(1, pdMS_TO_TICKS(remaining_ms));
-      vTaskDelay(std::min(ticks_to_wait, settle_ticks));
-      return 0;
-    }
-#endif
-    vTaskDelay(ticks_to_wait);
-    return 0;
-  }
-
-  size_t written = this->parent_->play(data, length, ticks_to_wait);
+  const size_t written = this->parent_->play_with_admission_(data, length, ticks_to_wait, &this->admission_);
   if (written > 0) {
     this->last_write_ms_ = millis();
   }
@@ -228,19 +203,23 @@ void ESPAudioStackSpeaker::loop() {
 
   if (this->parent_->has_failed_session()) {
     this->parent_requested_ = false;
-    this->finishing_ = false;
+    this->admission_.store(SpeakerAdmission::STOPPED, std::memory_order_release);
+    this->parent_->notify_speaker_writers_(true);
     this->state_ = speaker::STATE_STOPPED;
     this->disable_loop();
     return;
   }
   if (this->state_ == speaker::STATE_RUNNING && this->parent_->is_starting()) {
     this->parent_requested_ = false;
+    this->admission_.store(SpeakerAdmission::STARTING, std::memory_order_release);
     this->state_ = speaker::STATE_STARTING;
   }
 
   const bool requested = this->listener_registered_.load(std::memory_order_acquire);
 
   if (requested && (this->state_ == speaker::STATE_STOPPED)) {
+    auto stopped = SpeakerAdmission::STOPPED;
+    this->admission_.compare_exchange_strong(stopped, SpeakerAdmission::STARTING, std::memory_order_acq_rel);
     this->state_ = speaker::STATE_STARTING;
   }
 
@@ -254,6 +233,7 @@ void ESPAudioStackSpeaker::loop() {
         break;
       }
       if (!this->listener_registered_.load(std::memory_order_acquire)) {
+        this->admission_.store(SpeakerAdmission::STOPPED, std::memory_order_release);
         if (this->parent_requested_) this->parent_->stop_speaker();
         this->parent_requested_ = false;
         this->state_ = speaker::STATE_STOPPED;
@@ -303,12 +283,17 @@ void ESPAudioStackSpeaker::loop() {
       // The idle budget starts when hardware is ready, not while opening it.
       this->last_write_ms_ = millis();
       this->state_ = speaker::STATE_RUNNING;
+      if (auto starting = SpeakerAdmission::STARTING;
+          this->admission_.compare_exchange_strong(starting, SpeakerAdmission::READY, std::memory_order_acq_rel))
+        this->parent_->notify_speaker_writers_();
       break;
 
     case speaker::STATE_RUNNING:
       // Non-blocking finish: drain buffer then stop
-      if (this->finishing_ && !this->has_buffered_data()) {
-        this->finishing_ = false;
+      if (auto starting = SpeakerAdmission::STARTING;
+          this->admission_.compare_exchange_strong(starting, SpeakerAdmission::READY, std::memory_order_acq_rel))
+        this->parent_->notify_speaker_writers_();
+      if (this->admission_.load(std::memory_order_acquire) == SpeakerAdmission::DRAINING && !this->has_buffered_data()) {
         this->stop();
       } else if (!this->pause_state_ && this->timeout_.has_value() && !this->has_buffered_data() &&
                  (millis() - this->last_write_ms_) > this->timeout_.value()) {
@@ -317,12 +302,16 @@ void ESPAudioStackSpeaker::loop() {
       break;
 
     case speaker::STATE_STOPPING:
+      this->admission_.store(SpeakerAdmission::STOPPED, std::memory_order_release);
       this->parent_->stop_speaker();
       this->parent_requested_ = false;
       this->state_ = speaker::STATE_STOPPED;
       break;
 
     case speaker::STATE_STOPPED:
+      if (auto stopping = SpeakerAdmission::STOPPING;
+          this->admission_.compare_exchange_strong(stopping, SpeakerAdmission::STOPPED, std::memory_order_acq_rel))
+        this->parent_->notify_speaker_writers_(true);
       this->disable_loop();
       break;
   }
