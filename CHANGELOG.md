@@ -72,11 +72,10 @@ Changes since stable **2026.11.0**.
 
 ### Updating
 
-The development sources require ESPHome **2026.12.0 or newer**, including
-`2026.12.0.dev0` at official commit
-`373224c141dceadbb67ace263040cbfc802c5968`. Existing YAML, wiring and gain
-settings remain valid. Refresh the `dev` sources and rebuild with that core
-before uploading. Published stable releases retain their documented dependencies.
+The `dev` branch now accepts ESPHome **2026.11.0 or newer** on ESP32-S3
+and ESP32-P4. The 2026.11.0 release includes the native microphone callback
+and DMA capture-time helper used by Audio Stack. Refresh the `dev` sources
+and rebuild with the updated configuration validator.
 
 Host and configuration regressions cover this stabilization checkpoint. They
 do not establish device interrupt timing, acoustic performance or firmware

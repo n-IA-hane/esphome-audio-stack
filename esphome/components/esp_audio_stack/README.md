@@ -7,10 +7,9 @@ Word facade, but moves low-level audio ownership to the ESP-IDF and Espressif
 audio libraries: `esp_driver_i2s`, `esp_codec_dev`, `esp_audio_effects`
 and, through optional processors, ESP-SR/GMF AFE.
 
-The development provider requires ESPHome 2026.12.0 or newer, including development
-builds. It is aligned with official commit
-`373224c141dceadbb67ace263040cbfc802c5968` (`2026.12.0.dev0`), whose native
-`AudioCapture` and DMA capture-time helper are used by the microphone facade.
+The development provider requires ESPHome 2026.11.0 or newer on ESP32-S3 and
+ESP32-P4. The microphone uses the native `AudioCapture` callback and DMA
+capture-time helper included in that release.
 
 This independently maintained ESPHome component integrates Espressif libraries so board YAMLs can cover shared
 codec buses, no-codec MEMS/amp builds, dual I2S buses, stereo speaker output,

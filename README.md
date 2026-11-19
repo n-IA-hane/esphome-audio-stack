@@ -43,13 +43,11 @@ providers.
 [Previous stable 2026.10.2](https://github.com/n-IA-hane/esphome-audio-stack/releases/tag/v2026.10.2)
 | [Changelog](CHANGELOG.md)
 
-Current development sources require ESPHome **2026.12.0 or newer**, including
-development builds. The tested official source is commit
-`373224c141dceadbb67ace263040cbfc802c5968`, which identifies itself as
-`2026.12.0.dev0`. Install that source with:
+The `dev` branch requires ESPHome **2026.11.0 or newer** on ESP32-S3 and
+ESP32-P4. To install the minimum supported release, run:
 
 ```sh
-python -m pip install "esphome @ https://github.com/esphome/esphome/archive/373224c141dceadbb67ace263040cbfc802c5968.tar.gz"
+python -m pip install "esphome==2026.11.0"
 ```
 
 Use ESP-IDF and an ESP32-S3 or ESP32-P4 with PSRAM. Select the correct PSRAM mode

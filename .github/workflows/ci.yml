@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 env:
-  ESPHOME_SOURCE_REF: 373224c141dceadbb67ace263040cbfc802c5968
+  ESPHOME_SOURCE_REF: 1feda1bcaa861a5f2e933f2c65d599e44f4b132b # ESPHome 2026.11.0
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        esphome: ["373224c1"]
+        esphome: ["2026.11.0"]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

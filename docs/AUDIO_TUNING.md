@@ -2,7 +2,7 @@
 
 Use the maintained device profile first. The options below add tools for a
 specific board or experiment; none changes the existing profile defaults.
-Current development sources require ESPHome 2026.12.0 or newer, including development builds.
+Current development sources require ESPHome 2026.11.0 or newer.
 
 For wiring diagrams and YAML fragments covering each supported input layout,
 start with [Microphone wiring and delivery, illustrated](../README.md#microphone-wiring-and-delivery-illustrated).

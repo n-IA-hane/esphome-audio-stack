@@ -13,9 +13,8 @@ Use it when the device needs software echo cancellation but not the full AFE
 pipeline. It is lighter than ``esp_afe`` and is the normal starting point for a
 single-mic Voice Assistant device with media or VoIP playback.
 
-Development sources require ESPHome **2026.12.0 or newer**, including
-development builds, ESP-IDF and PSRAM. The parent Audio
-Stack owns the bus and sample-rate conversion.
+Development sources require ESPHome **2026.11.0 or newer**, ESP-IDF and PSRAM.
+The parent Audio Stack owns the bus and sample-rate conversion.
 
 .. code-block:: yaml
 
