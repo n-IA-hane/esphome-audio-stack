@@ -53,7 +53,7 @@ def test_working_buffers_follow_direction_and_mono_delivery_without_hot_growth(t
     pipeline = (COMPONENT / "audio_pipeline.cpp").read_text()
     helpers = pipeline[pipeline.index("static constexpr size_t AUDIO_BUFFER_ALIGN"):
                        pipeline.index("size_t ESPAudioStack::get_mic_callback_buffer_size")]
-    code = r"""
+    code = f'#include "{COMPONENT / "audio_buffer_requirements.h"}"\nusing esphome::esp_audio_stack::AudioBufferRequirements;\n' + r"""
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -319,3 +319,41 @@ int main(){
 }
 """
     compile_run(tmp_path, code, *(["-DUSE_ESP_AUDIO_STACK_DUAL_BUS"] if dual else []))
+
+
+@pytest.mark.parametrize("wide_tx", [False, True])
+def test_buffer_requirements_follow_the_actual_session_geometry(tmp_path, wide_tx):
+    header = COMPONENT / "audio_buffer_requirements.h"
+    code = f'#include "{header}"\n' + r'''
+#include <cassert>
+using esphome::esp_audio_stack::AudioBufferRequirements;
+struct Frame {
+ size_t rx_frame_bytes=2048, input_frame_bytes=512, speaker_frame_bytes=768;
+ size_t bus_frame_bytes=768, output_frame_bytes=320, bus_frame_size=384;
+ unsigned speaker_channels=1, num_ch=2, i2s_bps=4;
+ bool mic_separate=true, processor_planar_input=false, use_tdm_bus=false;
+ bool use_stereo_aec_ref=false, use_tdm_ref=false;
+};
+int main() {
+ Frame frame;
+ auto mono=AudioBufferRequirements::for_frame(frame,true,true,false);
+ assert(mono.rx_bytes==2048 && mono.mic_bytes==512 && mono.processor_mic_bytes==0);
+ assert(mono.spk_bytes==768 && mono.spk_ref_bytes==512 && mono.aec_output_bytes==320);
+ auto interleaved=AudioBufferRequirements::for_frame(frame,true,true,true);
+ assert(interleaved.processor_mic_bytes==1024);
+ frame.processor_planar_input=true;
+ auto planar=AudioBufferRequirements::for_frame(frame,true,true,true);
+ assert(planar.processor_mic_bytes==512 && planar.tx_ref_mono_bytes==0);
+ auto playback=AudioBufferRequirements::for_frame(frame,false,false,false);
+ assert(playback.rx_bytes==0 && playback.mic_bytes==0 && playback.spk_ref_bytes==0);
+ assert(playback.spk_bytes==768 && playback.aec_output_bytes==0);
+#ifdef USE_ESP_AUDIO_STACK_STEREO_TX
+ assert(playback.tx_interleave_bytes==1536 && playback.tx_32_bytes==3072);
+ frame.use_tdm_bus=true;
+ auto tdm=AudioBufferRequirements::for_frame(frame,true,true,true);
+ assert(tdm.tx_interleave_bytes==0 && tdm.tx_32_bytes==1536);
+#endif
+}
+'''
+    flags = ("-DUSE_ESP_AUDIO_STACK_STEREO_TX", "-DUSE_ESP_AUDIO_STACK_32BIT") if wide_tx else ()
+    compile_run(tmp_path, code, *flags)

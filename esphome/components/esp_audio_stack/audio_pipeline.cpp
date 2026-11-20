@@ -31,6 +31,7 @@
 #include "audio_core_processor.h"
 #endif
 #include "audio_core_audio_utils.h"
+#include "audio_buffer_requirements.h"
 #include "audio_core_log_utils.h"
 #ifndef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
 #include "native_i2s_capture_time.h"
@@ -134,13 +135,6 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 #ifdef USE_ESP_AUDIO_STACK_STD_DUAL_MIC
   dual_mic_configured = dual_mic_configured || this->std_second_mic_slot_ >= 0;
 #endif
-#ifdef USE_ESP_AUDIO_STACK_MIC_DOWNMIX
-  // The physical inputs remain dual, but only mono reaches the processor.
-  const uint8_t worst_mic_ch = 1;
-  (void) dual_mic_configured;
-#else
-  const uint8_t worst_mic_ch = dual_mic_configured ? 2 : 1;
-#endif
   bool processor_buffers_needed = false;
 #ifdef USE_AUDIO_PROCESSOR
   // Allocate for the processor once its frame shape is known, even if AFE
@@ -149,29 +143,7 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   processor_buffers_needed = this->processor_ != nullptr && ctx.processor_spec_loaded;
 #endif
   const bool have_rx = this->has_rx_input_();
-  const size_t rx_bytes = have_rx ? ctx.rx_frame_bytes : 0;
-  const size_t mic_bytes = have_rx && ctx.mic_separate ? ctx.input_frame_bytes : 0;
-  const size_t processor_mic_bytes =
-      (processor_buffers_needed && worst_mic_ch > 1)
-          ? ctx.input_frame_bytes * (ctx.processor_planar_input ? 1 : worst_mic_ch) : 0;
-  const size_t spk_bytes = ctx.speaker_frame_bytes;
-  const size_t tx_ref_mono_bytes = (processor_buffers_needed && !ctx.use_tdm_bus && ctx.speaker_channels > 1 &&
-                                    !ctx.use_stereo_aec_ref && !ctx.use_tdm_ref)
-                                       ? ctx.bus_frame_bytes
-                                       : 0;
-  const size_t spk_ref_bytes =
-      (ctx.use_stereo_aec_ref || ctx.use_tdm_ref || processor_buffers_needed) ? ctx.input_frame_bytes : 0;
-  const size_t aec_output_bytes = processor_buffers_needed ? ctx.output_frame_bytes : 0;
-  size_t tx_interleave_bytes = 0;
-#ifdef USE_ESP_AUDIO_STACK_STEREO_TX
-  tx_interleave_bytes = (!ctx.use_tdm_bus && ctx.num_ch > 1 && ctx.speaker_channels == 1)
-                            ? ctx.bus_frame_size * ctx.num_ch * sizeof(int16_t)
-                            : 0;
-#endif
-  size_t tx_32_bytes = 0;
-#ifdef USE_ESP_AUDIO_STACK_32BIT
-  tx_32_bytes = ctx.i2s_bps == 4 ? (ctx.bus_frame_size * (ctx.use_tdm_bus ? 1 : ctx.num_ch) * ctx.i2s_bps) : 0;
-#endif
+  const auto required = AudioBufferRequirements::for_frame(ctx, have_rx, processor_buffers_needed, dual_mic_configured);
 
   auto prepare_rate_converters = [&]() -> bool {
     bool ready = true;
@@ -207,7 +179,7 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
       ready = this->play_ref_rate_converter_.prepare(ctx.bus_frame_size);
     }
 #if defined(USE_ESP_AUDIO_STACK_STEREO_TX)
-    if (ready && tx_ref_mono_bytes > 0 && this->tx_ref_ch_cvt_handle_ == nullptr) {
+    if (ready && required.tx_ref_mono_bytes > 0 && this->tx_ref_ch_cvt_handle_ == nullptr) {
       esp_ae_ch_cvt_cfg_t cfg{};
       cfg.sample_rate = this->sample_rate_;
       cfg.bits_per_sample = 16;
@@ -230,7 +202,7 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     (void) rx_prepared;
 #endif
 #ifdef USE_ESP_AUDIO_STACK_32BIT
-    if (ready && tx_32_bytes > 0) {
+    if (ready && required.tx_32_bytes > 0) {
       const uint8_t tx_channels = ctx.use_tdm_bus ? 1 : ctx.num_ch;
       if (this->tx_bit_cvt_handle_ != nullptr && this->tx_bit_cvt_channels_ != tx_channels) {
         esp_ae_bit_cvt_close(static_cast<esp_ae_bit_cvt_handle_t>(this->tx_bit_cvt_handle_));
@@ -259,30 +231,26 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     return ready;
   };
 
-  if (this->audio_buffers_allocated_) {
-    const bool fits =
-        (rx_bytes == 0 || (this->prealloc_rx_buffer_ != nullptr && this->prealloc_rx_buffer_bytes_ >= rx_bytes)) &&
-        (mic_bytes == 0 ||
-         (this->prealloc_mic_buffer_ != nullptr && this->prealloc_mic_buffer_bytes_ >= mic_bytes)) &&
-        (processor_mic_bytes == 0 || (this->prealloc_processor_mic_buffer_ != nullptr &&
-                                      this->prealloc_processor_mic_buffer_bytes_ >= processor_mic_bytes)) &&
-        this->prealloc_spk_buffer_ != nullptr && this->prealloc_spk_buffer_bytes_ >= spk_bytes &&
-        (spk_ref_bytes == 0 ||
-         (this->prealloc_spk_ref_buffer_ != nullptr && this->prealloc_spk_ref_buffer_bytes_ >= spk_ref_bytes)) &&
-        (tx_ref_mono_bytes == 0 || (this->prealloc_tx_ref_mono_buffer_ != nullptr &&
-                                    this->prealloc_tx_ref_mono_buffer_bytes_ >= tx_ref_mono_bytes)) &&
-        (aec_output_bytes == 0 ||
-         (this->prealloc_aec_output_ != nullptr && this->prealloc_aec_output_bytes_ >= aec_output_bytes))
+  auto buffers_fit = [&]() {
+    return this->prealloc_spk_buffer_ != nullptr
+        && required.fits(required.rx_bytes, this->prealloc_rx_buffer_, this->prealloc_rx_buffer_bytes_)
+        && required.fits(required.mic_bytes, this->prealloc_mic_buffer_, this->prealloc_mic_buffer_bytes_)
+        && required.fits(required.processor_mic_bytes, this->prealloc_processor_mic_buffer_, this->prealloc_processor_mic_buffer_bytes_)
+        && required.fits(required.spk_bytes, this->prealloc_spk_buffer_, this->prealloc_spk_buffer_bytes_)
+        && required.fits(required.spk_ref_bytes, this->prealloc_spk_ref_buffer_, this->prealloc_spk_ref_buffer_bytes_)
+        && required.fits(required.tx_ref_mono_bytes, this->prealloc_tx_ref_mono_buffer_, this->prealloc_tx_ref_mono_buffer_bytes_)
+        && required.fits(required.aec_output_bytes, this->prealloc_aec_output_, this->prealloc_aec_output_bytes_)
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
-        && (tx_interleave_bytes == 0 || (this->prealloc_tx_interleave_buffer_ != nullptr &&
-                                         this->prealloc_tx_interleave_buffer_bytes_ >= tx_interleave_bytes))
+        && required.fits(required.tx_interleave_bytes, this->prealloc_tx_interleave_buffer_, this->prealloc_tx_interleave_buffer_bytes_)
 #endif
 #ifdef USE_ESP_AUDIO_STACK_32BIT
-        && (tx_32_bytes == 0 ||
-            (this->prealloc_tx_32_buffer_ != nullptr && this->prealloc_tx_32_buffer_bytes_ >= tx_32_bytes))
+        && required.fits(required.tx_32_bytes, this->prealloc_tx_32_buffer_, this->prealloc_tx_32_buffer_bytes_)
 #endif
         ;
-    if (fits) {
+  };
+
+  if (this->audio_buffers_allocated_) {
+    if (buffers_fit()) {
       if (!prepare_rate_converters()) {
         this->release_audio_buffers_();
         return false;
@@ -293,49 +261,49 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     this->release_audio_buffers_();
   }
 
-  alloc_i16_buffer(&this->prealloc_rx_buffer_, &this->prealloc_rx_buffer_bytes_, rx_bytes, buf_caps, false);
+  alloc_i16_buffer(&this->prealloc_rx_buffer_, &this->prealloc_rx_buffer_bytes_, required.rx_bytes, buf_caps, false);
 
-  if (mic_bytes > 0) {
-    alloc_i16_buffer(&this->prealloc_mic_buffer_, &this->prealloc_mic_buffer_bytes_, mic_bytes, buf_caps, true);
+  if (required.mic_bytes > 0) {
+    alloc_i16_buffer(&this->prealloc_mic_buffer_, &this->prealloc_mic_buffer_bytes_, required.mic_bytes, buf_caps, true);
   }
 
-  if (processor_mic_bytes > 0) {
+  if (required.processor_mic_bytes > 0) {
     alloc_i16_buffer(&this->prealloc_processor_mic_buffer_, &this->prealloc_processor_mic_buffer_bytes_,
-                     processor_mic_bytes, buf_caps, true);
+                     required.processor_mic_bytes, buf_caps, true);
   }
 
-  alloc_i16_buffer(&this->prealloc_spk_buffer_, &this->prealloc_spk_buffer_bytes_, spk_bytes, buf_caps, false);
+  alloc_i16_buffer(&this->prealloc_spk_buffer_, &this->prealloc_spk_buffer_bytes_, required.spk_bytes, buf_caps, false);
 
   if (ctx.use_stereo_aec_ref || ctx.use_tdm_ref) {
-    alloc_i16_buffer(&this->prealloc_spk_ref_buffer_, &this->prealloc_spk_ref_buffer_bytes_, spk_ref_bytes, buf_caps,
+    alloc_i16_buffer(&this->prealloc_spk_ref_buffer_, &this->prealloc_spk_ref_buffer_bytes_, required.spk_ref_bytes, buf_caps,
                      true);
   }
 
-  if (tx_ref_mono_bytes > 0) {
-    alloc_i16_buffer(&this->prealloc_tx_ref_mono_buffer_, &this->prealloc_tx_ref_mono_buffer_bytes_, tx_ref_mono_bytes,
+  if (required.tx_ref_mono_bytes > 0) {
+    alloc_i16_buffer(&this->prealloc_tx_ref_mono_buffer_, &this->prealloc_tx_ref_mono_buffer_bytes_, required.tx_ref_mono_bytes,
                      buf_caps, true);
   }
 
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
-  if (tx_interleave_bytes > 0) {
+  if (required.tx_interleave_bytes > 0) {
     alloc_i16_buffer(&this->prealloc_tx_interleave_buffer_, &this->prealloc_tx_interleave_buffer_bytes_,
-                     tx_interleave_bytes, buf_caps, true);
+                     required.tx_interleave_bytes, buf_caps, true);
   }
 #endif
 
 #ifdef USE_ESP_AUDIO_STACK_32BIT
-  if (tx_32_bytes > 0) {
-    alloc_i16_buffer(&this->prealloc_tx_32_buffer_, &this->prealloc_tx_32_buffer_bytes_, tx_32_bytes, buf_caps, false);
+  if (required.tx_32_bytes > 0) {
+    alloc_i16_buffer(&this->prealloc_tx_32_buffer_, &this->prealloc_tx_32_buffer_bytes_, required.tx_32_bytes, buf_caps, false);
   }
 #endif
 
 #ifdef USE_AUDIO_PROCESSOR
   if (processor_buffers_needed) {
     if (!this->prealloc_spk_ref_buffer_ && !ctx.use_tdm_ref) {
-      alloc_i16_buffer(&this->prealloc_spk_ref_buffer_, &this->prealloc_spk_ref_buffer_bytes_, spk_ref_bytes, buf_caps,
+      alloc_i16_buffer(&this->prealloc_spk_ref_buffer_, &this->prealloc_spk_ref_buffer_bytes_, required.spk_ref_bytes, buf_caps,
                        true);
     }
-    alloc_i16_buffer(&this->prealloc_aec_output_, &this->prealloc_aec_output_bytes_, aec_output_bytes, buf_caps, true);
+    alloc_i16_buffer(&this->prealloc_aec_output_, &this->prealloc_aec_output_bytes_, required.aec_output_bytes, buf_caps, true);
 
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
     // direct_aec_ref_ stores the converted TX reference at the processor rate.
@@ -384,30 +352,30 @@ bool ESPAudioStack::allocate_audio_buffers_(AudioTaskCtx &ctx) {
 #endif
 
   // Validate required allocations
-  if ((rx_bytes > 0 && !this->prealloc_rx_buffer_) || !this->prealloc_spk_buffer_) {
+  if ((required.rx_bytes > 0 && !this->prealloc_rx_buffer_) || !this->prealloc_spk_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
-  if (mic_bytes > 0 && !this->prealloc_mic_buffer_) {
+  if (required.mic_bytes > 0 && !this->prealloc_mic_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
-  if (processor_mic_bytes > 0 && !this->prealloc_processor_mic_buffer_) {
+  if (required.processor_mic_bytes > 0 && !this->prealloc_processor_mic_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
-  if (tx_ref_mono_bytes > 0 && !this->prealloc_tx_ref_mono_buffer_) {
+  if (required.tx_ref_mono_bytes > 0 && !this->prealloc_tx_ref_mono_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
 #ifdef USE_ESP_AUDIO_STACK_STEREO_TX
-  if (tx_interleave_bytes > 0 && !this->prealloc_tx_interleave_buffer_) {
+  if (required.tx_interleave_bytes > 0 && !this->prealloc_tx_interleave_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
 #endif
 #ifdef USE_ESP_AUDIO_STACK_32BIT
-  if (tx_32_bytes > 0 && !this->prealloc_tx_32_buffer_) {
+  if (required.tx_32_bytes > 0 && !this->prealloc_tx_32_buffer_) {
     this->release_audio_buffers_();
     return false;
   }
