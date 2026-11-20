@@ -4,9 +4,9 @@ import subprocess
 
 
 def test_stack_memory_keeps_p4_internal_and_s3_external(tmp_path):
-    source = (Path(__file__).resolve().parents[1] / 'esphome/components/esp_afe/esp_afe.cpp').read_text()
+    source = (Path(__file__).resolve().parents[1] / 'esphome/components/esp_afe/afe_manager.cpp').read_text()
     start = source.index('template<typename Setting>\nstatic auto configure_gmf_stack_memory')
-    end = source.index('\nstruct AfeModePreset', start)
+    end = source.index('\nstatic int effective_feed_task_stack_size', start)
     harness = tmp_path / 'placement.cpp'
     harness.write_text('#include <cassert>\n' + source[start:end] + r'''
 struct NewSetting { int stack_size = 4096; bool stack_in_internal = false; };

@@ -1,5 +1,6 @@
 """VAD controls use the manager directly and commit state only after success."""
 
+from afe_admission_support import afe_sources
 from pathlib import Path
 import subprocess
 
@@ -7,10 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_vad_control_preserves_state_on_failure(tmp_path):
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = afe_sources('esp_afe.cpp', 'afe_manager_features.h')
     start = source.index("bool EspAfe::set_vad_enabled_runtime_")
     method = source[start : source.index("\n}\n", start) + 2]
-    helper_start = source.index("static esp_gmf_err_t apply_vad_intent(")
+    helper_start = source.index("inline esp_gmf_err_t apply_vad_intent(")
     helper = source[helper_start:source.index("\n}\n", helper_start) + 2]
     harness = r"""
 #include <atomic>

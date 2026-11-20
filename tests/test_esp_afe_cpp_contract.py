@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from test_volume_reference_runtime import method
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,13 +22,13 @@ def read_aec(name: str) -> str:
 
 
 def test_aec_is_initialized_for_live_control() -> None:
-    cpp = read("esp_afe.cpp")
+    cpp = read("afe_manager.cpp") + read("afe_manager_features.h")
     assert "cfg->aec_init = true;" in cpp
     assert "ESP_AFE_FEATURE_AEC, enabled" in cpp
 
 
 def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
-    cpp = read("esp_afe.cpp")
+    cpp = read("afe_manager.cpp") + read("afe_stream.cpp")
     header = read("esp_afe.h")
 
     assert "xRingbufferSendAcquire" in cpp
@@ -51,7 +52,7 @@ def test_gmf_dual_mic_feed_uses_direct_ring_slots() -> None:
 
 def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> None:
     init = read("__init__.py")
-    cpp = read("esp_afe.cpp")
+    cpp = read("afe_stream.cpp")
     header = read("esp_afe.h")
     ring = (
         ROOT
@@ -66,7 +67,7 @@ def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> 
     assert "output_prebuffer_frames requires mic_num: 2" in init
     assert "set_output_prebuffer_frames" in header
 
-    process = cpp[cpp.index("bool EspAfe::process(") : cpp.index("\nbool EspAfe::reinit_by_name")]
+    process = method(read("afe_stream.cpp"), "bool EspAfe::process_(")
     # Native DSP prebuffer duration is exercised by test_afe_prebuffer_runtime;
     # it must not shrink to the smaller transport slice.
     assert "this->fetch_output_ring_->available() >= output_bytes" in process
@@ -82,7 +83,7 @@ def test_gmf_output_bridge_preserves_frame_boundaries_and_optional_reserve() -> 
 
 
 def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:
-    cpp = read("esp_afe.cpp")
+    cpp = read("afe_manager.cpp") + read("afe_stream.cpp") + read("esp_afe.cpp")
     header = read("esp_afe.h")
 
     assert "esp_agc_open(AGC_MODE_2, 16000)" in cpp
@@ -95,7 +96,7 @@ def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:
     assert "afe_mic_channels >= 2" in config
     assert "&& !use_post_afe_agc" in config
 
-    process = cpp[cpp.index("bool EspAfe::process(") : cpp.index("\nbool EspAfe::reinit_by_name")]
+    process = method(read("afe_stream.cpp"), "bool EspAfe::process_(")
     read_pos = process.index("fetch_output_ring_->read")
     complete = process.index("if (got == output_bytes)", read_pos)
     agc = process.index("process_post_afe_agc_frame_", complete)
@@ -108,12 +109,12 @@ def test_dual_mic_agc_runs_after_complete_gmf_frame_assembly() -> None:
 
 
 def test_manager_features_are_ready_before_callbacks_can_run() -> None:
-    cpp = read("esp_afe.cpp")
+    cpp = read("afe_manager_features.h") + read("afe_manager.cpp")
     header = read("esp_afe.h")
 
     assert "cfg->vad_init = true;" in cpp
     assert "gmf_vad_state_pending_" not in header + cpp
-    helper_start = cpp.index("static esp_gmf_err_t apply_vad_intent(")
+    helper_start = cpp.index("inline esp_gmf_err_t apply_vad_intent(")
     helper = cpp[helper_start : cpp.index("\n}\n", helper_start)]
     assert "esp_gmf_afe_manager_enable_features(manager, ESP_AFE_FEATURE_VAD, enabled)" in helper
     install = cpp[cpp.index("bool EspAfe::install_instance_(") : cpp.index("EspAfe::AfeInstance EspAfe::detach_instance_")]
@@ -125,7 +126,7 @@ def test_manager_features_are_ready_before_callbacks_can_run() -> None:
 
 
 def test_manager_has_no_parallel_gmf_element_or_wakeup_pipeline() -> None:
-    cpp = read("esp_afe.cpp")
+    cpp = "\n".join(path.read_text() for path in AFE.glob("*.cpp"))
     header = read("esp_afe.h")
     for forbidden in ("esp_gmf_afe_init", "esp_gmf_afe_set_output_callback", "esp_gmf_pipeline_",
                       "esp_gmf_task_", "esp_gmf_port_", "esp_gmf_element_", "gmf_event_cb_",
@@ -198,7 +199,7 @@ def test_rebuild_state_is_published_without_racing_live_afe_fields() -> None:
     assert "fetch_chunksize_" not in frame_spec
     assert frame_spec.count(".load(std::memory_order_acquire)") == 3
 
-    process = cpp[cpp.index("bool EspAfe::process(") : cpp.index("\nbool EspAfe::reinit_by_name")]
+    process = method(read("afe_stream.cpp"), "bool EspAfe::process_(")
     busy = process.index("this->process_busy_.store(true, std::memory_order_seq_cst);")
     drain = process.index("this->drain_request_.load(std::memory_order_seq_cst)")
     first_live_size = process.index("int qs = this->process_chunksize_")

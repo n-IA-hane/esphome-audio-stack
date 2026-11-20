@@ -5,7 +5,7 @@ import subprocess
 
 
 def test_prebuffer_remains_measured_in_native_dsp_frames(tmp_path):
-    source = (Path(__file__).resolve().parents[1] / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = (Path(__file__).resolve().parents[1] / "esphome/components/esp_afe/afe_stream.cpp").read_text()
     start = source.index("  if (this->fetch_output_ring_) {", source.index("  // Step 2:"))
     end = source.index("  // Only this consumer removes bytes.", start)
     body = source[start:end]

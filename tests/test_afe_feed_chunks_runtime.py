@@ -1,5 +1,6 @@
 """Exercise the real staging loop across unequal public and DSP frame sizes."""
 
+from afe_admission_support import input_frame_header
 from pathlib import Path
 import subprocess
 
@@ -7,12 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_feed_chunks_preserve_samples_and_allocation_bounds(tmp_path):
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
-    helper = source[
-        source.index("static inline void stage_afe_input_frame") : source.index(
-            "\nstatic int effective_feed_task_stack_size"
-        )
-    ]
+    source = (ROOT / "esphome/components/esp_afe/afe_stream.cpp").read_text()
+    helper = input_frame_header()
     start = source.index(
         "  const int tc = this->total_channels_;", source.index("bool EspAfe::process(")
     )

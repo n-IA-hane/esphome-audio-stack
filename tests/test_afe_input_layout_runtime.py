@@ -1,19 +1,17 @@
 """Validate AFE channel roles independently of transport and physical I2S slots."""
+from afe_admission_support import input_frame_header
 from pathlib import Path
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
 
 def test_afe_input_layouts_preserve_microphones_reference_and_padding(tmp_path):
-    src=(ROOT/'esphome/components/esp_afe/esp_afe.cpp').read_text()
-    start=src.index('static inline void stage_afe_input_frame(')
-    end=src.index('\nstatic int effective_feed_task_stack_size',start)
     program=r'''
 #include <cstdint>
 #include <cassert>
 #include <initializer_list>
 struct afe_pcm_config_t {int total_ch_num;int mic_num;uint8_t *mic_ids;int ref_num;uint8_t *ref_ids;};
-''' + src[start:end] + r'''
+''' + input_frame_header() + r'''
 void check(afe_pcm_config_t cfg,int stride,const int16_t *mic,const int16_t *ref,std::initializer_list<int16_t> expected) {
  int16_t data[10];for(auto &x:data)x=12345;
  stage_afe_input_frame(data+1,mic,ref,2,stride,cfg);

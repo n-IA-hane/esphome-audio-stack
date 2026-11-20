@@ -13,7 +13,7 @@ def admission_helper():
 
 
 def test_gmf_partial_payloads_preserve_every_sample(tmp_path):
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = (ROOT / "esphome/components/esp_afe/afe_stream.cpp").read_text()
     start = source.index("esp_gmf_err_io_t EspAfe::gmf_output_release_(")
     callback = source[start : source.index("\n#endif", start)]
     harness = r"""

@@ -56,7 +56,7 @@ def test_diagnostic_options_are_explicit(tmp_path, variant):
 
 def test_afe_dump_api_remains_callable_without_diagnostics(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    source = (root / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = (root / "esphome/components/esp_afe/afe_diagnostics.cpp").read_text()
     start = source.index("void EspAfe::dump_diagnostics() {")
     body = source[start:source.index("\n}\n", start) + 2]
     cpp = tmp_path / "disabled.cpp"

@@ -1,4 +1,5 @@
 """Compose the real all-off rebuild, runtime rings and deferred VAD owner."""
+from afe_admission_support import afe_sources, input_frame_header
 from pathlib import Path
 import re
 import subprocess
@@ -12,11 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def rebuild_source():
-    cpp = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    cpp = afe_sources('esp_afe.cpp', 'afe_manager.cpp', 'afe_stream.cpp', 'afe_manager_features.h')
     header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
     methods = "\n".join(method(cpp, signature) for signature in (
-        "static int apply_aec_intent(",
-        "static esp_gmf_err_t apply_vad_intent(",
+        "inline int apply_aec_intent(",
+        "inline esp_gmf_err_t apply_vad_intent(",
         "bool EspAfe::install_instance_(",
         "EspAfe::AfeInstance EspAfe::detach_instance_(",
         "bool EspAfe::recreate_instance_(",
@@ -50,8 +51,7 @@ def rebuild_source():
     fixture = fixture.replace("AEC_INTENT_HEADER", str(ROOT / "esphome/components/esp_afe/aec_intent.h"))
     fixture = fixture.replace("// ADMISSION_HELPERS", admission_methods())
     counters += ["feed_rejected_", "feed_ok_", "process_frame_count_", "process_output_miss_"]
-    helper_start = cpp.index("static inline void stage_afe_input_frame(")
-    staging_helper = cpp[helper_start:cpp.index("\nstatic int effective_feed_task_stack_size", helper_start)]
+    staging_helper = input_frame_header()
     start = cpp.index("  const int tc = this->total_channels_;", cpp.index("bool EspAfe::process("))
     staging = cpp[start:cpp.index("\n  // Step 2:", start)]
     return fixture.replace("// COUNTERS", "\n".join(

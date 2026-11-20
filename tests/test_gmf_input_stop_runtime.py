@@ -13,7 +13,7 @@ def admission_helper():
 
 
 def test_inactive_input_aborts_instead_of_generating_pcm(tmp_path):
-    s = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    s = (ROOT / "esphome/components/esp_afe/afe_stream.cpp").read_text()
     a = s.index("esp_gmf_err_io_t EspAfe::gmf_input_acquire_(")
     b = s.index("\nesp_gmf_err_io_t EspAfe::gmf_output_release_", a)
     harness = r"""

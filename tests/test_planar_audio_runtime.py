@@ -4,6 +4,7 @@ DSP primitives are adapters here. The separate on-device private self-test
 qualifies the actual Espressif resampler binaries before a dependency change.
 """
 from pathlib import Path
+from afe_admission_support import input_frame_header
 import subprocess
 import pytest
 
@@ -18,8 +19,7 @@ def test_planar_matches_interleaved_without_reweaving_or_hot_allocation(tmp_path
     helpers = converter[converter.index("namespace {"):converter.index("}  // namespace") + len("}  // namespace")]
     component = method(converter, "class MultiChannelAudioEffectsRateConverterImpl") + ";\n"
     pipeline = (COMPONENT / "audio_pipeline.cpp").read_text()
-    afe = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
-    staging = method(afe, "static inline void stage_afe_input_frame(")
+    staging = input_frame_header()
     fixture = (ROOT / "tests/fixtures/rate_conversion.cpp").read_text().replace(
         "int esp_ae_intlv_process(", "unsigned interleaves=0;\nint esp_ae_intlv_process(",
     ).replace("  assert(bits==16);for(size_t i=0;i<n;++i)for(size_t c=0;c<channels;++c)static_cast<int16_t*>(out)[i*channels+c]",
@@ -88,7 +88,7 @@ int main(){
     interleaved = "bits==32?cvt.process_multi_32(wide.data(),count,4,offsets,secondary,primary,reference,2):cvt.process_multi(raw.data(),count,4,offsets,secondary,primary,reference,2)"
     planar_call = "bits==32?cvt.process_planar_32(wide.data(),count,4,offsets,primary,secondary,reference,2):cvt.process_planar(raw.data(),count,4,offsets,primary,secondary,reference,2)" if planar else interleaved
     convert = f"bool ok=mode?({planar_call}):({interleaved});assert(ok);"
-    stage = "stage_afe_input_frame(staged.data()+1," + ("mode?primary:secondary" if planar else "secondary") + ",reference,count,2,layout" + (",mode?secondary:nullptr" if "in_secondary" in staging else "") + ");"
+    stage = "stage_afe_input_frame(staged.data()+1," + ("mode?primary:secondary" if planar else "secondary") + ",reference,count,2,layout" + ",mode?secondary:nullptr" + ");"
     program = program.replace("// PREPARE", prepare).replace("// CONVERT", convert).replace("// STAGE", stage).replace(
         "// PLANAR_CONTEXT", "ctx.processor_planar_input=mode;" if planar else "",
     )

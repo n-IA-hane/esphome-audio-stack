@@ -1,5 +1,6 @@
 """Execute manager start/pause/stop against callback ownership and failure invariants."""
 
+from afe_admission_support import afe_sources
 from pathlib import Path
 import subprocess
 from afe_admission_support import aec_header
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_manager_callbacks_are_installed_before_resume_and_detached_before_reset(
     tmp_path,
 ):
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = afe_sources('esp_afe.cpp', 'afe_manager.cpp', 'afe_manager_features.h')
     methods = ""
     for name, result in (
         ("start_pipeline_", "bool"),
@@ -74,8 +75,8 @@ def test_rebuilt_manager_reopens_only_current_requested_acquisition(tmp_path):
     Resource allocation and algorithm construction precede these blocks and
     are not modeled. Failed feature acknowledgement must prevent start.
     """
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
-    helper_start = source.index("static esp_gmf_err_t apply_vad_intent(")
+    source = afe_sources('esp_afe.cpp', 'afe_manager.cpp', 'afe_manager_features.h')
+    helper_start = source.index("inline esp_gmf_err_t apply_vad_intent(")
     helper = source[helper_start : source.index("\n}\n", helper_start) + 2]
     start = source.index("  const uint32_t aec_request =", source.index("bool EspAfe::install_instance_("))
     end = source.index("\n  return true;", start)

@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_vc_feed_stack_floor(tmp_path):
-    source = (ROOT / 'esphome/components/esp_afe/esp_afe.cpp').read_text()
+    source = (ROOT / 'esphome/components/esp_afe/afe_manager.cpp').read_text()
     start = source.index('static int effective_feed_task_stack_size(')
     end = source.index('\naec_mode_t EspAfe::derive_aec_mode_', start)
     function = source[start:end]

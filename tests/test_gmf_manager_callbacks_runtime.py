@@ -1,5 +1,6 @@
 """Execute the production manager callbacks with borrowed PCM and VAD results."""
 
+from afe_admission_support import afe_sources
 from pathlib import Path
 import subprocess
 
@@ -13,7 +14,7 @@ def admission_helper():
 
 
 def test_manager_result_delivers_pcm_without_an_input_job(tmp_path):
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = afe_sources('esp_afe.cpp', 'afe_stream.cpp')
     methods = ""
     for signature in (
         "int32_t EspAfe::manager_read_cb_",
@@ -71,7 +72,7 @@ int main(){
 
 def test_stop_waits_for_borrowed_output_callback_before_reset(tmp_path):
     """Host threads model the official manager's callback mutex, not FreeRTOS."""
-    source = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    source = afe_sources('esp_afe.cpp', 'afe_stream.cpp')
     methods = ""
     for signature in (
         "void EspAfe::manager_result_cb_", "bool EspAfe::pause_pipeline_()",

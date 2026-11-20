@@ -7,6 +7,17 @@ from test_volume_reference_runtime import method
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def afe_sources(*units):
+    """Read the production owners used by a host scenario with vendor test adapters."""
+    component = ROOT / "esphome/components/esp_afe"
+    return "\n".join((component / unit).read_text() for unit in units)
+
+
+def input_frame_header():
+    return (f'\n#include "{ROOT / "esphome/components/esp_afe/afe_input_frame.h"}"\n'
+            'using esphome::esp_afe::stage_afe_input_frame;\n')
+
+
 def aec_header():
     return (f'#include "{ROOT / "esphome/components/esp_afe/aec_intent.h"}"\n'
             'using AecIntent=esphome::esp_afe::AecIntent;\n')

@@ -4,6 +4,7 @@ Production adapter and GMF method bodies are compiled, not audit snapshots.
 RTOS events/tasks and ESP-SR allocation/fetch are explicit host substitutes.
 """
 
+from afe_admission_support import afe_sources
 from pathlib import Path
 import os
 import re
@@ -36,7 +37,7 @@ def method(source, signature):
 def session_binary(tmp_path_factory):
     assert MANAGER.is_file(), "Check out the configured GMF pin in .test-deps/esp-gmf, or set GMF_AFE_MANAGER_SOURCE to its resolved manager source"
     tmp_path = tmp_path_factory.mktemp("afe-session")
-    adapter = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    adapter = afe_sources('esp_afe.cpp', 'afe_manager.cpp', 'afe_stream.cpp', 'afe_diagnostics.cpp', 'afe_manager_features.h')
     header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
     manager = MANAGER.read_text()
     manager_methods = "\n".join(method(manager, signature) for signature in (
@@ -44,7 +45,7 @@ def session_binary(tmp_path_factory):
         "esp_gmf_err_t esp_gmf_afe_manager_set_read_cb",
         "esp_gmf_err_t esp_gmf_afe_manager_set_result_cb", "esp_gmf_err_t esp_gmf_afe_manager_destroy",
     ))
-    methods = [method(adapter, "static int apply_aec_intent("), method(adapter, "static esp_gmf_err_t apply_vad_intent(")]
+    methods = [method(adapter, "inline int apply_aec_intent("), method(adapter, "inline esp_gmf_err_t apply_vad_intent(")]
     names = ["set_processing_active", "start_pipeline_", "pause_pipeline_", "stop_pipeline_",
              "manager_result_cb_", "gmf_output_release_", "update_fetch_ring_free_pct_",
              "start_reconfigure_task_", "reconfigure_task_trampoline", "reconfigure_task_loop_",
@@ -148,7 +149,7 @@ def test_afe_worker_keeps_internal_stack_when_idf_disallows_external(session_bin
 
 def test_vad_getter_and_telemetry_reject_closed_or_replaced_epoch(tmp_path):
     header = (ROOT / "esphome/components/esp_afe/esp_afe.h").read_text()
-    adapter = (ROOT / "esphome/components/esp_afe/esp_afe.cpp").read_text()
+    adapter = afe_sources('esp_afe.cpp', 'afe_manager.cpp', 'afe_stream.cpp', 'afe_diagnostics.cpp', 'afe_manager_features.h')
     telemetry = method(adapter, "ProcessorTelemetry EspAfe::telemetry() const")
     assignment = next(line for line in telemetry.splitlines() if "t.voice_present =" in line)
     cpp = tmp_path / "vad_epoch.cpp"

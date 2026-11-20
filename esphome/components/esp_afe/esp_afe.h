@@ -247,6 +247,7 @@ class EspAfe final : public Component, public AudioProcessor {
     int total_channels{0};
   };
 
+  void configure_afe_features_(afe_config_t *cfg, int afe_mic_channels);
   bool build_instance_(AfeInstance *instance);
   bool recreate_instance_(bool require_same_frame_sizes);
   bool quiesce_process_(TickType_t ticks_to_wait);
