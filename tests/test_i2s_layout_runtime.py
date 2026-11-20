@@ -43,7 +43,7 @@ int main() {
 
 
 def test_failed_open_releases_enabled_channels_and_preserves_failed_handles(tmp_path):
-    source=(ROOT/'esp_audio_stack.cpp').read_text()
+    source=(ROOT/'i2s_channels.cpp').read_text()
     start=source.index('  auto release_channel =',source.index('void ESPAudioStack::deinit_i2s_'))
     end=source.index('  const bool tx_released',start)
     code=r'''

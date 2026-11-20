@@ -552,6 +552,17 @@ class ESPAudioStack final : public Component {
 #ifdef USE_ESP_AUDIO_STACK_TDM_BUS
   AudioSlotLayout make_tdm_rx_layout_() const;
 #endif
+  struct I2SDmaGeometry {
+    uint32_t rx_descriptors, frames_per_descriptor, logical_tx_frames, tx_bytes_per_frame;
+  };
+  bool compute_dma_geometry_(I2SDmaGeometry &out);
+  bool rollback_i2s_preparation_();
+  bool configure_std_channels_(i2s_data_bit_width_t bit_width, i2s_slot_bit_width_t slot_bw,
+                                 i2s_clock_src_t clk_src, i2s_mclk_multiple_t mclk_mult);
+#if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
+  bool configure_tdm_channels_(i2s_data_bit_width_t bit_width, i2s_slot_bit_width_t slot_bw,
+                                 i2s_clock_src_t clk_src, i2s_mclk_multiple_t mclk_mult);
+#endif
   bool prepare_i2s_channels_();
   bool enable_i2s_channels_();
   void close_audio_io_();

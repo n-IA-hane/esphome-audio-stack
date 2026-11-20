@@ -46,10 +46,11 @@ def test_delay_rejects_unsupported_layouts(monkeypatch, variant, layout, message
 
 @pytest.mark.parametrize("delay", [None, 1, 2])
 def test_std_rx_init_selects_the_paired_peripheral_each_session(tmp_path, delay):
-    source = (COMPONENT / "esp_audio_stack.cpp").read_text()
-    init = source.index("err = i2s_channel_init_std_mode(this->rx_handle_, &rx_cfg);")
-    begin = source.rindex("    if (this->rx_handle_)", 0, init)
-    end = source.index("\n    }\n", init) + len("\n    }")
+    source = (COMPONENT / "i2s_channels.cpp").read_text()
+    from test_volume_reference_runtime import method
+    std = method(source, "bool ESPAudioStack::configure_std_channels_(")
+    rx_init = method(std, "if (this->rx_handle_)")
+    rollback = method(source, "bool ESPAudioStack::rollback_i2s_preparation_(").replace("ESPAudioStack::", "")
     witness = r"""
 #include <cassert>
 #define CONFIG_IDF_TARGET_ESP32S3 1
@@ -71,9 +72,10 @@ struct Stack {
   bool released = false, failed = false;
   void deinit_i2s_() { released = true; }
   void set_i2s_hardware_state_(I2SHardwareState) { failed = true; }
+""" + rollback + r"""
   bool prepare() {
     int err, rx_cfg;
-""" + source[begin:end] + r"""
+""" + rx_init + r"""
     return true;
   }
 };

@@ -13,7 +13,7 @@ COMPONENT=Path(__file__).resolve().parents[1]/'esphome/components/esp_audio_stac
 
 @pytest.mark.parametrize('requested',[64,128,256])
 def test_explicit_valid_dma_divisor_is_preserved(tmp_path,requested):
-    source=(COMPONENT/'esp_audio_stack.cpp').read_text()
+    source=(COMPONENT/'i2s_channels.cpp').read_text()
     a=source.index('  uint32_t dma_frame_num =')
     b=source.index('#if SOC_I2S_SUPPORTS_TDM',a)
     code=r'''
@@ -46,9 +46,10 @@ struct ESPAudioStack {
 @pytest.mark.parametrize('explicit', [False, True])
 @pytest.mark.parametrize('layout', ['speaker-only', 'clock-only', 'duplex', 'dual-bus'])
 def test_tx_and_rx_allocate_independent_dma_depths(tmp_path, explicit, layout):
-    source = (COMPONENT / 'esp_audio_stack.cpp').read_text()
+    source = (COMPONENT / 'i2s_channels.cpp').read_text()
     start = source.index('  const uint32_t tx_dma_desc_num =')
-    end = source.index('\n#if SOC_I2S_SUPPORTS_TDM', start)
+    end = source.index('  const bool configured =', start)
+    rollback = method(source, "bool ESPAudioStack::rollback_i2s_preparation_(").replace("ESPAudioStack::", "")
     code = r'''
 #include <cassert>
 #include <cstdint>
@@ -67,6 +68,7 @@ struct ESPAudioStack{
  bool dma_desc_num_configured_=false;unsigned dma_desc_num_=6;void *tx_handle_=nullptr,*rx_handle_=nullptr;
  unsigned rx_dma_descriptor_count_=0;
  void set_i2s_hardware_state_(I2SHardwareState){}void deinit_i2s_(){}
+''' + rollback + r'''
  bool allocate(bool need_tx,bool need_rx,unsigned tx_i2s_num,unsigned rx_i2s_num){
   Config chan_cfg;unsigned dma_desc_num=10;
 ''' + source[start:end] + r'''
