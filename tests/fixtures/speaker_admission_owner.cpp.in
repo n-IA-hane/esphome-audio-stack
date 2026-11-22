@@ -111,7 +111,12 @@ struct Rig {
   ESPAudioStack parent;
   ESPAudioStackSpeaker sink;
   Rig() {
-    simulate_speaker_timeout = true; speaker_wait_hook = [](unsigned ticks) { waited += ticks; }; clock_ms = 0; waited = 0; sink.parent_ = &parent;
+    // Exact wait budgets use the RTOS adapter's clock as well as facade time.
+    // Wall-clock preemption must not consume this fixture's simulated ticks.
+    use_speaker_test_clock = true; speaker_test_ticks = 0;
+    simulate_speaker_timeout = true;
+    speaker_wait_hook = [](unsigned ticks) { waited += ticks; speaker_test_ticks += ticks; };
+    clock_ms = 0; waited = 0; sink.parent_ = &parent;
     parent.storage.on_played = [this](unsigned frames) {
       ESPAudioStackSpeaker::speaker_output_callback(&sink, frames, clock_ms * 1000LL);
     };
