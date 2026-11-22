@@ -67,7 +67,7 @@ void spin(ESPAudioCapture &c,std::function<bool()> until){
 int main(int argc,char**argv){
  assert(argc==3);signal(SIGPIPE,SIG_IGN);const std::string scenario=argv[2];send_scenario=scenario;
  const bool terminal=scenario.find("header")!=std::string::npos||scenario.find("payload")!=std::string::npos;
- if(terminal||scenario=="late-connect")capture_clock_override_us=1000000;
+ if(terminal||scenario=="late-connect"||scenario.find("subtick-")==0)capture_clock_override_us=1000000;
  ESPAudioStack parent;ESPAudioStackMicrophone microphone;ESPAudioCapture capture;
  if(scenario=="saturated")microphone.listeners=16;
  const auto original_listeners=microphone.listeners;
@@ -85,6 +85,30 @@ int main(int argc,char**argv){
  }
  spin(capture,[&]{return capture.active_||capture.worker_handle_==nullptr;});assert(capture.active_);
  assert(microphone.listeners==original_listeners&&parent.consumers==2);
+ if(scenario.find("subtick-")==0){
+  spin(capture,[&]{return notify_parked_calls>0;});
+  std::thread producer;auto *queue=capture.queue_.get();
+  std::vector<int16_t> pcm(256,123);
+  CaptureFrame frame{CapturePoint::OUTPUT,pcm.data(),pcm.size(),16000,parent.generation,123,16,1,1,{0,0}};
+  if(scenario=="subtick-writer"){
+   queue->pause_next=true;producer=std::thread([&]{capture.on_capture_frame(frame);});
+   {std::unique_lock lock(queue->gate_mutex);queue->gate_cv.wait(lock,[&]{return queue->entered;});}
+   assert(capture.writers_==1);
+  }
+  // Freeze one microsecond before the real worker's applicable deadline.
+  // The notification adapter observes its next timeout, then advances one tick.
+  capture_clock_override_us=capture.deadline_us_+(scenario=="subtick-writer"?FINISH_GRACE_US:0)-1;
+  capture_tail_wait_probe=true;capture.wake_worker_();
+  spin(capture,[&]{return capture_tail_wait_observed_ticks>0;});
+  if(producer.joinable()){
+   assert(capture.writers_==1&&!capture.worker_done_);
+   {std::lock_guard lock(queue->gate_mutex);queue->released=true;queue->gate_cv.notify_all();}
+   producer.join();
+  }
+  spin(capture,[&]{return capture.worker_handle_==nullptr;});
+  assert(!capture.active_&&!queues&&!task_count&&parent.consumers==1);
+  puts("positive deadline budget uses one tick and retires the worker");return 0;
+ }
  if(terminal){
   if(scenario.find("deadline")==0)capture_clock_override_us=capture.deadline_us_-10000;
   std::vector<int16_t> pcm(256,123);

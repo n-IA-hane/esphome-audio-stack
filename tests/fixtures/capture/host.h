@@ -32,12 +32,20 @@ struct HostTask {
 };
 using TaskHandle_t=HostTask*;using SemaphoreHandle_t=std::mutex*;
 using BaseType_t=int;
+using TickType_t=unsigned;
 constexpr int tskNO_AFFINITY=-1;
 constexpr int pdPASS=1,pdTRUE=1;constexpr unsigned portMAX_DELAY=UINT32_MAX;
-inline unsigned pdMS_TO_TICKS(unsigned n){return n;}
+#ifndef CAPTURE_TEST_TICK_RATE_HZ
+#define CAPTURE_TEST_TICK_RATE_HZ 1000
+#endif
+inline unsigned pdMS_TO_TICKS(unsigned n){return n*CAPTURE_TEST_TICK_RATE_HZ/1000;}
 inline thread_local HostTask *current_task=nullptr;
 inline std::atomic<unsigned> task_count=0;
 inline std::atomic<unsigned> notify_wait_calls=0;
+inline std::atomic<unsigned> notify_parked_calls=0;
+inline std::atomic<int64_t> capture_clock_override_us{-1};
+inline std::atomic<bool> capture_tail_wait_probe=false;
+inline std::atomic<unsigned> capture_tail_wait_observed_ticks=0;
 inline int xTaskCreate(void(*fn)(void*),const char*,unsigned,void *arg,int,TaskHandle_t *handle){
  auto *task=new HostTask;*handle=task;++task_count;task->thread=std::thread([=]{current_task=task;fn(arg);});return pdPASS;
 }
@@ -49,9 +57,16 @@ inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t){return 2048;}
 inline void xTaskNotifyGive(TaskHandle_t task){std::lock_guard guard(task->mutex);++task->notifications;task->cv.notify_all();}
 inline unsigned ulTaskNotifyTake(int,unsigned timeout){
  ++notify_wait_calls;
+ if(capture_tail_wait_probe.exchange(false)){
+  // Positive time left must park for at least one RTOS tick, even at 100 Hz.
+  assert(timeout==1);
+  capture_clock_override_us.fetch_add(1000000/CAPTURE_TEST_TICK_RATE_HZ);
+  capture_tail_wait_observed_ticks=timeout;
+ }
  auto &task=*current_task;std::unique_lock lock(task.mutex);
+ ++notify_parked_calls;
  if(timeout==portMAX_DELAY)task.cv.wait(lock,[&]{return task.notifications||task.deleted;});
- else task.cv.wait_for(lock,std::chrono::milliseconds(timeout),[&]{return task.notifications||task.deleted;});
+ else task.cv.wait_for(lock,std::chrono::microseconds(uint64_t(timeout)*1000000/CAPTURE_TEST_TICK_RATE_HZ),[&]{return task.notifications||task.deleted;});
  unsigned count=task.notifications;task.notifications=0;return count;
 }
 inline void vTaskSuspend(void*){auto &task=*current_task;std::unique_lock lock(task.mutex);task.cv.wait(lock,[&]{return task.deleted;});}
@@ -59,7 +74,6 @@ inline void vTaskDelete(TaskHandle_t task){{std::lock_guard guard(task->mutex);t
 inline SemaphoreHandle_t xSemaphoreCreateMutex(){static std::mutex lock;return &lock;}
 inline void xSemaphoreTake(SemaphoreHandle_t lock,unsigned){lock->lock();}
 inline void xSemaphoreGive(SemaphoreHandle_t lock){lock->unlock();}
-inline std::atomic<int64_t> capture_clock_override_us{-1};
 inline int64_t esp_timer_get_time(){const auto now=capture_clock_override_us.load();return now>=0?now:std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 namespace esphome::esp_audio_stack {
 inline std::atomic<unsigned> queues=0;

@@ -423,7 +423,9 @@ void ESPAudioCapture::worker_() {
           this->enable_loop_soon_any_context();
           const int64_t remaining = finish_deadline - esp_timer_get_time();
           if (remaining <= 0) break;
-          ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((remaining + 999) / 1000));
+          // Positive time left must block for at least one tick. The next
+          // deadline check accepts that tick's ordinary scheduling granularity.
+          ulTaskNotifyTake(pdTRUE, std::max<TickType_t>(1, pdMS_TO_TICKS((remaining + 999) / 1000)));
           continue;
         }
       }
@@ -449,7 +451,7 @@ void ESPAudioCapture::worker_() {
         if (finishing) break;  // Admission is closed, writers retired, queue drained.
         const int64_t remaining = this->deadline_us_ - esp_timer_get_time();
         if (remaining <= 0) continue;  // Enter natural finish, do not discard a queued tail.
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((remaining + 999) / 1000));
+        ulTaskNotifyTake(pdTRUE, std::max<TickType_t>(1, pdMS_TO_TICKS((remaining + 999) / 1000)));
       }
     }
   }

@@ -20,8 +20,8 @@ tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
 
 
-@pytest.fixture(scope="module")
-def binary(tmp_path_factory):
+@pytest.fixture(scope="module", params=[100, 1000], ids=["100hz", "1000hz"])
+def binary(tmp_path_factory, request):
     directory = tmp_path_factory.mktemp("capture")
     (directory / "observer.h").write_text(
         "#define USE_ESP_AUDIO_STACK_CAPTURE\n"
@@ -55,6 +55,7 @@ def binary(tmp_path_factory):
             "g++",
             "-std=c++17",
             "-pthread",
+            f"-DCAPTURE_TEST_TICK_RATE_HZ={request.param}",
             "-Wall",
             "-Wextra",
             "-Werror",
@@ -96,6 +97,8 @@ def binary(tmp_path_factory):
         "deadline-queued-expired-inflight-header",
         "deadline-slow-tail-header",
         "late-connect",
+        "subtick-empty",
+        "subtick-writer",
     ],
 )
 def test_capture_socket_and_lifetime(binary, tmp_path, scenario):
