@@ -266,6 +266,55 @@ framing ended cleanly, not proof that the requested duration or every sample
 was recorded. Inspect sample positions and drops before using a capture as a
 benchmark.
 
+### Offline level and clipping analysis
+
+The same receiver analyzes an existing capture without contacting a device or
+opening a socket:
+
+```sh
+python tools/capture_audio.py captures/board-run-01 --analyze
+```
+
+This writes `analysis.json` beside the unchanged WAVs and manifest. Every
+channel has peak PCM, peak/RMS dBFS, normalized DC offset, exact integer-rail
+sample count/fraction, and the fraction within 1% of container full scale.
+Coverage, excluded gap frames and the largest reported cumulative drop count
+remain explicit. Only record intervals actually received enter the statistics;
+the receiver's zero padding never dilutes RMS or clipping fractions. Silent or
+empty channels use JSON `null` for undefined dBFS. Partial captures remain
+marked incomplete in the analysis.
+
+Available raw/reference/input/output surfaces are measured independently. The
+report also provides RMS differences for matching channel counts and sample
+rates. These are level comparisons over each captured interval, not aligned
+ERLE, AEC latency or isolated gain measurements. Analog clipping can occur
+before a digital tap reaches its integer rails. In particular, a 32-bit bus
+container may contain fewer meaningful ADC bits; the tool reports container
+dBFS and does not guess a board's bit alignment or PGA transfer function.
+
+Preserve the settings used for a run as an optional JSON object:
+
+```json
+{
+  "board": "office-speaker",
+  "gain": {"mic_pga_db": 18, "speaker_percent": 60, "mic_gain": 1.0},
+  "adaptive_volume": {"enabled": true, "ambient_valid": false},
+  "scene": "speaker only, fixed reference recording"
+}
+```
+
+```sh
+python tools/capture_audio.py captures/board-run-02 --metadata run-settings.json
+python tools/capture_audio.py captures/board-run-02 --analyze
+```
+
+These user annotations are snapshotted in `manifest.json` and copied verbatim
+into the analysis as `capture_metadata`. Supplying `--metadata` during offline
+analysis instead adds separate `analysis_metadata`, preserving the original
+run settings. Neither is firmware telemetry or an automatic gain reading.
+The existing capture protocol, tap locations, device tasks and allocations
+are unchanged by the offline analysis.
+
 ### Optional native AFE output capture
 
 The normal configuration omits `esp_audio_capture`, keeps `telemetry: false`

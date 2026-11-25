@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Receive Audio Stack's opt-in PCM stream and preserve gaps in separate WAVs."""
+"""Receive opt-in PCM captures, or analyze their existing WAVs entirely offline."""
 
 import argparse
 import json
+import math
 from pathlib import Path
 import socket
+import struct
 import wave
 
 POINTS = (
@@ -22,11 +24,17 @@ def fnv1a32(pcm):
 
 
 class CaptureWriter:
-    def __init__(self, destination):
+    def __init__(self, destination, metadata=None):
         self.destination = Path(destination)
         self.destination.mkdir(parents=True, exist_ok=True)
         self.streams = {}
         self.manifest = {"protocol": 1, "complete": False, "streams": {}, "records": []}
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise ValueError("capture metadata must be a JSON object")
+            # Snapshot user-supplied gain/board settings without claiming they
+            # were measured by the firmware or changing the PCM protocol.
+            self.manifest["metadata"] = json.loads(json.dumps(metadata, allow_nan=False))
         self.generation = None
 
     def record(self, header, pcm):
@@ -157,14 +165,165 @@ def receive(connection, writer):
             writer.record(header, pcm)
 
 
+def _dbfs(amplitude):
+    return 20 * math.log10(amplitude) if amplitude > 0 else None
+
+
+def _analyze_stream(destination, point, fmt, records):
+    if point not in POINTS or not isinstance(fmt, dict):
+        raise ValueError("invalid stream in capture manifest")
+    channels, bits, rate = (fmt.get(key) for key in ("channels", "bits", "rate"))
+    if (type(channels) is not int or channels not in (1, 2, 3, 4)
+            or type(bits) is not int or bits not in (16, 32)
+            or type(rate) is not int or not 8000 <= rate <= 192000):
+        raise ValueError(f"invalid PCM format for {point}")
+    # Integer sums keep 32-bit PCM precise; buffers remain at most 1024 frames.
+    stats = [dict(peak=0, total=0, squares=0, saturated=0, near_full_scale=0)
+             for _ in range(channels)]
+    full_scale = 1 << (bits - 1)
+    captured = 0
+    last_end = 0
+    dropped_max = 0
+    with wave.open(str(destination / f"{point}.wav"), "rb") as wav:
+        if ((wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+                != (channels, bits // 8, rate) or wav.getcomptype() != "NONE"):
+            raise ValueError(f"WAV format disagrees with manifest for {point}")
+        total_frames = wav.getnframes()
+        if total_frames > 121 * rate:
+            raise ValueError(f"WAV exceeds capture duration for {point}")
+        unpack = struct.Struct("<" + ("h" if bits == 16 else "i") * channels)
+        for record in records:
+            position, frames, dropped = (record.get(key) for key in ("position", "frames", "dropped"))
+            if (any(type(value) is not int or value < 0 for value in (position, frames, dropped))
+                    or position < last_end or position + frames > total_frames
+                    or any(record.get(key) != fmt[key] for key in ("channels", "bits", "rate"))):
+                raise ValueError(f"invalid record interval or format for {point}")
+            wav.setpos(position)
+            remaining = frames
+            while remaining:
+                count = min(remaining, 1024)
+                pcm = wav.readframes(count)
+                if len(pcm) != count * unpack.size:
+                    raise ValueError(f"truncated WAV payload for {point}")
+                for frame in unpack.iter_unpack(pcm):
+                    for channel, sample in enumerate(frame):
+                        stat = stats[channel]
+                        amplitude = abs(sample)
+                        stat["peak"] = max(stat["peak"], amplitude)
+                        stat["total"] += sample
+                        stat["squares"] += sample * sample
+                        stat["saturated"] += sample in (-full_scale, full_scale - 1)
+                        stat["near_full_scale"] += amplitude * 100 >= full_scale * 99
+                remaining -= count
+            last_end = position + frames
+            captured += frames
+            dropped_max = max(dropped_max, dropped)
+    channel_results = []
+    for channel, stat in enumerate(stats):
+        peak = stat["peak"] / full_scale
+        rms = math.sqrt(stat["squares"] / captured) / full_scale if captured else 0.0
+        channel_results.append({
+            "channel": channel,
+            "samples": captured,
+            "peak_pcm": stat["peak"],
+            "peak_normalized": peak,
+            "peak_dbfs": _dbfs(peak),
+            "rms_normalized": rms,
+            "rms_dbfs": _dbfs(rms),
+            "dc_offset_normalized": stat["total"] / captured / full_scale if captured else None,
+            "saturated_samples": stat["saturated"],
+            "saturated_fraction": stat["saturated"] / captured if captured else None,
+            "near_full_scale_fraction_99pct": stat["near_full_scale"] / captured if captured else None,
+        })
+    return {
+        "rate": rate, "bits": bits, "channels": channels,
+        "wav_frames": total_frames, "captured_frames": captured,
+        "excluded_gap_frames": total_frames - captured,
+        "coverage_fraction": captured / total_frames if total_frames else None,
+        "reported_dropped_max": dropped_max,
+        "channel_stats": channel_results,
+    }
+
+
+def analyze_capture(destination, metadata=None):
+    """Analyze received frames only; zero padding for transport gaps is excluded."""
+    destination = Path(destination)
+    manifest = json.loads((destination / "manifest.json").read_text())
+    if (not isinstance(manifest, dict) or manifest.get("protocol") != 1
+            or not isinstance(manifest.get("streams"), dict)
+            or not isinstance(manifest.get("records"), list)):
+        raise ValueError("invalid capture manifest")
+    grouped = {point: [] for point in manifest["streams"]}
+    for record in manifest["records"]:
+        if (not isinstance(record, dict) or type(record.get("point")) is not int
+                or record["point"] not in range(len(POINTS))
+                or POINTS[record["point"]] not in grouped):
+            raise ValueError("invalid record point in capture manifest")
+        grouped[POINTS[record["point"]]].append(record)
+    result = {
+        "analysis_version": 1,
+        "capture_complete": manifest.get("complete") is True,
+        "capture_generation": manifest.get("generation"),
+        "capture_metadata": manifest.get("metadata", {}),
+        "streams": {},
+        "level_comparisons": [],
+        "interpretation": (
+            "Statistics describe received PCM normalized to its WAV container bit depth. "
+            "Padding gaps are excluded. Rail hits indicate digital full scale, not proof "
+            "of analog clipping. Level differences are unaligned stage summaries, not "
+            "AEC ERLE, latency or isolated gain measurements. Null dBFS means silence "
+            "or no received samples. User metadata is not firmware telemetry."
+        ),
+    }
+    if "error" in manifest:
+        result["capture_error"] = manifest["error"]
+    if metadata is not None:
+        if not isinstance(metadata, dict):
+            raise ValueError("analysis metadata must be a JSON object")
+        result["analysis_metadata"] = metadata
+    for point, fmt in manifest["streams"].items():
+        result["streams"][point] = _analyze_stream(destination, point, fmt, grouped[point])
+    for before, after in (("raw_mic", "processor_input"), ("processor_input", "processor_output"),
+                          ("processor_output", "output"), ("reference", "processor_output")):
+        left, right = (result["streams"].get(point) for point in (before, after))
+        if left is None or right is None:
+            continue
+        comparison = {"from": before, "to": after, "rms_delta_db_by_channel": None}
+        if left["channels"] == right["channels"] and left["rate"] == right["rate"]:
+            comparison["rms_delta_db_by_channel"] = [
+                b["rms_dbfs"] - a["rms_dbfs"]
+                if a["rms_dbfs"] is not None and b["rms_dbfs"] is not None else None
+                for a, b in zip(left["channel_stats"], right["channel_stats"])
+            ]
+        else:
+            comparison["reason"] = "different channel count or sample rate; no automatic channel mapping"
+        result["level_comparisons"].append(comparison)
+    (destination / "analysis.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=19091)
     parser.add_argument("--timeout", type=float, default=135)
+    parser.add_argument("--analyze", action="store_true",
+                        help="analyze existing manifest/WAVs offline; do not open a socket")
+    parser.add_argument("--metadata", type=Path,
+                        help="JSON object of board/gain settings; retained as user annotations")
     args = parser.parse_args()
-    writer = CaptureWriter(args.destination)
+    try:
+        metadata = json.loads(args.metadata.read_text()) if args.metadata else None
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("metadata must be a JSON object")
+        if args.analyze:
+            result = analyze_capture(args.destination, metadata=metadata)
+            print(f"Analyzed {len(result['streams'])} PCM streams: {args.destination / 'analysis.json'}")
+            return
+        writer = CaptureWriter(args.destination, metadata=metadata)
+    except (OSError, ValueError, wave.Error) as error:
+        raise SystemExit(f"Capture analysis/setup failed: {error}") from error
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

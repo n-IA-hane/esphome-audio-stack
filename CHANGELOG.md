@@ -2,6 +2,9 @@
 
 ## 2026.12.0-dev
 
+- Add offline capture analysis with per-channel peak, RMS, rail-hit fractions,
+  transport coverage and explicit stage-level comparisons. Exclude synthetic
+  gap padding and retain optional board/gain annotations without device work.
 Changes since stable **2026.11.0**.
 
 - Wake blocked playback writers when the speaker becomes ready, gains space,
