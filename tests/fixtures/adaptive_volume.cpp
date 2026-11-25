@@ -10,8 +10,14 @@ int main() {
   constexpr int32_t user_gain = INT32_MAX / 2;
   assert(volume.apply_to(user_gain) == user_gain);
   volume.sync_switch(1);
-  const int32_t quiet = volume.apply_to(user_gain);
-  assert(quiet > 0 && quiet < user_gain / 6);
+  assert(volume.apply_to(user_gain) == user_gain);
+
+  // A phone-only composition need not capture its microphone between calls.
+  // Enabling adaptation without observations must leave the user's level alone.
+  for (uint32_t ms = 0; ms < 60000; ms += 20) {
+    volume.observe(ms, nullptr, 0, ms % 10000 < 3000);
+    assert(volume.apply_to(user_gain) == user_gain);
+  }
 
   uint32_t now = UINT32_MAX - 1000;
   auto observe = [&](int16_t amplitude, unsigned windows, bool playing = false) {
@@ -23,7 +29,11 @@ int main() {
       now += 500;
     }
   };
-  observe(20, 18);
+  observe(20, 15);
+  assert(volume.apply_to(user_gain) == user_gain);  // Window not yet complete.
+  observe(20, 9);
+  const int32_t quiet = volume.apply_to(user_gain);
+  assert(quiet > 0 && quiet < user_gain / 6);
   observe(30000, 1);  // One loud impact in a quiet room.
   observe(20, 2);
   assert(volume.apply_to(user_gain) == quiet);
@@ -41,7 +51,7 @@ int main() {
   observe(3000, 25);
   assert(volume.apply_to(user_gain) == user_gain);
   volume.sync_switch(3);  // Both off and on happened while the audio task was parked.
-  assert(volume.apply_to(user_gain) == quiet);
+  assert(volume.apply_to(user_gain) == user_gain);
   observe(3000, 25);
   assert(volume.apply_to(user_gain) == user_gain);
   observe(20, 25);
@@ -50,7 +60,17 @@ int main() {
   assert(volume.apply_to(user_gain) == user_gain);
   observe(3000, 50);
   volume.sync_switch(5);
+  assert(volume.apply_to(user_gain) == user_gain);
+  observe(20, 25);
   assert(volume.apply_to(user_gain) == quiet);
+  now += 2000;
+  volume.observe(now, nullptr, 0, false);
+  assert(volume.apply_to(user_gain) == user_gain);  // Idle capture disappeared.
+  observe(20, 25);
+  assert(volume.apply_to(user_gain) == quiet);
+  now += 5000;  // Audio owner parks, then resumes straight into a call.
+  volume.observe(now, nullptr, 0, true);
+  assert(volume.apply_to(user_gain) == user_gain);
   volume.configure(-55.0f, -20.0f, 0.0f);
   volume.sync_switch(6);
   volume.sync_switch(7);

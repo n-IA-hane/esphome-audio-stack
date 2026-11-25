@@ -23,15 +23,19 @@ class AdaptivePlaybackVolume {
     if (epoch_ == epoch)
       return;
     epoch_ = epoch;
-    count_ = 0;
-    next_ = 0;
-    set_reduction_((epoch & 1U) ? max_reduction_db_ : 0.0f);
+    reset_estimate_();
   }
 
   void observe(uint32_t now_ms, const int16_t *mic, size_t samples, bool speaker_active) {
     if (!(epoch_ & 1U))
       return;
     if (speaker_active) {
+      // A parked audio owner may resume directly into playback, with no idle
+      // capture in between. A stale room estimate must not lower that stream.
+      // Continuous playback keeps its measured gain until it finishes.
+      if (count_ != 0 && now_ms - last_sample_ms_ > 1500 &&
+          (!recent_playback_ || now_ms - last_playback_ms_ > 1500))
+        reset_estimate_();
       last_playback_ms_ = now_ms;
       recent_playback_ = true;
       return;
@@ -39,14 +43,13 @@ class AdaptivePlaybackVolume {
     if (recent_playback_ && now_ms - last_playback_ms_ < 500)
       return;
     recent_playback_ = false;
+    // After a long pause, rebuild the room estimate using current observations.
+    // Missing capture is unknown, not evidence of a quiet room. Use the user's
+    // level until a complete new window exists, even if no consumer is running.
+    if (count_ != 0 && now_ms - last_sample_ms_ > 1500)
+      reset_estimate_();
     if (mic == nullptr || samples == 0 || (count_ != 0 && now_ms - last_sample_ms_ < 500))
       return;
-    // After a long pause, rebuild the room estimate using current observations.
-    // Keep the previous playback level until the new window is complete.
-    if (count_ != 0 && now_ms - last_sample_ms_ > 1500) {
-      count_ = 0;
-      next_ = 0;
-    }
     last_sample_ms_ = now_ms;
     levels_[next_] = compute_rms_dbfs_i16(mic, samples);
     next_ = (next_ + 1) % levels_.size();
@@ -72,6 +75,12 @@ class AdaptivePlaybackVolume {
   }
 
  private:
+  void reset_estimate_() {
+    count_ = 0;
+    next_ = 0;
+    set_reduction_(0.0f);
+  }
+
   void set_reduction_(float db) {
     reduction_db_ = db;
     factor_q31_ = db <= 0.0f ? INT32_MAX : static_cast<int32_t>(std::lround(std::pow(10.0, -db / 20.0) * INT32_MAX));

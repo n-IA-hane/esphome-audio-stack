@@ -37,6 +37,10 @@ Changes since stable **2026.11.0**.
 - An optional Home Assistant switch lowers playback in a quiet room and follows
   sustained changes in microphone level. The user's Master sets the ceiling.
   The estimator uses fixed storage and shares the existing audio task.
+- Keep the user's playback level until a complete ambient window is available.
+  Missing or expired idle microphone capture no longer means maximum reduction.
+  Continuous playback holds its last measured level; no extra microphone
+  consumer, worker or polling is introduced.
 
 ### Correct DC-blocker transients
 

@@ -86,6 +86,15 @@ and DC filtering retain their existing order.
 
 ## 2. Give each gain a specific job
 
+The optional `adaptive_volume` switch uses microphone observations already
+available while playback is idle. It does not start microphone capture. On
+enable, and after an idle observation gap longer than 1.5 seconds, it keeps the
+user's level until 16 observations at least 500 ms apart form a new estimate.
+It then changes attenuation by at most 2 dB per observation. Continuous playback
+holds the last measured level and excludes playback plus its 500 ms tail from
+the estimate. A phone-only configuration without idle microphone capture keeps
+the user's level; enabling the switch alone does not imply a quiet room.
+
 A loud signal before AEC and a quiet voice at the far end of a call can coexist.
 Measure the signal at both boundaries. Turning up the input also changes the
 acoustic echo path; a call-only level adjustment should affect only the call.
