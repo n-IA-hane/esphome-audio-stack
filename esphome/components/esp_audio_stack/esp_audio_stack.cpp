@@ -827,12 +827,36 @@ bool IRAM_ATTR ESPAudioStack::rx_on_recv_q_ovf_callback(i2s_chan_handle_t handle
 }
 #endif
 
+void IRAM_ATTR ESPAudioStack::record_tx_isr_failure_(TxCompletionFailureReason reason) {
+  // IDF serializes this channel's callbacks. Only this ISR writes the latch
+  // while tracking is active; reset belongs to the disabled hardware owner.
+  if (isr_load_u32(this->tx_isr_failure_reason_) == 0) {
+    __atomic_store_n(reinterpret_cast<uint32_t *>(&this->tx_isr_failure_reason_),
+                     static_cast<uint32_t>(reason), __ATOMIC_RELEASE);
+  }
+  this->tx_completion_desync_ = true;
+}
+
+const char *ESPAudioStack::tx_completion_failure_reason_to_string_(uint32_t reason) {
+  // Text lookup is task-only: no flash string access in the ISR.
+  switch (static_cast<TxCompletionFailureReason>(reason)) {
+    case TxCompletionFailureReason::NONE: return "none";
+    case TxCompletionFailureReason::DMA_SIZE_MISMATCH: return "dma_size_mismatch";
+    case TxCompletionFailureReason::UNKNOWN_DMA_DESCRIPTOR: return "unknown_dma_descriptor";
+    case TxCompletionFailureReason::COMPLETION_QUEUE_FULL: return "completion_queue_full";
+    case TxCompletionFailureReason::FREE_QUEUE_FULL: return "free_queue_full";
+    case TxCompletionFailureReason::STALE_FREE_QUEUE_FULL: return "stale_free_queue_full";
+    case TxCompletionFailureReason::STAGING_ADMISSION_FAILED: return "staging_admission_failed";
+  }
+  return "unknown";
+}
+
 bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
   auto *self = static_cast<ESPAudioStack *>(user_ctx);
   if (self == nullptr || event == nullptr || event->dma_buf == nullptr || handle != self->tx_handle_)
     return false;
   if (event->size != self->tx_completion_dma_buffer_bytes_) {
-    self->tx_completion_desync_ = true;
+    self->record_tx_isr_failure_(TxCompletionFailureReason::DMA_SIZE_MISMATCH);
     return false;
   }
   if (!isr_load_flag(self->tx_completion_tracking_active_)) {
@@ -850,7 +874,7 @@ bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_
       descriptor = &candidate;
   }
   if (descriptor == nullptr) {
-    self->tx_completion_desync_ = true;
+    self->record_tx_isr_failure_(TxCompletionFailureReason::UNKNOWN_DMA_DESCRIPTOR);
     memset(event->dma_buf, 0, event->size);
     return false;
   }
@@ -860,7 +884,7 @@ bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_
     if (descriptor->record.generation == isr_load_u32(self->tx_playback_generation_)) {
       const TxCompletionEvent completed{descriptor->record, esp_timer_get_time()};
       if (xQueueSendFromISR(self->tx_completion_event_queue_, &completed, &need_yield) != pdTRUE)
-        self->tx_completion_desync_ = true;
+        self->record_tx_isr_failure_(TxCompletionFailureReason::COMPLETION_QUEUE_FULL);
     }
   }
   descriptor->address = event->dma_buf;
@@ -876,12 +900,12 @@ bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(i2s_chan_handle_t handle, i2s_
       memcpy(event->dma_buf, self->tx_staging_data_ + static_cast<size_t>(block) * event->size, event->size);
       descriptor->record = record;
       if (xQueueSendFromISR(self->tx_free_queue_, &block, &need_yield) != pdTRUE)
-        self->tx_completion_desync_ = true;
+        self->record_tx_isr_failure_(TxCompletionFailureReason::FREE_QUEUE_FULL);
       return need_yield;
     }
     if (record.real_frames != 0) isr_decrement_u32(self->tx_completion_pending_real_records_);
     if (xQueueSendFromISR(self->tx_free_queue_, &block, &need_yield) != pdTRUE)
-      self->tx_completion_desync_ = true;
+      self->record_tx_isr_failure_(TxCompletionFailureReason::STALE_FREE_QUEUE_FULL);
   }
   memset(event->dma_buf, 0, event->size);
   return need_yield;
@@ -970,6 +994,8 @@ void ESPAudioStack::reset_tx_playback_() {
 void ESPAudioStack::reset_tx_completion_tracking_() {
   this->tx_completion_tracking_active_.store(false, std::memory_order_release);
   this->tx_completion_desync_ = false;
+  this->tx_isr_failure_reason_.store(0, std::memory_order_relaxed);
+  this->tx_task_failure_reason_.store(0, std::memory_order_relaxed);
   this->tx_completion_idle_event_drops_.store(0, std::memory_order_release);
   this->reset_tx_playback_();
   this->tx_completion_pending_real_records_.store(0, std::memory_order_release);
@@ -1038,12 +1064,33 @@ bool ESPAudioStack::queue_tx_dma_block_(const void *data, size_t bytes, const Tx
 }
 
 void ESPAudioStack::mark_tx_completion_desync_(const char *reason) {
+  // The permanent audio task is the only writer of this independent latch.
+  if (this->tx_task_failure_reason_.load(std::memory_order_relaxed) == 0) {
+    this->tx_task_failure_reason_.store(static_cast<uint32_t>(TxCompletionFailureReason::STAGING_ADMISSION_FAILED),
+                                       std::memory_order_relaxed);
+  }
   this->tx_completion_desync_ = true;
   this->fail_tx_completion_tracking_(reason);
 }
 
 void ESPAudioStack::fail_tx_completion_tracking_(const char *reason) {
-  ESP_LOGE(TAG, "%s; stopping audio stack to restore TX completion lockstep", reason);
+  const uint32_t isr_reason = this->tx_isr_failure_reason_.load(std::memory_order_acquire);
+  const uint32_t task_reason = this->tx_task_failure_reason_.load(std::memory_order_relaxed);
+  // Each queue count is a safe task-context observation, not an ISR-wide snapshot.
+  const auto queued = [](QueueHandle_t queue) -> unsigned {
+    return queue != nullptr ? static_cast<unsigned>(uxQueueMessagesWaiting(queue)) : 0;
+  };
+  ESP_LOGE(TAG, "%s; stopping audio stack to restore TX completion lockstep; "
+               "isr_reason=%u:%s task_reason=%u:%s dma_frames=%u dma_bytes=%u descriptors=%u "
+               "staging=%u completion_capacity=%u completion_queued=%u ready_queued=%u free_queued=%u pending_real=%u",
+           reason, static_cast<unsigned>(isr_reason), this->tx_completion_failure_reason_to_string_(isr_reason),
+           static_cast<unsigned>(task_reason), this->tx_completion_failure_reason_to_string_(task_reason),
+           static_cast<unsigned>(this->tx_completion_dma_frames_),
+           static_cast<unsigned>(this->tx_completion_dma_buffer_bytes_),
+           static_cast<unsigned>(this->tx_dma_descriptor_count_), static_cast<unsigned>(this->tx_staging_capacity_),
+           static_cast<unsigned>(this->tx_completion_queue_size_), queued(this->tx_completion_event_queue_),
+           queued(this->tx_ready_queue_), queued(this->tx_free_queue_),
+           static_cast<unsigned>(this->tx_completion_pending_real_records_.load(std::memory_order_relaxed)));
   this->tx_completion_tracking_active_.store(false, std::memory_order_release);
   this->set_i2s_error_(true);
   this->audio_stack_running_.store(false, std::memory_order_relaxed);

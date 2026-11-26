@@ -781,6 +781,15 @@ class ESPAudioStack final : public Component {
   void run_processor_(AudioTaskCtx &ctx);
 #endif
 
+  enum class TxCompletionFailureReason : uint32_t {
+    NONE = 0,
+    DMA_SIZE_MISMATCH = 1,
+    UNKNOWN_DMA_DESCRIPTOR = 2,
+    COMPLETION_QUEUE_FULL = 3,
+    FREE_QUEUE_FULL = 4,
+    STALE_FREE_QUEUE_FULL = 5,
+    STAGING_ADMISSION_FAILED = 6,
+  };
   struct TxCompletionRecord {
     uint16_t real_frames{0};
     uint16_t trailing_silence_frames{0};
@@ -795,6 +804,8 @@ class ESPAudioStack final : public Component {
     TxCompletionRecord record{};
   };
   static bool IRAM_ATTR tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+  void IRAM_ATTR record_tx_isr_failure_(TxCompletionFailureReason reason);
+  static const char *tx_completion_failure_reason_to_string_(uint32_t reason);
   bool prepare_tx_completion_tracking_();
   bool prime_tx_completion_records_(bool preload_dma);
   void drain_tx_completion_events_();
@@ -1044,6 +1055,10 @@ class ESPAudioStack final : public Component {
   uint32_t tx_completion_dma_frames_{0};
   std::atomic<bool> tx_completion_tracking_active_{false};
   volatile bool tx_completion_desync_{false};
+  // Separate single-writer latches: channel ISR and permanent audio task.
+  // They identify the first failure within each owner, not a global order.
+  std::atomic<uint32_t> tx_isr_failure_reason_{0};
+  std::atomic<uint32_t> tx_task_failure_reason_{0};
   std::atomic<uint32_t> tx_completion_pending_real_records_{0};
   std::atomic<uint32_t> tx_completion_idle_event_drops_{0};
 

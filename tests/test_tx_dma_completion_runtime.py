@@ -27,6 +27,8 @@ def completion_source():
     causal='bool ESPAudioStack::queue_tx_dma_block_(' in owner
     methods = []
     for signature, source in [
+        ('void IRAM_ATTR ESPAudioStack::record_tx_isr_failure_(', owner),
+        ('const char *ESPAudioStack::tx_completion_failure_reason_to_string_(', owner),
         ('bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback(', owner),
         ('void ESPAudioStack::drain_tx_completion_events_(', owner),
         ('bool ESPAudioStack::queue_tx_completion_record_(', owner),
@@ -43,7 +45,11 @@ def completion_source():
         if signature in source:
             methods.append(method(source, signature))
     code = (ROOT/'tests/fixtures/tx_dma/host.cpp.in').read_text().replace('// CURRENT_PRODUCTION_METHODS', '\n'.join(methods))
-    a=header.index('  struct TxCompletionRecord {')
+    if '  enum class TxCompletionFailureReason' in header:
+        code='#define DIAGNOSTIC_DMA_FAILURE_REASONS\n'+code
+        a=header.index('  enum class TxCompletionFailureReason')
+    else:
+        a=header.index('  struct TxCompletionRecord {')
     b=header.index('  static bool IRAM_ATTR tx_on_sent_callback',a)
     code=code.replace('// PRODUCTION_RECORD_TYPES',header[a:b])
     if causal:
@@ -86,5 +92,11 @@ def test_quantum_admission_keeps_rx_and_pcm_continuous(completion_binary, scenar
 
 @pytest.mark.parametrize("scenario", [24, 25, 26], ids=["owned-staging-silence", "disabled-dma-prime", "descriptor-capacity-and-frame-bound"])
 def test_compact_memory_preserves_dma_ownership(completion_binary, scenario):
+    result = subprocess.run([str(completion_binary), str(scenario)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("scenario", [27, 28, 29], ids=["completion-overflow-reason", "free-slot-overflow-reason", "stale-slot-overflow-reason"])
+def test_completion_failure_diagnostics_preserve_fail_closed(completion_binary, scenario):
     result = subprocess.run([str(completion_binary), str(scenario)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
