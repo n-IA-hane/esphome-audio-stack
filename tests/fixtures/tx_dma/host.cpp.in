@@ -59,6 +59,7 @@ int i2s_channel_write(I2S*h,const void*src,size_t n,size_t*written,unsigned){
  return ESP_OK;
 }
 int i2s_channel_preload_data(I2S*,const void*,size_t n,size_t*loaded){*loaded=n;return ESP_OK;}
+void (*completion_observer)()=nullptr;
 struct ESPAudioStack{
  void set_i2s_error_(bool error){has_i2s_error_=error;}
  struct AudioTaskCtx{uint8_t speaker_channels=1;int invalid_tx_state_errors=0,consecutive_tx_errors=0;};
@@ -76,8 +77,8 @@ struct ESPAudioStack{
  static const char *tx_completion_failure_reason_to_string_(uint32_t);
 #endif
  std::atomic<uint32_t>tx_completion_pending_real_records_{0},tx_completion_idle_event_drops_{0};I2S*tx_handle_=nullptr;
- uint32_t notified=0;int64_t notified_timestamp=-1;
- void dispatch_speaker_output_callbacks_(uint32_t n,int64_t t){notified+=n;notified_timestamp=t;}
+ uint32_t notified=0;int64_t notified_timestamp=-1;std::vector<int64_t> credited_timestamps;
+ void dispatch_speaker_output_callbacks_(uint32_t n,int64_t t){notified+=n;notified_timestamp=t;credited_timestamps.push_back(t);if(completion_observer)completion_observer();}
  static bool tx_on_sent_callback(I2S*,i2s_event_data_t*,void*);
  void drain_tx_completion_events_();bool queue_tx_completion_record_(const TxCompletionRecord&);
  bool prepare_tx_completion_tracking_();bool prime_tx_completion_records_(bool);void reset_tx_completion_tracking_();void reset_tx_playback_();
@@ -94,7 +95,7 @@ struct Rig{
 #endif
  ESPAudioStack stack;I2S driver;ESPAudioStack::AudioTaskCtx ctx;
  std::vector<std::vector<uint8_t>>pcm{N,std::vector<uint8_t>(BYTES,0)};
- std::vector<uint8_t> emitted;size_t next=0;unsigned actual_frames=0;int64_t actual_timestamp=-1,first_actual=-1,first_write=-1;
+ std::vector<uint8_t> emitted;std::vector<int64_t> physical_timestamps;size_t next=0;unsigned actual_frames=0;int64_t actual_timestamp=-1,first_actual=-1,first_write=-1;
  explicit Rig(bool preloaded=true){driver.ready=xQueueCreate(N-1,sizeof(uint8_t*));driver.callback=ESPAudioStack::tx_on_sent_callback;driver.user=&stack;stack.tx_handle_=&driver;
 #ifdef CAUSAL_DMA
  stack.tx_dma_descriptor_count_=N;stack.tx_logical_frame_size_=256;
@@ -111,14 +112,15 @@ struct Rig{
  vQueueDelete(stack.tx_completion_record_queue_);
 #endif
  heap_caps_free(stack.tx_completion_silence_);}
- void irq(){now_us+=1000000LL*stack.tx_completion_dma_frames_/stack.sample_rate_;auto*data=pcm[next].data();
- const size_t frame_bytes=BYTES/stack.tx_completion_dma_frames_;int last_real=-1;
+ void irq(){const auto prior_frames=actual_frames;now_us+=1000000LL*stack.tx_completion_dma_frames_/stack.sample_rate_;auto*data=pcm[next].data();
+ const size_t frame_bytes=driver.buf_size/stack.tx_completion_dma_frames_;int last_real=-1;
  for(size_t f=0;f<stack.tx_completion_dma_frames_;++f){bool nonzero=false;for(size_t b=0;b<frame_bytes;++b)nonzero=nonzero||data[f*frame_bytes+b]!=0;if(nonzero){++actual_frames;last_real=f;emitted.insert(emitted.end(),data+f*frame_bytes,data+(f+1)*frame_bytes);}}
  if(last_real>=0){actual_timestamp=now_us-static_cast<int64_t>(stack.tx_completion_dma_frames_-1-last_real)*1000000LL/stack.sample_rate_;if(first_actual<0)first_actual=actual_timestamp;}
- i2s_event_data_t evt{nullptr,data,BYTES};driver.callback(&driver,&evt,driver.user);
+ if(actual_frames!=prior_frames)physical_timestamps.push_back(actual_timestamp);
+ i2s_event_data_t evt{nullptr,data,driver.buf_size};driver.callback(&driver,&evt,driver.user);
  // IDF invokes on_sent BEFORE clearing and before exposing the reusable buffer.
 #ifndef CAUSAL_DMA
- memset(data,0,BYTES);
+ memset(data,0,driver.buf_size);
 #endif
  if(xQueueIsQueueFullFromISR(driver.ready)){uint8_t*old;xQueueReceive(driver.ready,&old,0);}xQueueSend(driver.ready,&data,0);next=(next+1)%N;}
  void drain(){stack.drain_tx_completion_events_();assert(!stack.has_i2s_error_);}
@@ -128,6 +130,27 @@ struct Rig{
 
 Rig *generation_rig=nullptr;
 #ifdef DIAGNOSTIC_DMA_FAILURE_REASONS
+Rig *completion_rig=nullptr;
+bool inject_completion_fault=false;
+void eof_before_free_slot_claim(Queue *queue){
+ if(queue!=completion_rig->stack.tx_free_queue_)return;
+ before_receive=nullptr;completion_rig->irq();
+ if(inject_completion_fault)
+  completion_rig->stack.record_tx_isr_failure_(ESPAudioStack::TxCompletionFailureReason::UNKNOWN_DMA_DESCRIPTOR);
+}
+void disable_tracking_observer(){
+ completion_observer=nullptr;
+ completion_rig->stack.tx_completion_tracking_active_=false;
+ completion_rig->stack.audio_stack_running_=false;
+}
+void reset_playback_observer(){completion_observer=nullptr;completion_rig->stack.reset_tx_playback_();}
+void assert_unique_staging_tokens(Rig &rig){
+ std::set<uint16_t> tokens;
+ for(auto *queue:{rig.stack.tx_free_queue_,rig.stack.tx_ready_queue_}){
+  for(const auto &value:queue->items){uint16_t token;memcpy(&token,value.data(),sizeof(token));assert(tokens.insert(token).second);}
+ }
+ assert(tokens.size()==rig.stack.tx_staging_capacity_);
+}
 void completion_before_staging_admission(Queue *queue){
  if(queue!=generation_rig->stack.tx_free_queue_)return;
  before_receive=nullptr;generation_rig->irq();
@@ -140,18 +163,75 @@ void replace_generation_before_refill(Queue *queue){
  generation_rig->write(true);
 }
 #endif
-int main(int argc,char**argv){assert(argc==2);int scenario=std::stoi(argv[1]);
+int main(int argc,char**argv){assert(argc==2||argc==3);int scenario=std::stoi(argv[1]);
 #ifdef CAUSAL_DMA
 #ifdef DIAGNOSTIC_DMA_FAILURE_REASONS
+ if(scenario>=30 && scenario<=33){
+  assert(argc==3);const unsigned blocks=std::stoul(argv[2]);assert(blocks>=2&&blocks<=16);
+  now_us=0;Rig r;r.stack.tx_completion_tracking_active_=false;
+  constexpr size_t FRAMES=384,BYTES=FRAMES*sizeof(int16_t);
+  r.stack.tx_completion_dma_frames_=FRAMES;r.stack.tx_completion_dma_buffer_bytes_=BYTES;
+  r.stack.sample_rate_=48000;r.stack.tx_logical_frame_size_=blocks*FRAMES;r.driver.buf_size=BYTES;
+  for(auto &buffer:r.pcm)buffer.assign(BYTES,0);
+  r.driver.curr_ptr=r.pcm.back().data();
+  assert(r.stack.prepare_tx_completion_tracking_());r.stack.tx_completion_tracking_active_=true;
+  const auto initial_generation=r.stack.tx_playback_generation_.load();
+  std::vector<uint8_t> data(BYTES,0x5a);
+  const auto write=[&](){return r.stack.write_tx_dma_blocks_(r.ctx,data.data(),BYTES,BYTES);};
+  assert(write());r.irq();assert(write());r.irq();
+  for(unsigned i=0;i<blocks;++i)assert(write());
+  assert(r.stack.tx_completion_pending_real_records_==blocks+2);
+  assert(r.stack.tx_completion_event_queue_->items.empty()&&r.stack.tx_free_queue_->items.empty());
+  completion_rig=&r;before_receive=eof_before_free_slot_claim;
+  if(scenario==31)completion_observer=disable_tracking_observer;
+  if(scenario==32)completion_observer=reset_playback_observer;
+  if(scenario==33)inject_completion_fault=true;
+  const bool accepted=write();inject_completion_fault=false;
+  if(scenario==30){
+   assert(accepted);
+   for(unsigned i=0;i<blocks+2;++i)r.irq();
+   r.stack.drain_tx_completion_events_();
+   if(r.stack.has_i2s_error_)
+    fprintf(stderr,"legal completion race: isr_reason=%u capacity=%zu blocks=%u\n",
+     r.stack.tx_isr_failure_reason_.load(),r.stack.tx_completion_queue_size_,blocks);
+   assert(!r.stack.has_i2s_error_&&r.stack.audio_stack_running_&&!r.stack.tx_completion_desync_);
+   assert(r.stack.notified==r.actual_frames&&r.stack.notified==(blocks+3)*FRAMES);
+   assert(r.stack.credited_timestamps==r.physical_timestamps);
+   assert_unique_staging_tokens(r);
+  }else if(scenario==31||scenario==33){
+   assert(!accepted&&!r.stack.tx_completion_tracking_active_&&!r.stack.audio_stack_running_);
+   assert(r.stack.tx_completion_pending_real_records_==blocks+1);assert_unique_staging_tokens(r);
+   if(scenario==31){
+    assert(!completion_observer&&!r.stack.tx_completion_desync_&&!r.stack.has_i2s_error_);
+    auto*storage=r.stack.tx_staging_data_;auto*ready=r.stack.tx_ready_queue_;auto*free=r.stack.tx_free_queue_;
+    for(unsigned i=0;i<blocks+2;++i)r.irq();
+    assert(storage==r.stack.tx_staging_data_&&ready==r.stack.tx_ready_queue_&&free==r.stack.tx_free_queue_);
+    assert_unique_staging_tokens(r);
+   }else{
+    assert(r.stack.has_i2s_error_&&r.stack.tx_completion_desync_);
+    assert(r.stack.tx_isr_failure_reason_==static_cast<uint32_t>(ESPAudioStack::TxCompletionFailureReason::UNKNOWN_DMA_DESCRIPTOR));
+   }
+   // The lifecycle owner resets disabled tracking only after admission exits.
+   r.stack.reset_tx_completion_tracking_();assert_unique_staging_tokens(r);
+  }else{
+   assert(accepted&&!completion_observer&&r.stack.tx_playback_generation_==initial_generation+1);
+   for(unsigned i=0;i<blocks+2;++i){r.irq();r.drain();}
+   assert(r.stack.notified==2*FRAMES&&r.stack.tx_completion_pending_real_records_==0);
+   assert(!r.stack.has_i2s_error_&&!r.stack.tx_completion_desync_);assert_unique_staging_tokens(r);
+  }
+  return 0;
+ }
  if(scenario>=27 && scenario<=29){now_us=0;Rig r;
   using Reason=ESPAudioStack::TxCompletionFailureReason;
   Reason expected=Reason::COMPLETION_QUEUE_FULL;
   if(scenario==27){
-   r.write(true);r.irq();r.write(true);r.irq();r.write(true);r.write(true);
-   assert(r.stack.tx_completion_pending_real_records_==4 && r.stack.tx_completion_event_queue_->items.empty());
-   generation_rig=&r;before_receive=completion_before_staging_admission;r.write(true);
-   assert(r.stack.tx_completion_event_queue_->items.size()==1 && r.stack.tx_completion_pending_real_records_==4);
-   for(unsigned i=0;i<4;++i)r.irq();
+   r.write(true);r.irq();r.irq();
+   // Deliberate resource fault, independent of the legal producer/EOF race:
+   // the event queue is already full before a real descriptor completes.
+   ESPAudioStack::TxCompletionEvent occupied{{1,0,r.stack.tx_playback_generation_.load()},now_us};
+   for(size_t i=0;i<r.stack.tx_completion_queue_size_;++i)
+    assert(xQueueSend(r.stack.tx_completion_event_queue_,&occupied,0));
+   r.irq();
   }else{
    r.write(true);
    if(scenario==29){++r.stack.tx_playback_generation_;expected=Reason::STALE_FREE_QUEUE_FULL;}

@@ -1043,6 +1043,9 @@ bool ESPAudioStack::queue_tx_dma_block_(const void *data, size_t bytes, const Tx
       this->sample_rate_) + 1U;
   if (xQueueReceive(this->tx_free_queue_, &block, std::max<TickType_t>(1, pdMS_TO_TICKS(deadline_ms))) != pdTRUE)
     return false;
+  // An EOF may free this token after the pre-drain. With one staging slot
+  // owned here, retire completions before restoring the D+B pending bound.
+  this->drain_tx_completion_events_();
   if (!this->tx_completion_tracking_active_.load(std::memory_order_acquire)) {
     xQueueSend(this->tx_free_queue_, &block, 0);
     return false;

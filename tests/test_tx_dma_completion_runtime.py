@@ -100,3 +100,16 @@ def test_compact_memory_preserves_dma_ownership(completion_binary, scenario):
 def test_completion_failure_diagnostics_preserve_fail_closed(completion_binary, scenario):
     result = subprocess.run([str(completion_binary), str(scenario)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("staging_blocks", [2, 4, 8, 16])
+def test_legal_completion_interleaving_preserves_physical_credits(completion_binary, staging_blocks):
+    result = subprocess.run([str(completion_binary), "30", str(staging_blocks)], cwd=completion_binary.parent, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("staging_blocks", [2, 4, 8, 16])
+@pytest.mark.parametrize("scenario", [31, 32, 33], ids=["observer-stop", "observer-generation-reset", "post-claim-fault"])
+def test_post_claim_observers_preserve_staging_ownership(completion_binary, staging_blocks, scenario):
+    result = subprocess.run([str(completion_binary), str(scenario), str(staging_blocks)], cwd=completion_binary.parent, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
