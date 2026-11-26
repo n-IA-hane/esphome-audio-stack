@@ -17,6 +17,9 @@
 #define LOG_STR(x) x
 using BaseType_t=int;
 using TickType_t=unsigned;
+struct HostQueue { unsigned waiting=0; };
+using QueueHandle_t=HostQueue*;
+unsigned uxQueueMessagesWaiting(QueueHandle_t queue){return queue->waiting;}
 constexpr const char *TAG="test";
 constexpr int tskNO_AFFINITY=-1;
 constexpr uint32_t MAX_LISTENERS=16;
@@ -40,6 +43,7 @@ struct ESPAudioStack {
   std::atomic<bool> audio_stack_running_{false},teardown_pending_{false},has_i2s_error_{false};
   std::atomic<bool> start_requested_{false},speaker_requested_{true},speaker_running_{false},has_mic_consumers_{true};
   std::atomic<bool> audio_task_idle_{true},hardware_volume_dirty_{false},tx_completion_tracking_active_{false};
+  std::atomic<uint32_t> tx_isr_failure_reason_{0},tx_task_failure_reason_{0};
   std::atomic<bool> request_speaker_reset_{false};
   std::atomic<AudioStartPhase> start_phase_{AudioStartPhase::STOPPED};
   std::atomic<uint32_t> start_generation_{0},ready_generation_{0},lifecycle_events_{0};
