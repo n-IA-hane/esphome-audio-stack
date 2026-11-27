@@ -76,10 +76,15 @@ def test_idle_tx_completion_overflow_preserves_full_duplex_capture() -> None:
         cpp.index("bool IRAM_ATTR ESPAudioStack::tx_on_sent_callback") :
         cpp.index("bool ESPAudioStack::prepare_tx_completion_tracking_")
     ]
+    failure = cpp[
+        cpp.index("void IRAM_ATTR ESPAudioStack::record_tx_isr_failure_") :
+        cpp.index("const char *ESPAudioStack::tx_completion_failure_reason_to_string_")
+    ]
 
     assert "tx_completion_idle_event_drops_" in header
     assert "descriptor->record.real_frames != 0" in callback
-    assert "self->tx_completion_desync_ = true" in callback
+    assert "self->record_tx_isr_failure_(TxCompletionFailureReason::COMPLETION_QUEUE_FULL)" in callback
+    assert "this->tx_completion_desync_ = true" in failure
     assert "event->dma_buf" in callback
     assert "descriptor->record.generation == isr_load_u32(self->tx_playback_generation_)" in callback
     assert "memset(event->dma_buf, 0, event->size)" in callback
