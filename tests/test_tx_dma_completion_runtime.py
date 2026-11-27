@@ -50,7 +50,7 @@ def completion_source():
         a=header.index('  enum class TxCompletionFailureReason')
     else:
         a=header.index('  struct TxCompletionRecord {')
-    b=header.index('  static bool IRAM_ATTR tx_on_sent_callback',a)
+    b=header.index('  static bool',a)
     code=code.replace('// PRODUCTION_RECORD_TYPES',header[a:b])
     if causal:
         code='#define CAUSAL_DMA\n'+code

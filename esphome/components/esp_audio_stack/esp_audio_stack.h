@@ -803,8 +803,8 @@ class ESPAudioStack final : public Component {
     void *address{nullptr};
     TxCompletionRecord record{};
   };
-  static bool IRAM_ATTR tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
-  void IRAM_ATTR record_tx_isr_failure_(TxCompletionFailureReason reason);
+  static bool tx_on_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+  void record_tx_isr_failure_(TxCompletionFailureReason reason);
   static const char *tx_completion_failure_reason_to_string_(uint32_t reason);
   bool prepare_tx_completion_tracking_();
   bool prime_tx_completion_records_(bool preload_dma);
